@@ -11,16 +11,17 @@ import { fetchData } from '../fetch';
 
 import { J3DTextureHolder, BMDModelInstance, BMDModel } from './render';
 import { createModelInstance } from './scenes';
-import { EFB_WIDTH, EFB_HEIGHT } from '../gx/gx_material';
+import { EFB_WIDTH, EFB_HEIGHT, Color } from '../gx/gx_material';
 import { mat4, quat } from 'gl-matrix';
 import { LoopMode, BMD, BMT, BCK, BTK, BRK } from './j3d';
 import { TextureOverride } from '../TextureHolder';
-import { GXRenderHelperGfx } from '../gx/gx_render';
+import { GXRenderHelperGfx, ColorKind } from '../gx/gx_render';
 import { GfxRenderInstViewRenderer } from '../gfx/render/GfxRenderer';
 import { BasicRenderTarget, ColorTexture, makeClearRenderPassDescriptor, depthClearRenderPassDescriptor, noClearRenderPassDescriptor } from '../gfx/helpers/RenderTargetHelpers';
 import { GfxDevice, GfxHostAccessPass, GfxRenderPass } from '../gfx/platform/GfxPlatform';
 import { colorNew } from '../Color';
 import { RENDER_HACKS_ICON } from '../bk/scenes';
+import { BMDObjectRenderer } from './sms_actors';
 
 const sjisDecoder = new TextDecoder('sjis');
 
@@ -213,6 +214,21 @@ function readSceneBin(buffer: ArrayBufferSlice): SceneBinObj {
         const [paramsSize, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, flags, model] = unpack(params, 'ffffff fffsi s.');
         return { type: 'Model', klass, name, size, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, model };
     }
+    //Skeletal Meshes
+    case 'NPCMonteMA':
+    case 'NPCMonteMD':
+    case 'NPCMonteME':
+    case 'NPCMonteMH':
+    case 'NPCMonteW':
+    case 'NPCKinojii':
+    case 'NPCKinopio':
+    case 'AnimalBird':
+    case 'EggYoshi':
+    case 'NPCPeach':
+    {
+        const [paramsSize, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, flags, model] = unpack(params, 'ffffff fffsi s.');
+        return { type: 'Model', klass, name, size, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, model: klass };
+    }
     // Extra unk junk
     case 'CoinBlue':
     {
@@ -278,7 +294,7 @@ export class SunshineRenderer implements Viewer.SceneGfx {
     public viewRenderer = new GfxRenderInstViewRenderer();
     public mainRenderTarget = new BasicRenderTarget();
     public opaqueSceneTexture = new ColorTexture();
-    public modelInstances: BMDModelInstance[] = [];
+    public models: BMDObjectRenderer[] = [];
 
     constructor(device: GfxDevice, public textureHolder: J3DTextureHolder, public rarc: RARC.RARC) {
         this.renderHelper = new GXRenderHelperGfx(device);
@@ -290,14 +306,14 @@ export class SunshineRenderer implements Viewer.SceneGfx {
         renderHacksPanel.setTitle(RENDER_HACKS_ICON, 'Render Hacks');
         const enableVertexColorsCheckbox = new UI.Checkbox('Enable Vertex Colors', true);
         enableVertexColorsCheckbox.onchanged = () => {
-            for (let i = 0; i < this.modelInstances.length; i++)
-                this.modelInstances[i].setVertexColorsEnabled(enableVertexColorsCheckbox.checked);
+            for (let i = 0; i < this.models.length; i++)
+                this.models[i].setVertexColorsEnabled(enableVertexColorsCheckbox.checked);
         };
         renderHacksPanel.contents.appendChild(enableVertexColorsCheckbox.elem);
         const enableTextures = new UI.Checkbox('Enable Textures', true);
         enableTextures.onchanged = () => {
-            for (let i = 0; i < this.modelInstances.length; i++)
-                this.modelInstances[i].setTexturesEnabled(enableTextures.checked);
+            for (let i = 0; i < this.models.length; i++)
+                this.models[i].setTexturesEnabled(enableTextures.checked);
         };
         renderHacksPanel.contents.appendChild(enableTextures.elem);
 
@@ -311,8 +327,8 @@ export class SunshineRenderer implements Viewer.SceneGfx {
     protected prepareToRender(hostAccessPass: GfxHostAccessPass, viewerInput: Viewer.ViewerRenderInput): void {
         viewerInput.camera.setClipPlanes(20, 500000);
         this.renderHelper.fillSceneParams(viewerInput);
-        for (let i = 0; i < this.modelInstances.length; i++)
-            this.modelInstances[i].prepareToRender(this.renderHelper, viewerInput);
+        for (let i = 0; i < this.models.length; i++)
+            this.models[i].prepareToRender(this.renderHelper, viewerInput, true);
         this.renderHelper.prepareToRender(hostAccessPass);
     }
 
@@ -343,6 +359,7 @@ export class SunshineRenderer implements Viewer.SceneGfx {
             // IndTex.
             const textureOverride: TextureOverride = { gfxTexture: this.opaqueSceneTexture.gfxTexture, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
             this.textureHolder.setTextureOverride("indirectdummy", textureOverride);
+            this.textureHolder.setTextureOverride("H_ma_polmask_sample_i4", textureOverride, false);
 
             const indTexPassRenderer = this.mainRenderTarget.createRenderPass(device, noClearRenderPassDescriptor);
             this.viewRenderer.executeOnPass(device, indTexPassRenderer, SMSPass.INDIRECT);
@@ -362,12 +379,12 @@ export class SunshineRenderer implements Viewer.SceneGfx {
         this.textureHolder.destroy(device);
         this.mainRenderTarget.destroy(device);
         this.opaqueSceneTexture.destroy(device);
-        this.modelInstances.forEach((instance) => instance.destroy(device));
+        this.models.forEach((instance) => instance.destroy(device));
     }
 }
 
 export class SunshineSceneDesc implements Viewer.SceneDesc {
-    public static createSunshineSceneForBasename(device: GfxDevice, renderHelper: GXRenderHelperGfx, textureHolder: J3DTextureHolder, passMask: number, rarc: RARC.RARC, basename: string, isSkybox: boolean): BMDModelInstance {
+    public static createSunshineSceneForBasename(device: GfxDevice, renderHelper: GXRenderHelperGfx, textureHolder: J3DTextureHolder, passMask: number, rarc: RARC.RARC, basename: string, isSkybox: boolean): BMDObjectRenderer {
         const bmdFile = rarc.findFile(`${basename}.bmd`);
         if (!bmdFile)
             return null;
@@ -379,7 +396,7 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
         modelInstance.name = basename;
         modelInstance.setIsSkybox(isSkybox);
         modelInstance.passMask = passMask;
-        return modelInstance;
+        return new BMDObjectRenderer(modelInstance);
     }
 
     constructor(public id: string, public name: string) {
@@ -402,27 +419,27 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
 
             const skyScene = SunshineSceneDesc.createSunshineSceneForBasename(device, renderer.renderHelper, textureHolder, SMSPass.SKYBOX, rarc, 'map/map/sky', true);
             if (skyScene !== null)
-                renderer.modelInstances.push(skyScene);
+                renderer.models.push(skyScene);
             const mapScene = SunshineSceneDesc.createSunshineSceneForBasename(device, renderer.renderHelper, textureHolder, SMSPass.OPAQUE, rarc, 'map/map/map', false);
             if (mapScene !== null)
-                renderer.modelInstances.push(mapScene);
+                renderer.models.push(mapScene);
             const seaScene = SunshineSceneDesc.createSunshineSceneForBasename(device, renderer.renderHelper, textureHolder, SMSPass.OPAQUE, rarc, 'map/map/sea', false);
             if (seaScene !== null)
-                renderer.modelInstances.push(seaScene);
+                renderer.models.push(seaScene);
             const seaIndirectScene = SunshineSceneDesc.createSunshineSceneForBasename(device, renderer.renderHelper, textureHolder, SMSPass.INDIRECT, rarc, 'map/map/seaindirect', false);
             if (seaIndirectScene !== null)
-                renderer.modelInstances.push(seaIndirectScene);
+                renderer.models.push(seaIndirectScene);
 
             const extraScenes = this.createSceneBinObjects(device, renderer.renderHelper, textureHolder, rarc, sceneBinObj);
             for (let i = 0; i < extraScenes.length; i++)
-                renderer.modelInstances.push(extraScenes[i]);
+                renderer.models.push(extraScenes[i]);
 
             renderer.finish(device);
             return renderer;
         });
     }
 
-    private createSceneBinObjects(device: GfxDevice, renderHelper: GXRenderHelperGfx, textureHolder: J3DTextureHolder, rarc: RARC.RARC, obj: SceneBinObj): BMDModelInstance[] {
+    private createSceneBinObjects(device: GfxDevice, renderHelper: GXRenderHelperGfx, textureHolder: J3DTextureHolder, rarc: RARC.RARC, obj: SceneBinObj): BMDObjectRenderer[] {
         function flatten<T>(L: T[][]): T[] {
             const R: T[] = [];
             for (const Ts of L)
@@ -432,8 +449,8 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
 
         switch (obj.type) {
         case 'Group':
-            const childTs: BMDModelInstance[][] = obj.children.map(c => this.createSceneBinObjects(device, renderHelper, textureHolder, rarc, c));
-            const flattened: BMDModelInstance[] = flatten(childTs).filter(o => !!o);
+            const childTs: BMDObjectRenderer[][] = obj.children.map(c => this.createSceneBinObjects(device, renderHelper, textureHolder, rarc, c));
+            const flattened: BMDObjectRenderer[] = flatten(childTs).filter(o => !!o);
             return flattened;
         case 'Model':
             return [this.createSceneForSceneBinModel(device, renderHelper, textureHolder, rarc, obj)];
@@ -443,12 +460,12 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
         }
     }
 
-    private createSceneForSceneBinModel(device: GfxDevice, renderHelper: GXRenderHelperGfx, textureHolder: J3DTextureHolder, rarc: RARC.RARC, obj: SceneBinObjModel): BMDModelInstance {
+    private createSceneForSceneBinModel(device: GfxDevice, renderHelper: GXRenderHelperGfx, textureHolder: J3DTextureHolder, rarc: RARC.RARC, obj: SceneBinObjModel): BMDObjectRenderer {
         interface ModelLookup {
             k: string; // klass
             m: string; // model
             p?: string; // resulting file prefix
-            s?: () => BMDModelInstance;
+            s?: () => BMDObjectRenderer;
         };
 
         const modelCache = new Map<RARC.RARCFile, BMDModel>();
@@ -466,16 +483,16 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
             }
         }
 
-        function bmtm(bmd: string, bmt: string): BMDModelInstance {
+        function bmtm(bmd: string, bmt: string): BMDObjectRenderer {
             const bmdFile = rarc.findFile(bmd);
             const bmtFile = rarc.findFile(bmt);
             const bmdModel = lookupModel(bmdFile, bmtFile);
             const modelInstance = new BMDModelInstance(device, renderHelper, textureHolder, bmdModel);
             modelInstance.passMask = SMSPass.OPAQUE;
-            return modelInstance;
+            return new BMDObjectRenderer(modelInstance);
         }
 
-        function bckm(bmdFilename: string, bckFilename: string, loopMode: LoopMode = LoopMode.REPEAT): BMDModelInstance {
+        function bckm(bmdFilename: string, bckFilename: string, loopMode: LoopMode = LoopMode.REPEAT): BMDObjectRenderer {
             const bmdFile = rarc.findFile(bmdFilename);
             const bmdModel = lookupModel(bmdFile, null);
             const modelInstance = new BMDModelInstance(device, renderHelper, textureHolder, bmdModel);
@@ -484,10 +501,10 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
             const bck = BCK.parse(bckFile.buffer);
             bck.ank1.loopMode = loopMode;
             modelInstance.bindANK1(bck.ank1);
-            return modelInstance;
+            return new BMDObjectRenderer(modelInstance);
         }
 
-        function basenameModel(basename: string): BMDModelInstance | null {
+        function basenameModel(basename: string): BMDObjectRenderer | null {
             const bmdFile = rarc.findFile(`${basename}.bmd`);
             if (!bmdFile)
                 return null;
@@ -516,7 +533,7 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
             }
 
             modelInstance.name = basename;
-            return modelInstance;
+            return new BMDObjectRenderer(modelInstance);
         }
 
         const modelLookup: ModelLookup[] = [
@@ -559,6 +576,55 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
             { k: 'Viking', m: 'viking', p: 'mapobj/viking' },
             { k: 'WoodBox', m: 'WoodBox', p: 'mapobj/kibako' },
             { k: 'WoodBarrel', m: 'wood_barrel', s: () => bmtm('mapobj/barrel_normal.bmd', 'mapobj/barrel.bmt') },
+            { k: 'SunModel', m: 'SunModel', p: 'sun/model' },
+
+            { k: 'NPCMonteMA', m: 'NPCMonteMA', s: () => 
+            {
+                const m = bckm('montema/moma_model.bmd', 'montemcommon/mom_wait.bck');
+                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
+                return m;
+            }},
+            { k: 'NPCMonteMD', m: 'NPCMonteMD', s: () => 
+            {
+                const m = bckm('montemd/momd_model.bmd', 'montemcommon/mom_wait.bck');
+                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
+                return m;
+            }},
+            { k: 'NPCMonteME', m: 'NPCMonteME', s: () => bckm('monteme/mome_model.bmd', 'monteme/mome_wait.bck') },
+            { k: 'NPCMonteMH', m: 'NPCMonteMH', s: () => bckm('montemh/uklele_model.bmd', 'montemcommon/mom_wait.bck') },
+            { k: 'NPCMonteW', m: 'NPCMonteW', s: () => 
+            {
+                const m = bckm('montew/mow_model.bmd', 'montewcommon/mow_wait.bck');
+                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                return m;
+            }},
+            { k: 'NPCKinopio', m: 'NPCKinopio', s: () => bckm('kinopio/kinopio_body.bmd', 'kinopio/kinopio_wait.bck') },
+            { k: 'AnimalBird', m: 'AnimalBird', s: () => {
+                const m = bckm('bird/bird_man.bmd', 'bird/bird_fly.bck');
+                obj.y += 35;
+                return m;
+            }},
+            { k: 'EggYoshi', m: 'EggYoshi', s: () => bckm('mapobj/eggyoshi_normal.bmd', 'mapobj/eggyoshi_wait.bck') },
+            { k: 'NPCKinojii', m: 'NPCKinojii', s: () => {
+                const m = bckm('kinojii/kinoji_body.bmd', 'kinojii/kinoji_wait.bck');
+                const stick = basenameModel('kinojii/kinoji_stick');
+                stick.setParentJoint(m, 'jnt_rsum');
+                return m;
+            }},
+            { k: 'NPCPeach', m: 'NPCPeach', s: () => {
+                const m = bckm('peach/peach_model.bmd', 'peach/peach_wait.bck');
+                const ponytail = bckm('peach/peach_hair_ponytail.bmd', 'peach/peach_hair_ponytail_wait.bck');
+                ponytail.setParentJoint(m, 'kubi');
+                const hand1l = basenameModel('peach/peach_hand2_l');
+                hand1l.setParentJoint(m, 'jnt_hand_L');
+                const hand1r = basenameModel('peach/peach_hand2_r');
+                hand1r.setParentJoint(m, 'jnt_hand_R');
+                return m;
+            }},
         ];
 
         let modelEntry = modelLookup.find((lt) => obj.klass === lt.k && obj.model === lt.m);
