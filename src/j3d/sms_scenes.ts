@@ -13,7 +13,7 @@ import { J3DTextureHolder, BMDModelInstance, BMDModel } from './render';
 import { createModelInstance } from './scenes';
 import { EFB_WIDTH, EFB_HEIGHT, Color } from '../gx/gx_material';
 import { mat4, quat } from 'gl-matrix';
-import { LoopMode, BMD, BMT, BCK, BTK, BRK } from './j3d';
+import { LoopMode, BMD, BMT, BCK, BTK, BRK, BTI } from './j3d';
 import { TextureOverride } from '../TextureHolder';
 import { GXRenderHelperGfx, ColorKind } from '../gx/gx_render';
 import { GfxRenderInstViewRenderer } from '../gfx/render/GfxRenderer';
@@ -581,6 +581,11 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
             { k: 'NPCMonteMA', m: 'NPCMonteMA', s: () => 
             {
                 const m = bckm('montema/moma_model.bmd', 'montemcommon/mom_wait.bck');
+
+                textureHolder.addBTITexture(device, BTI.parse(rarc.findFile(`montemcommon/i_mom_mino_rgba.bti`).buffer, `i_mom_mino_rgba`));
+                const monteTexture = textureHolder.gfxTextures.find(tex =>tex.ResourceName === 'i_mom_mino_rgba');
+                const textureOverride: TextureOverride = { gfxTexture: monteTexture, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
+                textureHolder.setTextureOverride("I_mom_mino_dummyI4", textureOverride, false);
                 m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
                 m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
                 m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
@@ -589,6 +594,8 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
             { k: 'NPCMonteMD', m: 'NPCMonteMD', s: () => 
             {
                 const m = bckm('montemd/momd_model.bmd', 'montemcommon/mom_wait.bck');
+
+                textureHolder.addBTITexture(device, BTI.parse(rarc.findFile(`montewcommon/i_mow_mino_rgba.bti`).buffer, `i_mow_mino_rgba`));
                 m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
                 m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
                 m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
@@ -599,6 +606,9 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
             { k: 'NPCMonteW', m: 'NPCMonteW', s: () => 
             {
                 const m = bckm('montew/mow_model.bmd', 'montewcommon/mow_wait.bck');
+                const monteTexture = textureHolder.gfxTextures.find(tex =>tex.ResourceName === 'i_mow_mino_rgba');
+                const textureOverride: TextureOverride = { gfxTexture: monteTexture, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
+                textureHolder.setTextureOverride("I_mow_mino_dummyI4", textureOverride, false);
                 m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
                 return m;
             }},
