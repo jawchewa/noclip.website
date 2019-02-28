@@ -209,19 +209,34 @@ function readSceneBin(buffer: ArrayBufferSlice): SceneBinObj {
     case 'ShellCup':
     case 'WoodBarrel':
     case 'WoodBlock':
+    case 'ResetFruit':
+    case 'MonumentShine':
     case 'Viking':
     {
         const [paramsSize, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, flags, model] = unpack(params, 'ffffff fffsi s.');
         return { type: 'Model', klass, name, size, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, model };
     }
-    //Skeletal Meshes
+
+    case 'NPCBoard':
+    case 'NPCMonteM':
     case 'NPCMonteMA':
+    case 'NPCMonteMB':
+    case 'NPCMonteMC':
     case 'NPCMonteMD':
     case 'NPCMonteME':
     case 'NPCMonteMH':
     case 'NPCMonteW':
+    case 'NPCMonteWB':
     case 'NPCKinojii':
     case 'NPCKinopio':
+    case 'NPCMareM':
+    case 'NPCMareMC':
+    case 'NPCMareMD':
+    case 'NPCMareW':
+    case 'FishoidA':
+    case 'FishoidB':
+    case 'FishoidC':
+    case 'FishoidD':
     case 'AnimalBird':
     case 'EggYoshi':
     case 'NPCPeach':
@@ -248,7 +263,7 @@ function readSceneBin(buffer: ArrayBufferSlice): SceneBinObj {
     case 'FruitsBoat':
     {
         const [paramsSize, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, flags, model] = unpack(params, 'ffffff fffsi s s');
-        return { type: 'Model', klass, name, size, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, model };
+        return { type: 'Model', klass, name, size, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, model: 'FruitsBoat' };
     }
     case 'Billboard':
     case 'BrickBlock':
@@ -352,14 +367,14 @@ export class SunshineRenderer implements Viewer.SceneGfx {
         this.viewRenderer.executeOnPass(device, opaquePassRenderer, SMSPass.OPAQUE);
 
         let lastPassRenderer: GfxRenderPass;
+        const textureOverride: TextureOverride = { gfxTexture: this.opaqueSceneTexture.gfxTexture, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
+
         if (this.viewRenderer.hasAnyVisible(SMSPass.INDIRECT)) {
             opaquePassRenderer.endPass(this.opaqueSceneTexture.gfxTexture);
             device.submitPass(opaquePassRenderer);
 
             // IndTex.
-            const textureOverride: TextureOverride = { gfxTexture: this.opaqueSceneTexture.gfxTexture, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
             this.textureHolder.setTextureOverride("indirectdummy", textureOverride);
-            this.textureHolder.setTextureOverride("H_ma_polmask_sample_i4", textureOverride, false);
 
             const indTexPassRenderer = this.mainRenderTarget.createRenderPass(device, noClearRenderPassDescriptor);
             this.viewRenderer.executeOnPass(device, indTexPassRenderer, SMSPass.INDIRECT);
@@ -368,6 +383,8 @@ export class SunshineRenderer implements Viewer.SceneGfx {
             lastPassRenderer = opaquePassRenderer;
         }
 
+        this.textureHolder.setTextureOverride("H_ma_polmask_sample_i4", textureOverride, false);
+        this.textureHolder.setTextureOverride("H_shinemonument_polmask1_i4", textureOverride, false);
         // Window & transparent.
         this.viewRenderer.executeOnPass(device, lastPassRenderer, SMSPass.TRANSPARENT);
         return lastPassRenderer;
@@ -577,10 +594,102 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
             { k: 'WoodBox', m: 'WoodBox', p: 'mapobj/kibako' },
             { k: 'WoodBarrel', m: 'wood_barrel', s: () => bmtm('mapobj/barrel_normal.bmd', 'mapobj/barrel.bmt') },
             { k: 'SunModel', m: 'SunModel', p: 'sun/model' },
+            { k: 'ResetFruit', m: 'FruitBanana', s: () => basenameModel('mapobj/fruitbanana') },
+            { k: 'ResetFruit', m: 'FruitCoconut', s: () => basenameModel('mapobj/fruitcoconut') },
+            { k: 'ResetFruit', m: 'FruitPapaya', s: () => basenameModel('mapobj/fruitpapaya') },
+            { k: 'ResetFruit', m: 'FruitPine', s: () => basenameModel('mapobj/fruitpine') },
+            { k: 'ResetFruit', m: 'FruitDurian', s: () => basenameModel('mapobj/fruitdurian') },
+            { k: 'ResetFruit', m: 'RedPepper', s: () => basenameModel('mapobj/redpepper') },
+            { k: 'MonumentShine', m: 'monumentshine', s: () => basenameModel('mapobj/monumentshine') },
+            { k: 'NPCBoard', m: 'NPCBoard', s: () => basenameModel('boardnpc/boardnpc') },
 
-            { k: 'NPCMonteMA', m: 'NPCMonteMA', s: () => 
+            { k: 'FruitsBoat', m: 'FruitsBoat', s: () => bckm('fruitsboat/shipdolpic.bmd', 'fruitsboat/shipdolpic.bck')},
+            { k: 'FishoidA', m: 'FishoidA', s: () => bckm('fish/fisha.bmd', 'fish/fish_swim.bck')},
+            { k: 'FishoidB', m: 'FishoidB', s: () => bckm('fish/fishb.bmd', 'fish/fish_swim.bck')},
+            { k: 'FishoidC', m: 'FishoidC', s: () => bckm('fish/fishc.bmd', 'fish/fish_swim.bck')},
+            { k: 'FishoidD', m: 'FishoidD', s: () => bckm('fish/fishd.bmd', 'fish/fish_swim.bck')},
+            { k: 'NPCMareM', m: 'NPCMareM', s: () => 
             {
+                const m = bckm('marem/marem.bmd', 'marem/marem_wait.bck');
+                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
+                
+                const shell = basenameModel('marem/maremmakigai_b');
+                shell.setParentJoint(m, 'koshi');
+                return m;
+            }},
+            { k: 'NPCMareMC', m: 'NPCMareMC', s: () => 
+            {
+                const m = bckm('marem/marem.bmd', 'marem/marem_wait.bck');
+                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
+                
+                const shell = basenameModel('maremc/maremcagohige');
+                shell.setParentJoint(m, 'koshi');
+                return m;
+            }},
+            { k: 'NPCMareMD', m: 'NPCMareMD', s: () => 
+            {
+                const m = bckm('marem/marem.bmd', 'marem/marem_wait.bck');
+                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
+                
+                const shell = basenameModel('maremd/maremdhoragai_a');
+                shell.setParentJoint(m, 'koshi');
+                return m;
+            }},
+            { k: 'NPCMareW', m: 'NPCMareW', s: () => 
+            {
+                const m = bckm('marew/marew.bmd', 'marew/marew_wait.bck');
+                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
+                
+                const shell = basenameModel('marew/marewkai_b');
+                shell.setParentJoint(m, 'koshi');
+                return m;
+            }},
+            { k: 'NPCMonteMA', m: 'NPCMonteMA', s: () => {
                 const m = bckm('montema/moma_model.bmd', 'montemcommon/mom_wait.bck');
+
+                textureHolder.addBTITexture(device, BTI.parse(rarc.findFile(`montemcommon/i_mom_mino_rgba.bti`).buffer, `i_mom_mino_rgba`));
+                const monteTexture = textureHolder.gfxTextures.find(tex =>tex.ResourceName === 'i_mom_mino_rgba');
+                const textureOverride: TextureOverride = { gfxTexture: monteTexture, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
+                textureHolder.setTextureOverride("I_mom_mino_dummyI4", textureOverride, false);
+                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
+                return m;
+            }},
+            { k: 'NPCMonteM', m: 'NPCMonteM', s: () => {
+                const m = bckm('montem/mom_model.bmd', 'montemcommon/mom_wait.bck');
+
+                textureHolder.addBTITexture(device, BTI.parse(rarc.findFile(`montemcommon/i_mom_mino_rgba.bti`).buffer, `i_mom_mino_rgba`));
+                const monteTexture = textureHolder.gfxTextures.find(tex =>tex.ResourceName === 'i_mom_mino_rgba');
+                const textureOverride: TextureOverride = { gfxTexture: monteTexture, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
+                textureHolder.setTextureOverride("I_mom_mino_dummyI4", textureOverride, false);
+                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
+                return m;
+            }},
+            { k: 'NPCMonteMB', m: 'NPCMonteMB', s: () => {
+                const m = bckm('montemb/momb_model.bmd', 'montemcommon/mom_wait.bck');
+
+                textureHolder.addBTITexture(device, BTI.parse(rarc.findFile(`montemcommon/i_mom_mino_rgba.bti`).buffer, `i_mom_mino_rgba`));
+                const monteTexture = textureHolder.gfxTextures.find(tex =>tex.ResourceName === 'i_mom_mino_rgba');
+                const textureOverride: TextureOverride = { gfxTexture: monteTexture, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
+                textureHolder.setTextureOverride("I_mom_mino_dummyI4", textureOverride, false);
+                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
+                return m;
+            }},
+            { k: 'NPCMonteMC', m: 'NPCMonteMC', s: () => {
+                const m = bckm('montemc/momc_model.bmd', 'montemcommon/mom_wait.bck');
 
                 textureHolder.addBTITexture(device, BTI.parse(rarc.findFile(`montemcommon/i_mom_mino_rgba.bti`).buffer, `i_mom_mino_rgba`));
                 const monteTexture = textureHolder.gfxTextures.find(tex =>tex.ResourceName === 'i_mom_mino_rgba');
@@ -595,7 +704,7 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
             {
                 const m = bckm('montemd/momd_model.bmd', 'montemcommon/mom_wait.bck');
 
-                textureHolder.addBTITexture(device, BTI.parse(rarc.findFile(`montewcommon/i_mow_mino_rgba.bti`).buffer, `i_mow_mino_rgba`));
+                textureHolder.addBTITexture(device, BTI.parse(rarc.findFile(`montemcommon/i_mom_mino_rgba.bti`).buffer, `i_mom_mino_rgba`));
                 m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
                 m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
                 m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
@@ -616,6 +725,17 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
             { k: 'NPCMonteW', m: 'NPCMonteW', s: () => 
             {
                 const m = bckm('montew/mow_model.bmd', 'montewcommon/mow_wait.bck');
+                textureHolder.addBTITexture(device, BTI.parse(rarc.findFile(`montewcommon/i_mow_mino_rgba.bti`).buffer, `i_mow_mino_rgba`));
+                const monteTexture = textureHolder.gfxTextures.find(tex =>tex.ResourceName === 'i_mow_mino_rgba');
+                const textureOverride: TextureOverride = { gfxTexture: monteTexture, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
+                textureHolder.setTextureOverride("I_mow_mino_dummyI4", textureOverride, false);
+                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                return m;
+            }},
+            { k: 'NPCMonteWB', m: 'NPCMonteWB', s: () => 
+            {
+                const m = bckm('montewb/mowb_model.bmd', 'montewcommon/mow_wait.bck');
+                textureHolder.addBTITexture(device, BTI.parse(rarc.findFile(`montewcommon/i_mow_mino_rgba.bti`).buffer, `i_mow_mino_rgba`));
                 const monteTexture = textureHolder.gfxTextures.find(tex =>tex.ResourceName === 'i_mow_mino_rgba');
                 const textureOverride: TextureOverride = { gfxTexture: monteTexture, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
                 textureHolder.setTextureOverride("I_mow_mino_dummyI4", textureOverride, false);
