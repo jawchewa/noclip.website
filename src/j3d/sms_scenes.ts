@@ -602,7 +602,17 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
                 return m;
             }},
             { k: 'NPCMonteME', m: 'NPCMonteME', s: () => bckm('monteme/mome_model.bmd', 'monteme/mome_wait.bck') },
-            { k: 'NPCMonteMH', m: 'NPCMonteMH', s: () => bckm('montemh/uklele_model.bmd', 'montemcommon/mom_wait.bck') },
+            { k: 'NPCMonteMH', m: 'NPCMonteMH', s: () => 
+            {
+                const m = bckm('montemd/momd_model.bmd', 'montemh/momh_play.bck');
+                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
+                
+                const uke = basenameModel('montemh/uklele_model');
+                uke.setParentJoint(m, 'body_jnt');
+                return m;
+            }},
             { k: 'NPCMonteW', m: 'NPCMonteW', s: () => 
             {
                 const m = bckm('montew/mow_model.bmd', 'montewcommon/mow_wait.bck');
