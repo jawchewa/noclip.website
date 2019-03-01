@@ -45,7 +45,8 @@ export const enum InitErrorCode {
 export class Viewer {
     public inputManager: InputManager;
     public cameraController: CameraController | null = null;
-
+    public vrDisplay: any = null;
+    public frameData: any = null;
     public camera = new Camera();
     public fovY: number = Math.PI / 4;
     // Scene time. Can be paused / scaled / rewound / whatever.
@@ -74,6 +75,56 @@ export class Viewer {
             viewportWidth: 0,
             viewportHeight: 0,
         };
+
+        if (navigator.getVRDisplays) {
+            navigator.getVRDisplays().then(this.startvr.bind(this));
+        }
+    }
+
+    public setVREnabled ( v: boolean) {
+        if(v) {
+            // This can only be called in response to a user gesture.
+            this.vrDisplay.requestPresent([{ source: this.canvas }]).then(function () {
+            // Nothing to do because we're handling things in onVRPresentChange.
+            }, function (err: Error) {
+            var errMsg = "requestPresent failed.";
+            if (err && err.message) {
+                errMsg += "<br/>" + err.message
+            }
+                console.log(errMsg);
+            });
+        }
+        else {
+            // No sense in exiting presentation if we're not actually presenting.
+            // (This may happen if we get an event like vrdisplaydeactivate when
+            // we weren't presenting.)
+            if (!this.vrDisplay.isPresenting)
+            return;
+            this.vrDisplay.exitPresent().then(function () {
+            // Nothing to do because we're handling things in onVRPresentChange.
+            }, function (err: Error) {
+            var errMsg = "exitPresent failed.";
+            if (err && err.message) {
+                errMsg += "<br/>" + err.message
+            }
+            console.log(errMsg);
+            });
+        }
+
+    }
+    
+    private startvr(displays: any) {
+        this.frameData = new VRFrameData();
+        if (displays.length > 0) {
+
+            this.vrDisplay = displays[displays.length - 1];
+            // It's heighly reccommended that you set the near and far planes to
+            // something appropriate for your scene so the projection matricies
+            // WebVR produces have a well scaled depth buffer.
+            this.vrDisplay.depthNear = 10;
+            this.vrDisplay.depthFar = 50000;
+          
+        }
     }
 
     private renderGfxPlatform(): void {
@@ -96,12 +147,44 @@ export class Viewer {
         // TODO(jstpierre): Allocations.
         const debugGroup: GfxDebugGroup = { name: 'Scene Rendering', drawCallCount: 0, bufferUploadCount: 0, textureBindCount: 0, triangleCount: 0 };
         this.gfxDevice.pushDebugGroup(debugGroup);
+        const gl = gfxDeviceGetImpl(this.gfxDevice).gl;
 
-        const renderPass = this.scene.render(this.gfxDevice, this.viewerRenderInput);
-        const onscreenTexture = this.gfxSwapChain.getOnscreenTexture();
-        renderPass.endPass(onscreenTexture);
-        this.gfxDevice.submitPass(renderPass);
-        this.gfxSwapChain.present();
+        if (this.vrDisplay && this.vrDisplay.isPresenting) {
+            this.vrDisplay.getFrameData(this.frameData);
+            // When presenting render a stereo view.
+            camera.projectionMatrix = this.frameData.leftProjectionMatrix;
+            camera.viewMatrix = this.frameData.leftViewMatrix;
+
+            const renderPass = this.scene.render(this.gfxDevice, this.viewerRenderInput);
+            const onscreenTexture = this.gfxSwapChain.getOnscreenTexture();
+            renderPass.endPass(onscreenTexture);
+            this.gfxDevice.submitPass(renderPass);
+            gl.viewport(0, 0, this.canvas.width * 0.5, this.canvas.height);
+            this.gfxSwapChain.present();
+            
+            camera.projectionMatrix = this.frameData.rightProjectionMatrix;
+            camera.viewMatrix = this.frameData.rightViewMatrix;
+
+            const renderPass2 = this.scene.render(this.gfxDevice, this.viewerRenderInput);
+            const onscreenTexture2 = this.gfxSwapChain.getOnscreenTexture();
+            renderPass2.endPass(onscreenTexture2);
+            this.gfxDevice.submitPass(renderPass2);
+            gl.viewport(this.canvas.width * 0.5, 0, this.canvas.width * 0.5, this.canvas.height);
+            this.gfxSwapChain.present();
+
+            // If we're currently presenting to the VRDisplay we need to
+            // explicitly indicate we're done rendering.
+            this.vrDisplay.submitFrame();
+        }
+        else
+        {
+            gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+            const renderPass = this.scene.render(this.gfxDevice, this.viewerRenderInput);
+            const onscreenTexture = this.gfxSwapChain.getOnscreenTexture();
+            renderPass.endPass(onscreenTexture);
+            this.gfxDevice.submitPass(renderPass);
+            this.gfxSwapChain.present();
+        }
 
         this.gfxDevice.popDebugGroup();
         this.renderStatisticsTracker.endFrame();

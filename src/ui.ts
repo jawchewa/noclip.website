@@ -1395,6 +1395,7 @@ class ViewerSettings extends Panel {
     private cameraControllerWASD: HTMLElement;
     private cameraControllerOrbit: HTMLElement;
     private invertCheckbox: Checkbox;
+    private vrCheckbox: Checkbox;
 
     constructor(private viewer: Viewer.Viewer) {
         super();
@@ -1488,6 +1489,18 @@ class ViewerSettings extends Panel {
         this.invertCheckbox = new Checkbox('Invert Y Axis?');
         this.invertCheckbox.onchanged = () => { this.setInvertY(this.invertCheckbox.checked); };
         this.contents.appendChild(this.invertCheckbox.elem);
+
+        if(navigator.getVRDisplays)
+        { 
+            navigator.getVRDisplays().then(((value: VRDisplay[]) => {
+                if(value.length > 0)
+                {
+                    this.vrCheckbox = new Checkbox('Enable VR (Experimental)');
+                    this.vrCheckbox.onchanged = () => { this.viewer.setVREnabled(this.vrCheckbox.checked)};
+                    this.contents.appendChild(this.vrCheckbox.elem);
+                }
+            }).bind(this));
+        }
         GlobalSaveManager.addSettingListener('InvertY', this.invertYChanged.bind(this));
     }
 
