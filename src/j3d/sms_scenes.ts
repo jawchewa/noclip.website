@@ -116,6 +116,10 @@ interface SceneBinObjModel extends SceneBinObjBase {
     scaleZ: number;
     manager: string;
     model: string;
+    bodyColor?: number;
+    shirtColor?: number;
+    accessoryColor?: number;
+    state?: number;
 }
 
 interface SceneBinObjGroup extends SceneBinObjBase {
@@ -186,8 +190,13 @@ function readSceneBin(buffer: ArrayBufferSlice): SceneBinObj {
     }
     // Models
     case 'BananaTree':
+    case 'Bathtub':
+    case 'BellDolpicPolice':
+    case 'BellDolpicTV':
     case 'BiaTurnBridge':
     case 'BiaWatermill':
+    case 'BiaWatermillVertical':
+    case 'BigWindmill':
     case 'Coin':
     case 'CoinRed':
     case 'Fence':
@@ -196,53 +205,92 @@ function readSceneBin(buffer: ArrayBufferSlice): SceneBinObj {
     case 'FenceWaterH':
     case 'FenceWaterV':
     case 'FerrisWheel':
+    case 'FlowerCoin':
     case 'IceBlock':
+    case 'LeafBoat':
     case 'Manhole':
     case 'MapObjBase':
+    case 'MapObjGeneral':
+    case 'MapObjSmoke':
+    case 'MapObjTreeScale':
     case 'MapStaticObj':
     case 'Merrygoround':
+    case 'MiniWindmill':
     case 'MonumentShine':
     case 'Palm':
     case 'PalmNatume':
     case 'PalmOugi':
     case 'PinnaDoor':
+    case 'RiccoLog':
     case 'ShellCup':
     case 'WoodBarrel':
     case 'WoodBlock':
     case 'ResetFruit':
-    case 'MonumentShine':
+    case 'TurboNozzleDoor':
     case 'Viking':
+    case 'WindmillRoof':
     {
         const [paramsSize, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, flags, model] = unpack(params, 'ffffff fffsi s.');
         return { type: 'Model', klass, name, size, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, model };
     }
+    case 'SunModel':
+    {
+        const [paramsSize, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, flags] = unpack(params, 'ffffff fffsi');
+        return { type: 'Model', klass, name, size, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, model: klass };
+    }
 
+    case 'BossPakkun':
+    case 'StayPakkun':
+    case 'KBossPakkun':
+    case 'BossGesso':
+    case 'BossDangoHamuKuri':
+    case 'BossEel':
     case 'NPCBoard':
-    case 'NPCMonteM':
+    case 'NPCMonteW':
+    case 'NPCMonteWB':
+    case 'NPCKinojii':
+    case 'NPCMareM':
+    case 'NPCMareMC':
+    case 'NPCMareMD':
+    case 'NPCMareW':
+    case 'NPCMareWB':
+    case 'NPCRacoonDog':
+    case 'FishoidA':
+    case 'FishoidB':
+    case 'FishoidC':
+    case 'FishoidD':
+    case 'AnimalBird':
+    case 'AnimalMew':
+    case 'EggYoshi':
+    case 'Koopa':
+    case 'KoopaJr':    
+    case 'LimitKoopaJr':    
+    case 'BathtubPeach':
+    case 'GateKeeper':
+    case 'SamboHead':
+    case 'SamboFlower':
+    case 'NPCPeach':
+    {
+        const [paramsSize, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, flags, model] = unpack(params, 'ffffff fffsi s.');
+        return { type: 'Model', klass, name, size, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, model: klass };
+    }
     case 'NPCMonteMA':
     case 'NPCMonteMB':
     case 'NPCMonteMC':
     case 'NPCMonteMD':
     case 'NPCMonteME':
     case 'NPCMonteMH':
-    case 'NPCMonteW':
-    case 'NPCMonteWB':
-    case 'NPCKinojii':
-    case 'NPCKinopio':
-    case 'NPCMareM':
-    case 'NPCMareMC':
-    case 'NPCMareMD':
-    case 'NPCMareW':
-    case 'FishoidA':
-    case 'FishoidB':
-    case 'FishoidC':
-    case 'FishoidD':
-    case 'AnimalBird':
-    case 'EggYoshi':
-    case 'NPCPeach':
+    case 'NPCMonteMG':
+    case 'NPCMonteM':
     {
-        const [paramsSize, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, flags, model] = unpack(params, 'ffffff fffsi s.');
-        return { type: 'Model', klass, name, size, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, model: klass };
+        const [paramsSize, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, charManager, flags, manager, rail, bodyColor, shirtColor, state, hat, accessoryColor ] = unpack(params, 'ffffff fffsi s s iii i iii.');
+        return { type: 'Model', klass, name, size, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, model: klass, bodyColor, shirtColor, state, accessoryColor };
+    }
+    case 'NPCKinopio':
+    {
+        const [paramsSize, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, charManager, flags, manager, rail, bodyColor] = unpack(params, 'ffffff fffsi s s i.');
+        console.log(rail);
+        return { type: 'Model', klass, name, size, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, model: klass, bodyColor };
     }
     // Extra unk junk
     case 'CoinBlue':
@@ -340,7 +388,7 @@ export class SunshineRenderer implements Viewer.SceneGfx {
     }
 
     protected prepareToRender(hostAccessPass: GfxHostAccessPass, viewerInput: Viewer.ViewerRenderInput): void {
-        viewerInput.camera.setClipPlanes(20, 500000);
+        viewerInput.camera.setClipPlanes(20, 800000);
         this.renderHelper.fillSceneParams(viewerInput);
         for (let i = 0; i < this.models.length; i++)
             this.models[i].prepareToRender(this.renderHelper, viewerInput, true);
@@ -552,11 +600,32 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
             modelInstance.name = basename;
             return new BMDObjectRenderer(modelInstance);
         }
+        const colors: Color[] = [
+            new Color(0.2, 1.0, 1.0, 0.0), //light blue
+            new Color(0.0, 0.0, 0.9, 0.0), //blue
+            new Color(1.0, 0.9, 0.0, 0.0), //yellow
+            new Color(0.8, 0.4, 0.2, 0.0), //light brown
+            new Color(1.0, 0.0, 1.0, 0.0), //purple
+            new Color(1.0, 0.0, 0.0, 0.0),
+            new Color(0.0, 0.0, 0.6, 0.0), //dark blue
+            new Color(1.0, 0.6, 0.2, 0.0), //orange
+            new Color(0.0, 0.0, 0.8, 0.0), //dark blue
+            new Color(1.0, 0.7, 0.4, 0.0), //light orange
+            new Color(0.0, 1.0, 0.0, 0.0), //green
+            new Color(0.0, 0.0, 0.0, 0.0),
+        ];
 
         const modelLookup: ModelLookup[] = [
             { k: 'BananaTree', m: 'BananaTree', p: 'mapobj/bananatree' },
+            { k: 'Bathtub', m: 'bath', p: 'mapobj/bath'},
+            { k: 'BellDolpicPolice', m: 'belldolpic', p: 'mapobj/BellDolpic'},            
+            { k: 'BellDolpicTV', m: 'belldolpic', p: 'mapobj/BellDolpic'},  
             { k: 'BiaTurnBridge', m: 'BiaTurnBridge', s: () => bmtm('mapobj/biaturnbridge.bmd', 'mapobj/bianco.bmt') },
             { k: 'BiaWatermill', m: 'BiaWatermill', s: () => bmtm('mapobj/biawatermill.bmd', 'mapobj/bianco.bmt') },
+            { k: 'BiaWatermillVertical', m: 'BiaWatermillVertical', s: () => bmtm('mapobj/biawatermillvertical.bmd', 'mapobj/bianco.bmt') },
+
+            
+            { k: 'BigWindmill', m: 'bigWindmill', s: () => bmtm('mapobj/bigwindmill.bmd', 'mapobj/bianco.bmt') },
             { k: 'BrickBlock', m: 'BrickBlock', p: 'mapobj/brickblock' },
             { k: 'Coin', m: 'coin', p: 'mapobj/coin' },
             { k: 'Coin', m: 'invisible_coin', p: 'mapobj/coin' },
@@ -571,38 +640,68 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
             { k: 'FenceWaterH', m: 'FenceWaterH', p: 'mapobj/fencewaterh' },
             { k: 'FenceWaterV', m: 'FenceWaterV', p: 'mapobj/fencewaterv' },
             { k: 'FerrisWheel', m: 'FerrisWheel', p: 'mapobj/ferriswheel' },
+            { k: 'FlowerCoin', m: 'coin', p: 'mapobj/coin' },
             { k: 'IceBlock', m: 'IceBlock', p: 'mapobj/iceblock' },
+            { k: 'LeafBoat', m: 'LeafBoat', s: () => bmtm('mapobj/leafboat.bmd', 'mapobj/leafboat.bmt') },
+            { k: 'NPCBoard', m: 'NPCBoard', p: 'boardnpc/boardnpc' },
             { k: 'Manhole', m: 'manhole', p: 'mapobj/manhole' },
             { k: 'MapObjBase', m: 'DokanGate', p: 'mapobj/efdokangate' },
             { k: 'MapObjBase', m: 'ArrowBoardLR', s: () => bmtm('mapobj/arrowboardlr.bmd', 'mapobj/arrowboard.bmt') },
             { k: 'MapObjBase', m: 'ArrowBoardUp', s: () => bmtm('mapobj/arrowboardup.bmd', 'mapobj/arrowboard.bmt') },
             { k: 'MapObjBase', m: 'ArrowBoardDown', s: () => bmtm('mapobj/arrowboarddown.bmd', 'mapobj/arrowboard.bmt') },
             { k: 'MapObjBase', m: 'monte_chair', p: 'mapobj/monte_chair_model' },
+            { k: 'MapObjGeneral', m: 'lampBianco', s: () => bmtm('mapobj/lampBianco.bmd',  'mapobj/bianco.bmt') },
             { k: 'MapStaticObj', m: 'ReflectSky', s: () => null },
             // Disable SeaIndirect loading...
             { k: 'MapStaticObj', m: 'SeaIndirect', s: () => null },
+            { k: 'MapObjTreeScale', m: 'BananaTree', p: 'mapobj/bananatree' },            
             { k: 'Merrygoround', m: 'merry', p: 'mapobj/merry' },
+            { k: 'MiniWindmill', m: 'MiniWindmillL', s: () => bmtm('mapobj/miniwindmilll.bmd', 'mapobj/bianco.bmt') },
+            { k: 'MonumentShine', m: 'monumentshine', p: 'mapobj/monumentshine' },
             { k: 'NozzleBox', m: 'NozzleBox', p: 'mapobj/nozzlebox' },
             { k: 'Palm', m: 'palmNormal', p: 'mapobj/palmnormal' },
             { k: 'Palm', m: 'palmLeaf', p: 'mapobj/palmleaf' },
             { k: 'PalmNatume', m: 'palmNatume', p: 'mapobj/palmnatume' },
             { k: 'PalmOugi', m: 'palmOugi', p: 'mapobj/palmougi' },
             { k: 'PinnaDoor', m: 'PinnaDoor', p: 'mapobj/pinnadoor' },
+            { k: 'ResetFruit', m: 'FruitBanana', p: 'mapobj/fruitbanana' },
+            { k: 'ResetFruit', m: 'FruitCoconut', p: 'mapobj/fruitcoconut' },
+            { k: 'ResetFruit', m: 'FruitDurian', p: 'mapobj/fruitdurian' },
+            { k: 'ResetFruit', m: 'FruitPapaya', p: 'mapobj/fruitpapaya' },
+            { k: 'ResetFruit', m: 'FruitPine', p: 'mapobj/fruitpine' },
+            { k: 'ResetFruit', m: 'RedPepper', p: 'mapobj/redpepper' },
+            { k: 'RiccoLog', m: 'riccoLog', p: 'mapobj/riccolog' },
             { k: 'ShellCup', m: 'ShellCup', p: 'mapobj/shellcup' },
-            { k: 'Shine', m: 'shine', s: () => bckm('mapobj/shine.bmd', 'mapobj/shine_float.bck') },
+            { k: 'SunModel', m: 'SunModel', p: 'sun/model' },
+            { k: 'TurboNozzleDoor', m: 'nozzleDoor', p: 'mapobj/nozzledoor' },
             { k: 'Viking', m: 'viking', p: 'mapobj/viking' },
+            { k: 'WindmillRoof', m: 'WindmillRoof', p: 'mapobj/windmillroof'},
             { k: 'WoodBox', m: 'WoodBox', p: 'mapobj/kibako' },
             { k: 'WoodBarrel', m: 'wood_barrel', s: () => bmtm('mapobj/barrel_normal.bmd', 'mapobj/barrel.bmt') },
-            { k: 'SunModel', m: 'SunModel', p: 'sun/model' },
-            { k: 'ResetFruit', m: 'FruitBanana', s: () => basenameModel('mapobj/fruitbanana') },
-            { k: 'ResetFruit', m: 'FruitCoconut', s: () => basenameModel('mapobj/fruitcoconut') },
-            { k: 'ResetFruit', m: 'FruitPapaya', s: () => basenameModel('mapobj/fruitpapaya') },
-            { k: 'ResetFruit', m: 'FruitPine', s: () => basenameModel('mapobj/fruitpine') },
-            { k: 'ResetFruit', m: 'FruitDurian', s: () => basenameModel('mapobj/fruitdurian') },
-            { k: 'ResetFruit', m: 'RedPepper', s: () => basenameModel('mapobj/redpepper') },
-            { k: 'MonumentShine', m: 'monumentshine', s: () => basenameModel('mapobj/monumentshine') },
-            { k: 'NPCBoard', m: 'NPCBoard', s: () => basenameModel('boardnpc/boardnpc') },
 
+            //Skeletal Models
+            { k: 'BiaWatermill', m: 'BiaWatermill01', s: () => bmtm('mapobj/biawatermill01.bmd', 'mapobj/bianco.bmt') }, //Todo: Hook up animation as well as texture
+            { k: 'Shine', m: 'shine', s: () => bckm('mapobj/shine.bmd', 'mapobj/shine_float.bck') },
+            { k: 'Koopa', m: 'Koopa', s: () => bckm('koopa/koopa_model.bmd', 'koopa/koopa_wait.bck') },
+            { k: 'KoopaJr', m: 'KoopaJr', s: () => bckm('koopajr/koopajr_model.bmd', 'koopajr/koopajr_wait.bck') },
+            { k: 'BathtubPeach', m: 'BathtubPeach', s: () => {
+                const m = bckm('bathtubpeach/peach_model.bmd', 'bathtubpeach/peach_wait.bck');
+                const ponytail = bckm('bathtubpeach/peach_hair_ponytail.bmd', 'bathtubpeach/peach_hair_ponytail_wait.bck');
+                ponytail.setParentJoint(m, 'kubi');
+                const hand1l = basenameModel('bathtubpeach/peach_hand2_l');
+                hand1l.setParentJoint(m, 'jnt_hand_L');
+                const hand1r = basenameModel('bathtubpeach/peach_hand2_r');
+                hand1r.setParentJoint(m, 'jnt_hand_R');
+                return m;
+            }},
+            
+            { k: 'GateKeeper', m: 'GateKeeper', s: () => bckm('gatekeeper/gene_pakkun_model1.bmd', 'gatekeeper/gene_pakkun_wait2.bck') },
+            { k: 'SamboHead', m: 'SamboHead', s: () => bckm('sambohead/sambohead.bmd', 'sambohead/sambohead_wait.bck') },
+            { k: 'SamboFlower', m: 'SamboFlower', s: () => bckm('samboflower/flower.bmd', 'samboflower/flower_wait.bck') },
+            { k: 'BossPakkun', m: 'BossPakkun', s: () => bckm('bosspakkun/bosspaku_model.bmd', 'bosspakkun/bosspaku_wait.bck')},
+            { k: 'KBossPakkun', m: 'KBossPakkun', s: () => bckm('kbosspakkun/bosspaku_model.bmd', 'kbosspakkun/bosspaku_wait.bck')},
+            { k: 'BossEel', m: 'BossEel', s: () => bckm('bosseel/meoto_model.bmd', 'bosseel/meoto_paku.bck')},            
+            { k: 'StayPakkun', m: 'StayPakkun', s: () => bckm('pakkun/pakun.bmd', 'pakkun/pakun_wait.bck')},
             { k: 'FruitsBoat', m: 'FruitsBoat', s: () => bckm('fruitsboat/shipdolpic.bmd', 'fruitsboat/shipdolpic.bck')},
             { k: 'FishoidA', m: 'FishoidA', s: () => bckm('fish/fisha.bmd', 'fish/fish_swim.bck')},
             { k: 'FishoidB', m: 'FishoidB', s: () => bckm('fish/fishb.bmd', 'fish/fish_swim.bck')},
@@ -659,9 +758,10 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
                 const monteTexture = textureHolder.gfxTextures.find(tex =>tex.ResourceName === 'i_mom_mino_rgba');
                 const textureOverride: TextureOverride = { gfxTexture: monteTexture, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
                 textureHolder.setTextureOverride("I_mom_mino_dummyI4", textureOverride, false);
-                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
-                m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
-                m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C0, colors[obj.bodyColor]);
+                m.modelInstance.setColorOverride(ColorKind.C2, colors[obj.shirtColor]);
+                //m.modelInstance.setColorOverride(ColorKind.C2, colors[obj.accessoryColor]);
+
                 return m;
             }},
             { k: 'NPCMonteM', m: 'NPCMonteM', s: () => {
@@ -671,9 +771,10 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
                 const monteTexture = textureHolder.gfxTextures.find(tex =>tex.ResourceName === 'i_mom_mino_rgba');
                 const textureOverride: TextureOverride = { gfxTexture: monteTexture, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
                 textureHolder.setTextureOverride("I_mom_mino_dummyI4", textureOverride, false);
-                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
-                m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
-                m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C0, colors[obj.bodyColor]);
+                m.modelInstance.setColorOverride(ColorKind.C2, colors[obj.shirtColor]);
+                //m.modelInstance.setColorOverride(ColorKind.C2, colors[obj.accessoryColor]);
+
                 return m;
             }},
             { k: 'NPCMonteMB', m: 'NPCMonteMB', s: () => {
@@ -683,9 +784,10 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
                 const monteTexture = textureHolder.gfxTextures.find(tex =>tex.ResourceName === 'i_mom_mino_rgba');
                 const textureOverride: TextureOverride = { gfxTexture: monteTexture, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
                 textureHolder.setTextureOverride("I_mom_mino_dummyI4", textureOverride, false);
-                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
-                m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
-                m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C0, colors[obj.bodyColor]);
+                m.modelInstance.setColorOverride(ColorKind.C2, colors[obj.shirtColor]);
+                //m.modelInstance.setColorOverride(ColorKind.C2, colors[obj.accessoryColor]);
+
                 return m;
             }},
             { k: 'NPCMonteMC', m: 'NPCMonteMC', s: () => {
@@ -695,9 +797,10 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
                 const monteTexture = textureHolder.gfxTextures.find(tex =>tex.ResourceName === 'i_mom_mino_rgba');
                 const textureOverride: TextureOverride = { gfxTexture: monteTexture, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
                 textureHolder.setTextureOverride("I_mom_mino_dummyI4", textureOverride, false);
-                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
-                m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
-                m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C0, colors[obj.bodyColor]);
+                m.modelInstance.setColorOverride(ColorKind.C2, colors[obj.shirtColor]);
+                //m.modelInstance.setColorOverride(ColorKind.C2, colors[obj.accessoryColor]);
+
                 return m;
             }},
             { k: 'NPCMonteMD', m: 'NPCMonteMD', s: () => 
@@ -705,19 +808,19 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
                 const m = bckm('montemd/momd_model.bmd', 'montemcommon/mom_wait.bck');
 
                 textureHolder.addBTITexture(device, BTI.parse(rarc.findFile(`montemcommon/i_mom_mino_rgba.bti`).buffer, `i_mom_mino_rgba`));
-                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
-                m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
-                m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C0, colors[obj.bodyColor]);
+                m.modelInstance.setColorOverride(ColorKind.C2, colors[obj.shirtColor]);
+                //m.modelInstance.setColorOverride(ColorKind.C2, colors[obj.accessoryColor]);
                 return m;
             }},
             { k: 'NPCMonteME', m: 'NPCMonteME', s: () => bckm('monteme/mome_model.bmd', 'monteme/mome_wait.bck') },
             { k: 'NPCMonteMH', m: 'NPCMonteMH', s: () => 
             {
-                const m = bckm('montemd/momd_model.bmd', 'montemh/momh_play.bck');
-                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
-                m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
-                m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
-                
+                const m = bckm('montema/moma_model.bmd', 'montemh/momh_play.bck');
+                m.modelInstance.setColorOverride(ColorKind.C0, colors[obj.bodyColor]);
+                m.modelInstance.setColorOverride(ColorKind.C2, colors[obj.shirtColor]);
+                //m.modelInstance.setColorOverride(ColorKind.C2, colors[obj.accessoryColor]);
+
                 const uke = basenameModel('montemh/uklele_model');
                 uke.setParentJoint(m, 'body_jnt');
                 return m;
@@ -742,12 +845,18 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
                 m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
                 return m;
             }},
-            { k: 'NPCKinopio', m: 'NPCKinopio', s: () => bckm('kinopio/kinopio_body.bmd', 'kinopio/kinopio_wait.bck') },
+            { k: 'NPCKinopio', m: 'NPCKinopio', s: () => {
+                const m = bckm('kinopio/kinopio_body.bmd', 'kinopio/kinopio_wait.bck') ;
+                m.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
+                return m;
+            }},
             { k: 'AnimalBird', m: 'AnimalBird', s: () => {
                 const m = bckm('bird/bird_man.bmd', 'bird/bird_fly.bck');
                 obj.y += 35;
                 return m;
             }},
+            { k: 'AnimalMew', m: 'AnimalMew', s: () => bckm('mew/kamome_high.bmd', 'mew/kamome_kakku.bck') },
             { k: 'EggYoshi', m: 'EggYoshi', s: () => bckm('mapobj/eggyoshi_normal.bmd', 'mapobj/eggyoshi_wait.bck') },
             { k: 'NPCKinojii', m: 'NPCKinojii', s: () => {
                 const m = bckm('kinojii/kinoji_body.bmd', 'kinojii/kinoji_wait.bck');
