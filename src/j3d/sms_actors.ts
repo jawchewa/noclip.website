@@ -1,6 +1,6 @@
 
 import * as Viewer from '../viewer';
-import { mat4 } from "gl-matrix";
+import { mat4, vec3 } from "gl-matrix";
 import { BMDModelInstance } from "./render";
 import { ANK1, TTK1, TRK1 } from "./j3d";
 import AnimationController from "../AnimationController";
@@ -9,6 +9,7 @@ import { AABB } from '../Geometry';
 import { ScreenSpaceProjection, computeScreenSpaceProjectionFromWorldSpaceAABB, computeViewMatrix } from '../Camera';
 import { GfxDevice } from '../gfx/platform/GfxPlatform';
 import ArrayBufferSlice from '../ArrayBufferSlice';
+import * as GX_Material from '../gx/gx_material';
 
 // Special-case actors
 
@@ -17,6 +18,7 @@ export interface ObjectRenderer {
     destroy(device: GfxDevice): void;
 }
 
+const scratchLight = new GX_Material.Light();
 const bboxScratch = new AABB();
 const screenProjection = new ScreenSpaceProjection();
 export class BMDObjectRenderer implements ObjectRenderer {
@@ -77,6 +79,14 @@ export class BMDObjectRenderer implements ObjectRenderer {
                     this.modelInstance.visible = false;
             }
         }
+
+        GX_Material.lightSetWorldPosition(scratchLight, viewerInput.camera, 250, 250, 250);
+        GX_Material.lightSetWorldDirection(scratchLight, viewerInput.camera, -250, -250, -250);
+        // Toon lighting works by setting the color to red.
+        scratchLight.Color.set(1, 1, 1, 0);
+        vec3.set(scratchLight.CosAtten, 1.075, 0, 0);
+        vec3.set(scratchLight.DistAtten, 1.075, 0, 0);
+        this.modelInstance.setGXLight(0, scratchLight);
 
         this.modelInstance.prepareToRender(renderHelper, viewerInput);
         for (let i = 0; i < this.childObjects.length; i++)

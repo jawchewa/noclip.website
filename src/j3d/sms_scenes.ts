@@ -193,12 +193,15 @@ function readSceneBin(buffer: ArrayBufferSlice): SceneBinObj {
     case 'Bathtub':
     case 'BellDolpicPolice':
     case 'BellDolpicTV':
+    case 'BiaBell':
     case 'BiaTurnBridge':
     case 'BiaWatermill':
     case 'BiaWatermillVertical':
     case 'BigWindmill':
     case 'Coin':
     case 'CoinRed':
+    case 'CraneRotY':
+    case 'craneUpDown':
     case 'Fence':
     case 'FenceInner':
     case 'FenceRevolve':
@@ -208,9 +211,12 @@ function readSceneBin(buffer: ArrayBufferSlice): SceneBinObj {
     case 'FlowerCoin':
     case 'IceBlock':
     case 'LeafBoat':
+    case 'LeanMirror':
     case 'Manhole':
+    case 'MammaYacht':
     case 'MapObjBase':
     case 'MapObjGeneral':
+    case 'MapObjRootPakkun':
     case 'MapObjSmoke':
     case 'MapObjTreeScale':
     case 'MapStaticObj':
@@ -222,10 +228,17 @@ function readSceneBin(buffer: ArrayBufferSlice): SceneBinObj {
     case 'PalmOugi':
     case 'PinnaDoor':
     case 'RiccoLog':
+    case 'riccoWatermill':
+    case 'RiccoSwitchShine':
+    case 'SandCastle':
+    case 'SandEgg':
     case 'ShellCup':
+    case 'ShiningStone':
     case 'WoodBarrel':
     case 'WoodBlock':
     case 'ResetFruit':
+    case 'SandBombBase':
+    case 'SandBomb':
     case 'TurboNozzleDoor':
     case 'Viking':
     case 'WindmillRoof':
@@ -239,37 +252,44 @@ function readSceneBin(buffer: ArrayBufferSlice): SceneBinObj {
         return { type: 'Model', klass, name, size, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, model: klass };
     }
 
-    case 'BossPakkun':
-    case 'StayPakkun':
-    case 'KBossPakkun':
-    case 'BossGesso':
+    case 'Amenbo':
+    case 'AnimalBird':
+    case 'AnimalMew':
+    case 'BathtubPeach':
     case 'BossDangoHamuKuri':
     case 'BossEel':
+    case 'BossGesso':
+    case 'BossPakkun':
+    case 'EggYoshi':
+    case 'FishoidA':
+    case 'FishoidB':
+    case 'FishoidC':
+    case 'FishoidD':
+    case 'GateKeeper':
+    case 'Gesso':
+    case 'Kazekun':
+    case 'KBossPakkun':
+    case 'Koopa':
+    case 'KoopaJr':  
+    case 'LandGesso':
+    case 'LimitKoopaJr':
+    case 'MameGesso':
     case 'NPCBoard':
-    case 'NPCMonteW':
-    case 'NPCMonteWB':
     case 'NPCKinojii':
     case 'NPCMareM':
     case 'NPCMareMC':
     case 'NPCMareMD':
     case 'NPCMareW':
     case 'NPCMareWB':
+    case 'NPCPeach':
     case 'NPCRacoonDog':
-    case 'FishoidA':
-    case 'FishoidB':
-    case 'FishoidC':
-    case 'FishoidD':
-    case 'AnimalBird':
-    case 'AnimalMew':
-    case 'EggYoshi':
-    case 'Koopa':
-    case 'KoopaJr':    
-    case 'LimitKoopaJr':    
-    case 'BathtubPeach':
-    case 'GateKeeper':
+    case 'PoiHana':
+    case 'PoiHanaRed':
+    case 'TabePuku':
+    case 'RiccoSwitch':
     case 'SamboHead':
     case 'SamboFlower':
-    case 'NPCPeach':
+    case 'StayPakkun':
     {
         const [paramsSize, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, flags, model] = unpack(params, 'ffffff fffsi s.');
         return { type: 'Model', klass, name, size, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, model: klass };
@@ -286,10 +306,17 @@ function readSceneBin(buffer: ArrayBufferSlice): SceneBinObj {
         const [paramsSize, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, charManager, flags, manager, rail, bodyColor, shirtColor, state, hat, accessoryColor ] = unpack(params, 'ffffff fffsi s s iii i iii.');
         return { type: 'Model', klass, name, size, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, model: klass, bodyColor, shirtColor, state, accessoryColor };
     }
+    
+    case 'NPCMonteW':
+    case 'NPCMonteWB':
+    {
+        const [paramsSize, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, charManager, flags, manager, rail, bodyColor, shirtColor, state, hat, accessoryColor ] = unpack(params, 'ffffff fffsi s s iiii iiii iiii.');
+        console.log(unpack(params, 'ffffff fffsi s s iiii iiii iiii.'));
+        return { type: 'Model', klass, name, size, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, model: klass, bodyColor, shirtColor, state, accessoryColor };
+    }
     case 'NPCKinopio':
     {
         const [paramsSize, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, charManager, flags, manager, rail, bodyColor] = unpack(params, 'ffffff fffsi s s i.');
-        console.log(rail);
         return { type: 'Model', klass, name, size, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, model: klass, bodyColor };
     }
     // Extra unk junk
@@ -308,6 +335,7 @@ function readSceneBin(buffer: ArrayBufferSlice): SceneBinObj {
         const [paramsSize, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, flags, model] = unpack(params, 'ffffff fffsi s sii');
         return { type: 'Model', klass, name, size, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, model };
     }
+    case 'FruitsBoatB':
     case 'FruitsBoat':
     {
         const [paramsSize, x, y, z, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ, manager, flags, model] = unpack(params, 'ffffff fffsi s s');
@@ -615,16 +643,30 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
             new Color(0.0, 0.0, 0.0, 0.0),
         ];
 
+        const colors2: Color[] = [
+            new Color(0.2, 1.0, 1.0, 0.0), //light blue
+            new Color(1.0, 0.6, 0.2, 0.0), //blue
+            new Color(1.0, 0.9, 0.0, 0.0), //yellow
+            new Color(0.8, 0.4, 0.2, 0.0), //light brown
+            new Color(1.0, 0.0, 0.0, 0.0), //purple
+            new Color(1.0, 0.0, 0.0, 0.0),
+            new Color(0.0, 0.0, 0.6, 0.0), //dark blue
+            new Color(1.0, 0.6, 0.2, 0.0), //orange
+            new Color(0.0, 0.0, 0.8, 0.0), //dark blue
+            new Color(1.0, 0.7, 0.4, 0.0), //light orange
+            new Color(0.0, 1.0, 0.0, 0.0), //green
+            new Color(0.0, 0.0, 0.0, 0.0),
+        ];
+
         const modelLookup: ModelLookup[] = [
             { k: 'BananaTree', m: 'BananaTree', p: 'mapobj/bananatree' },
             { k: 'Bathtub', m: 'bath', p: 'mapobj/bath'},
             { k: 'BellDolpicPolice', m: 'belldolpic', p: 'mapobj/BellDolpic'},            
             { k: 'BellDolpicTV', m: 'belldolpic', p: 'mapobj/BellDolpic'},  
+            { k: 'BiaBell', m: 'BiaBell', s: () => bmtm('mapobj/BiaBell.bmd', 'mapobj/bianco.bmt') },  
             { k: 'BiaTurnBridge', m: 'BiaTurnBridge', s: () => bmtm('mapobj/biaturnbridge.bmd', 'mapobj/bianco.bmt') },
             { k: 'BiaWatermill', m: 'BiaWatermill', s: () => bmtm('mapobj/biawatermill.bmd', 'mapobj/bianco.bmt') },
             { k: 'BiaWatermillVertical', m: 'BiaWatermillVertical', s: () => bmtm('mapobj/biawatermillvertical.bmd', 'mapobj/bianco.bmt') },
-
-            
             { k: 'BigWindmill', m: 'bigWindmill', s: () => bmtm('mapobj/bigwindmill.bmd', 'mapobj/bianco.bmt') },
             { k: 'BrickBlock', m: 'BrickBlock', p: 'mapobj/brickblock' },
             { k: 'Coin', m: 'coin', p: 'mapobj/coin' },
@@ -632,6 +674,8 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
             { k: 'Coin', m: 'invisible_coin', p: 'mapobj/coin' },
             { k: 'CoinRed', m: 'coin_red', p: 'mapobj/coin_red' },
             { k: 'CoinBlue', m: 'coin_blue', p: 'mapobj/coin_blue' },
+            { k: 'craneUpDown', m: 'craneUpDown', p: 'mapobj/craneUpDown' },
+            { k: 'CraneRotY', m: 'crane', p: 'mapobj/crane' },
             { k: 'DolWeathercock', m: 'dptWeathercock', p: 'mapobj/dptweathercock' },
             { k: 'Fence', m: 'fence_normal', p: 'mapobj/fence_normal' },
             { k: 'Fence', m: 'fence3x3', p: 'mapobj/fence_half' },
@@ -643,14 +687,21 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
             { k: 'FlowerCoin', m: 'coin', p: 'mapobj/coin' },
             { k: 'IceBlock', m: 'IceBlock', p: 'mapobj/iceblock' },
             { k: 'LeafBoat', m: 'LeafBoat', s: () => bmtm('mapobj/leafboat.bmd', 'mapobj/leafboat.bmt') },
+            { k: 'LeanMirror', m: 'mirrorS', p: 'mapobj/mirrorS' },
+            { k: 'LeanMirror', m: 'mirrorM', p: 'mapobj/mirrorM' },
+            { k: 'LeanMirror', m: 'mirrorL', p: 'mapobj/mirrorL' },
             { k: 'NPCBoard', m: 'NPCBoard', p: 'boardnpc/boardnpc' },
             { k: 'Manhole', m: 'manhole', p: 'mapobj/manhole' },
+            { k: 'MammaYacht', m: 'MammaYacht00', p: 'mapobj/mammayacht00' },
             { k: 'MapObjBase', m: 'DokanGate', p: 'mapobj/efdokangate' },
             { k: 'MapObjBase', m: 'ArrowBoardLR', s: () => bmtm('mapobj/arrowboardlr.bmd', 'mapobj/arrowboard.bmt') },
             { k: 'MapObjBase', m: 'ArrowBoardUp', s: () => bmtm('mapobj/arrowboardup.bmd', 'mapobj/arrowboard.bmt') },
             { k: 'MapObjBase', m: 'ArrowBoardDown', s: () => bmtm('mapobj/arrowboarddown.bmd', 'mapobj/arrowboard.bmt') },
             { k: 'MapObjBase', m: 'monte_chair', p: 'mapobj/monte_chair_model' },
             { k: 'MapObjGeneral', m: 'lampBianco', s: () => bmtm('mapobj/lampBianco.bmd',  'mapobj/bianco.bmt') },
+            { k: 'MapObjGeneral', m: 'container', p: 'mapobj/container' },
+            { k: 'MapObjRootPakkun', m: 'rootPaku', p: 'mapobj/rootPaku' },
+
             { k: 'MapStaticObj', m: 'ReflectSky', s: () => null },
             // Disable SeaIndirect loading...
             { k: 'MapStaticObj', m: 'SeaIndirect', s: () => null },
@@ -671,17 +722,42 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
             { k: 'ResetFruit', m: 'FruitPine', p: 'mapobj/fruitpine' },
             { k: 'ResetFruit', m: 'RedPepper', p: 'mapobj/redpepper' },
             { k: 'RiccoLog', m: 'riccoLog', p: 'mapobj/riccolog' },
+            { k: 'riccoWatermill', m: 'riccoWatermill', p: 'mapobj/riccoWatermill' },
             { k: 'ShellCup', m: 'ShellCup', p: 'mapobj/shellcup' },
+            { k: 'SandBombBase', m: 'SandBombBaseMushroom', s: () => bmtm('mapobj/sandbombbasemushroom.bmd', 'mapobj/sandbombbase.bmt') },
+            { k: 'SandBombBase', m: 'SandBombBasePyramid', s: () => bmtm('mapobj/sandbombbasepyramid.bmd', 'mapobj/sandbombbase.bmt') },
+            { k: 'SandBombBase', m: 'SandBombBaseShit', s: () => bmtm('mapobj/sandbombbaseshit.bmd', 'mapobj/sandbombbase.bmt') },
+            { k: 'SandBombBase', m: 'SandBombBaseStar', s: () => bmtm('mapobj/sandbombbasestar.bmd', 'mapobj/sandbombbase.bmt') },
+            { k: 'SandBombBase', m: 'SandBombBaseTurtle', s: () => bmtm('mapobj/sandbombbaseturtle.bmd', 'mapobj/sandbombbase.bmt') },
+            { k: 'SandBombBase', m: 'SandBombBaseFoot', s: () => bmtm('mapobj/sandbombbasefoot.bmd', 'mapobj/sandbombbase.bmt') },
+            { k: 'SandBombBase', m: 'SandBombBaseStairs', s: () => bmtm('mapobj/sandbombbasestairs.bmd', 'mapobj/sandbombbase.bmt') },
+            { k: 'SandEgg', m: 'SandEggNormal', p: 'mapobj/sandeggnormal' },
             { k: 'SunModel', m: 'SunModel', p: 'sun/model' },
             { k: 'TurboNozzleDoor', m: 'nozzleDoor', p: 'mapobj/nozzledoor' },
             { k: 'Viking', m: 'viking', p: 'mapobj/viking' },
             { k: 'WindmillRoof', m: 'WindmillRoof', p: 'mapobj/windmillroof'},
             { k: 'WoodBox', m: 'WoodBox', p: 'mapobj/kibako' },
             { k: 'WoodBarrel', m: 'wood_barrel', s: () => bmtm('mapobj/barrel_normal.bmd', 'mapobj/barrel.bmt') },
+            { k: 'WoodBarrel', m: 'wood_barrel_once', s: () => bmtm('mapobj/barrel_normal.bmd', 'mapobj/barrel.bmt') },
 
             //Skeletal Models
+            { k: 'Amenbo', m: 'Amenbo', s: () => bckm('amenbo/amenbo_model1.bmd', 'amenbo/amenbo_wait1_loop.bck') }, 
             { k: 'BiaWatermill', m: 'BiaWatermill01', s: () => bmtm('mapobj/biawatermill01.bmd', 'mapobj/bianco.bmt') }, //Todo: Hook up animation as well as texture
             { k: 'Shine', m: 'shine', s: () => bckm('mapobj/shine.bmd', 'mapobj/shine_float.bck') },
+            { k: 'SandCastle', m: 'SandCastle', s: () => bckm('mapobj/sandcastle.bmd', 'mapobj/sandcastle_up.bck') }, //Todo: Hook up bmt
+            { k: 'SandBomb', m: 'SandBomb', s: () => bckm('mapobj/sandbomb.bmd', 'mapobj/sandbomb_wait.bck') }, //Todo: Hook up bmt
+            
+            { k: 'ShiningStone', m: 'ShiningStone', s: () => {
+                const m = bckm('mapobj/shiningstonered.bmd', 'mapobj/shiningstonered.bck');
+                const blue = bckm('mapobj/shiningstoneblue.bmd', 'mapobj/shiningstoneblue.bck');
+                const green = bckm('mapobj/shiningstonegreen.bmd', 'mapobj/shiningstonegreen.bck');
+
+                blue.setParentJoint(m, 'ShiningStoneRed');
+                green.setParentJoint(m, 'ShiningStoneRed');
+                return m;
+            }},
+            { k: 'RiccoSwitch', m: 'RiccoSwitch', s: () => bckm('mapobj/riccoswitch.bmd', 'mapobj/riccoswitch.bck') },
+            { k: 'Kazekun', m: 'Kazekun', s: () => bckm('kazekun/kazekun.bmd', 'kazekun/kazekun_wait.bck') }, //Todo: Figure out wind body particle effect
             { k: 'Koopa', m: 'Koopa', s: () => bckm('koopa/koopa_model.bmd', 'koopa/koopa_wait.bck') },
             { k: 'KoopaJr', m: 'KoopaJr', s: () => bckm('koopajr/koopajr_model.bmd', 'koopajr/koopajr_wait.bck') },
             { k: 'BathtubPeach', m: 'BathtubPeach', s: () => {
@@ -693,20 +769,25 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
                 const hand1r = basenameModel('bathtubpeach/peach_hand2_r');
                 hand1r.setParentJoint(m, 'jnt_hand_R');
                 return m;
-            }},
+            }}, //Todo: Fix Peach hands
             
-            { k: 'GateKeeper', m: 'GateKeeper', s: () => bckm('gatekeeper/gene_pakkun_model1.bmd', 'gatekeeper/gene_pakkun_wait2.bck') },
+            { k: 'GateKeeper', m: 'GateKeeper', s: () => bckm('gatekeeper/gene_pakkun_model1.bmd', 'gatekeeper/gene_pakkun_wait2.bck') }, //Todo: Figure out material
+            { k: 'Gesso', m: 'Gesso', s: () => bckm('rikugesso/geso_model1.bmd', 'rikugesso/geso_wait1.bck') },
             { k: 'SamboHead', m: 'SamboHead', s: () => bckm('sambohead/sambohead.bmd', 'sambohead/sambohead_wait.bck') },
             { k: 'SamboFlower', m: 'SamboFlower', s: () => bckm('samboflower/flower.bmd', 'samboflower/flower_wait.bck') },
             { k: 'BossPakkun', m: 'BossPakkun', s: () => bckm('bosspakkun/bosspaku_model.bmd', 'bosspakkun/bosspaku_wait.bck')},
+            { k: 'BossGesso', m: 'BossGesso', s: () => bckm('bgeso/bgeso_body.bmd', 'bgeso/bgeso_wait.bck')},
             { k: 'KBossPakkun', m: 'KBossPakkun', s: () => bckm('kbosspakkun/bosspaku_model.bmd', 'kbosspakkun/bosspaku_wait.bck')},
             { k: 'BossEel', m: 'BossEel', s: () => bckm('bosseel/meoto_model.bmd', 'bosseel/meoto_paku.bck')},            
             { k: 'StayPakkun', m: 'StayPakkun', s: () => bckm('pakkun/pakun.bmd', 'pakkun/pakun_wait.bck')},
             { k: 'FruitsBoat', m: 'FruitsBoat', s: () => bckm('fruitsboat/shipdolpic.bmd', 'fruitsboat/shipdolpic.bck')},
+            { k: 'FruitsBoatB', m: 'FruitsBoat', s: () => bckm('fruitsboatb/shipdolpic2.bmd', 'fruitsboatb/shipdolpic2.bck')},
             { k: 'FishoidA', m: 'FishoidA', s: () => bckm('fish/fisha.bmd', 'fish/fish_swim.bck')},
             { k: 'FishoidB', m: 'FishoidB', s: () => bckm('fish/fishb.bmd', 'fish/fish_swim.bck')},
             { k: 'FishoidC', m: 'FishoidC', s: () => bckm('fish/fishc.bmd', 'fish/fish_swim.bck')},
             { k: 'FishoidD', m: 'FishoidD', s: () => bckm('fish/fishd.bmd', 'fish/fish_swim.bck')},
+            { k: 'MameGesso', m: 'MameGesso', s: () => bckm('mamegesso/default.bmd', 'mamegesso/mamegeso_wait1.bck')},
+            { k: 'LandGesso', m: 'LandGesso', s: () => bckm('rikugesso/geso_model1.bmd', 'rikugesso/geso_wait1.bck')},
             { k: 'NPCMareM', m: 'NPCMareM', s: () => 
             {
                 const m = bckm('marem/marem.bmd', 'marem/marem_wait.bck');
@@ -716,6 +797,10 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
                 
                 const shell = basenameModel('marem/maremmakigai_b');
                 shell.setParentJoint(m, 'koshi');
+                shell.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                shell.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
+                shell.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
+                
                 return m;
             }},
             { k: 'NPCMareMC', m: 'NPCMareMC', s: () => 
@@ -727,6 +812,9 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
                 
                 const shell = basenameModel('maremc/maremcagohige');
                 shell.setParentJoint(m, 'koshi');
+                shell.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                shell.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
+                shell.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
                 return m;
             }},
             { k: 'NPCMareMD', m: 'NPCMareMD', s: () => 
@@ -738,6 +826,9 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
                 
                 const shell = basenameModel('maremd/maremdhoragai_a');
                 shell.setParentJoint(m, 'koshi');
+                shell.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                shell.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
+                shell.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
                 return m;
             }},
             { k: 'NPCMareW', m: 'NPCMareW', s: () => 
@@ -749,6 +840,9 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
                 
                 const shell = basenameModel('marew/marewkai_b');
                 shell.setParentJoint(m, 'koshi');
+                shell.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                shell.modelInstance.setColorOverride(ColorKind.C1, new Color(Math.random(),Math.random(),Math.random(),0));
+                shell.modelInstance.setColorOverride(ColorKind.C2, new Color(Math.random(),Math.random(),Math.random(),0));
                 return m;
             }},
             { k: 'NPCMonteMA', m: 'NPCMonteMA', s: () => {
@@ -832,7 +926,7 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
                 const monteTexture = textureHolder.gfxTextures.find(tex =>tex.ResourceName === 'i_mow_mino_rgba');
                 const textureOverride: TextureOverride = { gfxTexture: monteTexture, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
                 textureHolder.setTextureOverride("I_mow_mino_dummyI4", textureOverride, false);
-                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C0, colors2[obj.bodyColor]);
                 return m;
             }},
             { k: 'NPCMonteWB', m: 'NPCMonteWB', s: () => 
@@ -842,7 +936,7 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
                 const monteTexture = textureHolder.gfxTextures.find(tex =>tex.ResourceName === 'i_mow_mino_rgba');
                 const textureOverride: TextureOverride = { gfxTexture: monteTexture, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
                 textureHolder.setTextureOverride("I_mow_mino_dummyI4", textureOverride, false);
-                m.modelInstance.setColorOverride(ColorKind.C0, new Color(Math.random(),Math.random(),Math.random(),0));
+                m.modelInstance.setColorOverride(ColorKind.C0, colors2[obj.bodyColor]);
                 return m;
             }},
             { k: 'NPCKinopio', m: 'NPCKinopio', s: () => {
@@ -857,7 +951,14 @@ export class SunshineSceneDesc implements Viewer.SceneDesc {
                 return m;
             }},
             { k: 'AnimalMew', m: 'AnimalMew', s: () => bckm('mew/kamome_high.bmd', 'mew/kamome_kakku.bck') },
+            { k: 'PoiHana', m: 'PoiHana', s: () => bckm('poihana/default.bmd', 'poihana/poihana_wait.bck') },
+            { k: 'PoiHanaRed', m: 'PoiHanaRed', s: () => {
+                const m = bckm('poihana/default.bmd', 'poihana/poihana_wait.bck');
+                m.modelInstance.setColorOverride(ColorKind.C0, new Color(1, 0.2, 0.2, 0));
+                return m;
+            }},//Todo: Fix Color
             { k: 'EggYoshi', m: 'EggYoshi', s: () => bckm('mapobj/eggyoshi_normal.bmd', 'mapobj/eggyoshi_wait.bck') },
+            { k: 'TabePuku', m: 'TabePuku', s: () => bckm('tabepuku/tabepuku.bmd', 'tabepuku/pukupuku_swim.bck') },
             { k: 'NPCKinojii', m: 'NPCKinojii', s: () => {
                 const m = bckm('kinojii/kinoji_body.bmd', 'kinojii/kinoji_wait.bck');
                 const stick = basenameModel('kinojii/kinoji_stick');
