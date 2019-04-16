@@ -122,9 +122,9 @@ class TwilightPrincessRenderer implements Viewer.SceneGfx {
         this.renderHelper.fillSceneParams(viewerInput);
         for (let i = 0; i < this.modelInstances.length; i++)
             this.modelInstances[i].prepareToRender(this.renderHelper, viewerInput);
-        this.renderHelper.prepareToRender(hostAccessPass);
         for (let i = 0; i < this.objectRenderers.length; i++)
             this.objectRenderers[i].prepareToRender(this.renderHelper, viewerInput, true);
+        this.renderHelper.prepareToRender(hostAccessPass);
     }
 
     public render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput): GfxRenderPass {
@@ -497,8 +497,8 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
         // Tremendous special thanks to LordNed, Sage-of-Mirrors & LugoLunatic for their work on actor mapping
         // Heavily based on https://github.com/LordNed/Winditor/blob/master/Editor/resources/ActorDatabase.json
         
-        //if (name === 'Cow') fetchArchive(`Cow.arc`).then((rarc) => buildModel(rarc, `bmdr/cow.bmd`));
-        if (name === 'Pumpkin') fetchArchive(`pumpkin.arc`).then((rarc) => buildModel(rarc, `bmdr/pumpkin.bmd`));
+        if (name === 'Cow') fetchArchive(`Cow.arc`).then((rarc) => buildModel(rarc, `bmdr/cow.bmd`));
+        else if (name === 'Pumpkin') fetchArchive(`pumpkin.arc`).then((rarc) => buildModel(rarc, `bmdr/pumpkin.bmd`));
         else
             console.warn(`Unknown object: ${name}`);
     }
@@ -553,8 +553,11 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
                     this.createRoomScenes(device, abortSignal, renderer, rarc, roomNames[i]);
                 });
 
-                renderer.finish(device);
-                return renderer;
+                return modelCache.waitForLoad().then(() => 
+                {
+                    renderer.finish(device);
+                    return renderer;
+                });
             });
         });
     }
