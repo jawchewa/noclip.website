@@ -17,8 +17,8 @@ import { GXRenderHelperGfx } from '../gx/gx_render';
 import { GfxRenderInstViewRenderer, GfxRendererLayer } from '../gfx/render/GfxRenderer';
 import { BasicRenderTarget, ColorTexture, standardFullClearRenderPassDescriptor, depthClearRenderPassDescriptor, noClearRenderPassDescriptor } from '../gfx/helpers/RenderTargetHelpers';
 import { RENDER_HACKS_ICON } from '../bk/scenes';
-import { mat4, vec3 } from 'gl-matrix';
-import { BMDObjectRenderer, SymbolMap, ObjectRenderer } from './zww_actors';
+import { mat4 } from 'gl-matrix';
+import { BMDObjectRenderer, ObjectRenderer } from './ztp_actors';
 import AnimationController from '../AnimationController';
 
 class ZTPTextureHolder extends J3DTextureHolder {
@@ -455,6 +455,7 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
             const model = modelCache.getModel(device, renderer, rarc, modelPath);
             const modelInstance = new BMDModelInstance(device, renderer.renderHelper, renderer.textureHolder, model);
             modelInstance.name = name;
+            modelInstance.passMask = ZTPPass.OPAQUE;
             modelInstance.setSortKeyLayer(GfxRendererLayer.OPAQUE + 1);
             return new BMDObjectRenderer(modelInstance);
         }
@@ -494,17 +495,180 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
         function parseBTK(rarc: RARC.RARC, path: string) { return BTK.parse(rarc.findFileData(path)).ttk1; }
         function animFrame(frame: number): AnimationController { const a = new AnimationController(); a.setTimeInFrames(frame); return a; }
 
-        // Tremendous special thanks to LordNed, Sage-of-Mirrors & LugoLunatic for their work on actor mapping
-        // Heavily based on https://github.com/LordNed/Winditor/blob/master/Editor/resources/ActorDatabase.json
-        
-        if (name === 'Cow') fetchArchive(`Cow.arc`).then((rarc) => buildModel(rarc, `bmdr/cow.bmd`));
+        //Goat
+        if (name === 'Cow') fetchArchive(`Cow.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/cow.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/cow_wait_a.bck`));
+        });
+        //Epona
+        if (name === 'Horse') fetchArchive(`Horse.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/hs.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/hs_wait_01.bck`));
+        });
+        //Ordon Village Cat
+        else if (name === 'Npc_ne') fetchArchive(`Npc_ne.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/ne.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/ne_wait.bck`));
+        });
+        //Monkey
+        else if (name === 'Npc_ks') fetchArchive(`Npc_ks.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/saru.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/saru_wait_a.bck`));
+        });
+        //Cuccoo
+        else if (name === 'Ni') fetchArchive(`Ni.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/ni.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/ni_wait1.bck`));
+        });
+        //Spirits
+        //Hero's Shade - Golden Wolf
+        else if (name === 'GWolf') fetchArchive(`GWolf.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/gw.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/wl_waitsit.bck`));
+        });
+        //Ordona
+        else if (name === 'FSeirei') fetchArchive(`Seirei.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmde/seia.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/seia_wait_a.bck`));
+        });
+        //Children
+        //Malo
+        else if (name === 'Maro') fetchArchive(`Maro.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/maro.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/maro_wait_a.bck`));
+        });
+        //Collin
+        else if (name === 'Kolin') fetchArchive(`Kolin.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/kolin.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/kolin_wait_a.bck`));
+        });
+        //Talo
+        else if (name === 'Taro') fetchArchive(`Taro.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/taro.bmd`);
+            fetchArchive(`Taro0.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/taro_wait_a.bck`));
+            });
+        });
+        //Beth
+        else if (name === 'Besu') fetchArchive(`Besu.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/besu.bmd`);
+            fetchArchive(`Besu0.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/besu_wait_a.bck`));
+            });
+        });
+        //Ordon NPCs
+        //Ilia
+        else if (name === 'Yelia') fetchArchive(`Yelia.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/yelia.bmd`);
+            fetchArchive(`Yelia0.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/yelia_wait_a.bck`));
+            });
+        });
+        //Fado
+        else if (name === 'Aru') fetchArchive(`Aru.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/aru.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/aru_wait_a.bck`));
+        });
+        //Hanch
+        else if (name === 'Hanjo') fetchArchive(`Hanjo.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/hanjo.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/hanjo_wait_a.bck`));
+        });
+        //Jaggle
+        else if (name === 'Jagar') fetchArchive(`Jagar.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/jagar.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/jagar_wait_a.bck`));
+        });
+        //Rusl
+        else if (name === 'Moi') fetchArchive(`Moi.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/moi.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/moi_wait_a.bck`));
+        });
+        //Mayor Bo
+        else if (name === 'Bou') fetchArchive(`Bou.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/bou.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/bou_wait_a.bck`));
+        });
+        //Pergie
+        else if (name === 'Kyury') fetchArchive(`Kyury.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/kyury.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/kyury_wait_a.bck`));
+        });
+        //Sera
+        else if (name === 'Seira') fetchArchive(`Sera.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/sera.bmd`);
+            fetchArchive(`Seira.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/sera_wait_a.bck`));
+            });
+        });
+        //Uli
+        else if (name === 'Uri') fetchArchive(`Uri.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/uri.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/uri_wait_a.bck`));
+        });
+        //Faron Woods NPCs
+        //Rusk R
+        else if (name === 'MoiR') fetchArchive(`MoiR.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/moir.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/moir_wait_a.bck`));
+        });
+        //Kakariko NPCs
+        //Renaldo
+        else if (name === 'Len') fetchArchive(`Len_TW.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/len_tw.bmd`);
+            fetchArchive(`Len.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/len_wait_a.bck`));
+            });
+        });
+        //Luda
+        else if (name === 'Lud') fetchArchive(`Lud_TW.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/lud_tw.bmd`);
+            fetchArchive(`Lud.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/lud_wait_a.bck`));
+            });
+        });
+        //Shad
+        else if (name === 'Shad') fetchArchive(`Shad.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/shad.bmd`);
+            fetchArchive(`Shad1.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/shad_wait_a.bck`));
+            });
+        });
+        //Gorons
+        //Normal Gorons
+        else if (name === 'grA' || name === 'Obj_grA') fetchArchive(`grA_TW.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/gra_tw.bmd`);
+            fetchArchive(`grA_base.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/gra_wait_a.bck`));
+            });
+        });
+        //Child Gorons
+        else if (name === 'grC') fetchArchive(`grC_TW.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/grc_tw.bmd`);
+            fetchArchive(`grC.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/grc_wait_a.bck`));
+            });
+        });
+        //Gor Liggs
+        else if (name === 'grR') fetchArchive(`grR.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/grr.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/grr_wait_a.bck`));
+        });
+        //Mini Bosses
+        //Ook Boss Monkey
+        else if (name === 'E_mk') fetchArchive(`E_mk.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/mk.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/mk_wait.bck`));
+        });
+        //Objects
+        //Pumpkin
         else if (name === 'Pumpkin') fetchArchive(`pumpkin.arc`).then((rarc) => buildModel(rarc, `bmdr/pumpkin.bmd`));
         else
             console.warn(`Unknown object: ${name}`);
     }
 
     public createScene(device: GfxDevice, abortSignal: AbortSignal): Progressable<Viewer.SceneGfx> {
-        const basePath = `j3d/ztp/${this.stageId}`;
+        const basePath = `j3d/ztp/Stage/${this.stageId}`;
         const textureHolder = new ZTPTextureHolder();
         const modelCache = new ModelCache();
 
