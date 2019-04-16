@@ -530,7 +530,7 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
                 const bckFile = stageRarc.findFile(`bck/${basename}.bck`);
                 const scene = createScene(device, renderer.renderHelper, textureHolder, bmdFile, btkFile, brkFile, bckFile, null);
                 scene.name = `stage/${basename}`;
-                scene.setIsSkybox(true);
+                scene.isSkybox = true;
                 renderer.modelInstances.push(scene);
             });
 

@@ -3,7 +3,7 @@ import * as CMB from './cmb';
 
 import { assert, readString } from '../util';
 import ArrayBufferSlice from '../ArrayBufferSlice';
-import { mat4, quat } from 'gl-matrix';
+import { mat4, quat, vec3 } from 'gl-matrix';
 
 const enum Version {
     Ocarina, Majora
@@ -12,11 +12,36 @@ const enum Version {
 export interface ZSIScene {
     name: string;
     rooms: string[];
+    doorActors: Actor[];
+    environmentSettings: ZSIEnvironmentSettings[];
+    skyboxSettings: number;
 }
 
 export class ZSIRoomSetup {
     public actors: Actor[] = [];
     public mesh: Mesh;
+}
+
+export class ZSIEnvironmentSettings {
+    public ambientLightColor: vec3 = vec3.create();
+    public primaryLightDir: vec3 = vec3.create();
+    public primaryLightColor: vec3 = vec3.create();
+    public secondaryLightDir: vec3 = vec3.create();
+    public secondaryLightColor: vec3 = vec3.create();
+    public fogColor: vec3 = vec3.create();
+    public fogStart: number = 0.0;
+    public drawDistance: number = 0.0;
+
+    public copy(o: ZSIEnvironmentSettings): void {
+        vec3.copy(this.ambientLightColor, o.ambientLightColor);
+        vec3.copy(this.primaryLightDir, o.primaryLightDir);
+        vec3.copy(this.primaryLightColor, o.primaryLightColor);
+        vec3.copy(this.secondaryLightDir, o.secondaryLightDir);
+        vec3.copy(this.secondaryLightColor, o.secondaryLightColor);
+        vec3.copy(this.fogColor, o.fogColor);
+        this.fogStart = o.fogStart;
+        this.drawDistance = o.drawDistance;
+    }
 }
 
 // Subset of Z64 command types.
@@ -25,8 +50,11 @@ const enum HeaderCommands {
     Collision = 0x03,
     Rooms = 0x04,
     Mesh = 0x0A,
+    DoorActor = 0x0E,
+    SkyboxSettings = 0x11,
     End = 0x14,
     MultiSetup = 0x18,
+    EnvironmentSettings = 0x0F,
 }
 
 export interface Mesh {
@@ -64,14 +92,97 @@ function readActors(version: Version, buffer: ArrayBufferSlice, nActors: number,
     return actors;
 }
 
+function readDoorActors(version: Version, buffer: ArrayBufferSlice, nActors: number, offs: number): Actor[] {
+    const view = buffer.createDataView();
+    const actors: Actor[] = [];
+    let actorTableIdx = offs;
+
+    const q = quat.create();
+    for (let i = 0; i < nActors; i++) {
+        const roomFront = view.getUint8(actorTableIdx + 0x00);
+        const transitionEffectFront = view.getUint8(actorTableIdx + 0x01);
+        const roomBack = view.getUint8(actorTableIdx + 0x02);
+        const transitionEffectBack = view.getUint8(actorTableIdx + 0x03);
+        const actorId = view.getUint16(actorTableIdx + 0x04, true);
+        const positionX = view.getInt16(actorTableIdx + 0x06, true);
+        const positionY = view.getInt16(actorTableIdx + 0x08, true);
+        const positionZ = view.getInt16(actorTableIdx + 0x0A, true);
+        const rotationY = view.getInt16(actorTableIdx + 0x0C, true) / 0x7FFF;
+        const variable = view.getUint16(actorTableIdx + 0x0E, true);
+        const modelMatrix = mat4.create();
+        quat.fromEuler(q, 0, rotationY * 180, 0);
+        mat4.fromRotationTranslation(modelMatrix, q, [positionX, positionY, positionZ]);
+        actors.push({ actorId, modelMatrix, variable });
+        actorTableIdx += 0x10;
+    }
+    return actors;
+}
+
 function readRooms(version: Version, buffer: ArrayBufferSlice, nRooms: number, offs: number): string[] {
     const rooms: string[] = [];
     const roomSize = version === Version.Ocarina ? 0x44 : 0x34;
+
     for (let i = 0; i < nRooms; i++) {
         rooms.push(readString(buffer, offs, roomSize));
         offs += roomSize;
     }
+
     return rooms;
+}
+
+function readEnvironmentSettings(version: Version, buffer: ArrayBufferSlice, nEnvironmentSettings: number, offs: number) {
+    const view = buffer.createDataView();
+    const environmentSettings: ZSIEnvironmentSettings[] = [];
+
+    for (let i = 0; i < nEnvironmentSettings; i++) {
+        let setting = new ZSIEnvironmentSettings;
+
+        const drawDistance = view.getFloat32(offs + 0x00, true);
+        const fogStart = view.getFloat32(offs + 0x04, true);
+
+        const mysteryA = view.getUint8(offs + 0x08);
+        const mysteryB = view.getUint8(offs + 0x09);
+
+        const ambientColR = view.getUint8(offs + 0x0A) / 0xFF;
+        const ambientColG = view.getUint8(offs + 0x0B) / 0xFF;
+        const ambientColB = view.getUint8(offs + 0x0C) / 0xFF;
+
+        const firstDiffuseLightDirX = view.getUint8(offs + 0x0D) / 0xFF;
+        const firstDiffuseLightDirY = view.getUint8(offs + 0x0E) / 0xFF;
+        const firstDiffuseLightDirZ = view.getUint8(offs + 0x0F) / 0xFF;
+
+        const firstDiffuseLightColR = view.getUint8(offs + 0x10) / 0xFF;
+        const firstDiffuseLightColG = view.getUint8(offs + 0x11) / 0xFF;
+        const firstDiffuseLightColB = view.getUint8(offs + 0x12) / 0xFF;
+        
+        const secondDiffuseLightDirX = view.getUint8(offs + 0x13) / 0xFF;
+        const secondDiffuseLightDirY = view.getUint8(offs + 0x14) / 0xFF;
+        const secondDiffuseLightDirZ = view.getUint8(offs + 0x15) / 0xFF;
+        
+        const secondDiffuseLightColR = view.getUint8(offs + 0x16) / 0xFF;
+        const secondDiffuseLightColG = view.getUint8(offs + 0x17) / 0xFF;
+        const secondDiffuseLightColB = view.getUint8(offs + 0x18) / 0xFF;
+
+        const fogColorR = view.getUint8(offs + 0x19) / 0xFF;
+        const fogColorG = view.getUint8(offs + 0x1A) / 0xFF;
+        const fogColorB = view.getUint8(offs + 0x1B) / 0xFF;
+        offs += 0x1C;
+
+        setting.drawDistance = drawDistance;
+
+        // TODO(quade): actually figure out what we're supposed to do with these values
+        setting.fogStart = fogStart >= drawDistance ? drawDistance - fogStart : fogStart;
+        setting.ambientLightColor = vec3.fromValues(ambientColR, ambientColG, ambientColB);
+        setting.primaryLightDir = vec3.fromValues(firstDiffuseLightDirX, firstDiffuseLightDirY, firstDiffuseLightDirZ);
+        setting.primaryLightColor = vec3.fromValues(firstDiffuseLightColR, firstDiffuseLightColG, firstDiffuseLightColB);
+        setting.secondaryLightDir = vec3.fromValues(secondDiffuseLightDirX, secondDiffuseLightDirY, secondDiffuseLightDirZ);
+        setting.secondaryLightColor = vec3.fromValues(secondDiffuseLightColR, secondDiffuseLightColG, secondDiffuseLightColB);
+        setting.fogColor = vec3.fromValues(fogColorR, fogColorG, fogColorB);
+
+        environmentSettings.push(setting);
+    }
+
+    return environmentSettings;
 }
 
 function readMesh(buffer: ArrayBufferSlice, offs: number): Mesh {
@@ -101,10 +212,14 @@ function readMesh(buffer: ArrayBufferSlice, offs: number): Mesh {
 function readSceneHeaders(version: Version, name: string, buffer: ArrayBufferSlice, offs: number = 0): ZSIScene {
     const view = buffer.createDataView();
     let rooms: string[] = [];
+    let environmentSettings: ZSIEnvironmentSettings[] = [];
+    let doorActors: Actor[] = [];
+    let skyboxSettings = 0;
 
     while (true) {
         const cmd1 = view.getUint32(offs + 0x00, false);
         const cmd2 = view.getUint32(offs + 0x04, true);
+
         offs += 0x08;
 
         const cmdType = cmd1 >>> 24;
@@ -113,14 +228,25 @@ function readSceneHeaders(version: Version, name: string, buffer: ArrayBufferSli
             break;
 
         switch (cmdType) {
+        case HeaderCommands.EnvironmentSettings:
+            const nEnvironmentSettings = (cmd1 >>> 16) & 0xFF;
+            environmentSettings = readEnvironmentSettings(version, buffer, nEnvironmentSettings, cmd2);
+            break;
+        case HeaderCommands.DoorActor:
+            const nActors = (cmd1 >>> 16) & 0xFF;
+            doorActors = readDoorActors(version, buffer, nActors, cmd2);
+            break;
         case HeaderCommands.Rooms:
             const nRooms = (cmd1 >>> 16) & 0xFF;
             rooms = readRooms(version, buffer, nRooms, cmd2);
             break;
+        case HeaderCommands.SkyboxSettings:
+            skyboxSettings = cmd2;
+            break;
         }
     }
 
-    return { name, rooms };
+    return { name, rooms, doorActors, environmentSettings, skyboxSettings };
 }
 
 export function parseScene(buffer: ArrayBufferSlice): ZSIScene {
@@ -141,10 +267,11 @@ function readRoomHeaders(version: Version, buffer: ArrayBufferSlice, offs: numbe
 
     const mainSetup = new ZSIRoomSetup();
     roomSetups.push(mainSetup);
-
+    
     while (true) {
         const cmd1 = view.getUint32(offs + 0x00, false);
         const cmd2 = view.getUint32(offs + 0x04, true);
+
         offs += 0x08;
 
         const cmdType = cmd1 >>> 24;
@@ -169,10 +296,11 @@ function readRoomHeaders(version: Version, buffer: ArrayBufferSlice, offs: numbe
             // Still setups to try after this command.
             break;
         }
-        case HeaderCommands.Actor:
+        case HeaderCommands.Actor: {
             const nActors = (cmd1 >>> 16) & 0xFF;
             mainSetup.actors = readActors(version, buffer, nActors, cmd2);
             break;
+        }
         case HeaderCommands.Mesh:
             mainSetup.mesh = readMesh(buffer, cmd2);
             break;

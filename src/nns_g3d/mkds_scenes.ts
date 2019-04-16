@@ -227,6 +227,8 @@ class MarioKartDSSceneDesc implements Viewer.SceneDesc {
             spawnModel(`/MapObj/rotary_room.nsbmd`);
         } else if (obji.objectId === 0x00D1) { // rotary_bridge
             spawnModel(`/MapObj/rotary_bridge.nsbmd`);
+        } else if (obji.objectId === 0x00D2) { // dram
+            spawnModel(`/MapObj/dram.nsbmd`);
         } else if (obji.objectId === 0x012E) { // BeachTree1
             spawnModel(`/MapObj/BeachTree1.nsbmd`);
         } else if (obji.objectId === 0x012F) { // earthen_pipe
@@ -244,7 +246,9 @@ class MarioKartDSSceneDesc implements Viewer.SceneDesc {
         } else if (obji.objectId === 0x0133) { // of6yoshi1
             spawnModel(`/MapObj/of6yoshi1.nsbmd`);
         } else if (obji.objectId === 0x0134) { // cow
-            spawnModel(`/MapObj/cow.nsbmd`).bindPAT0(device, parseBTP(`/MapObj/cow.nsbtp`));
+            const b = spawnModel(`/MapObj/cow.nsbmd`);
+            // TODO(jstpierre): How does the game decide the BTP frame?
+            // b.bindPAT0(device, parseBTP(`/MapObj/cow.nsbtp`));
         } else if (obji.objectId === 0x0136) { // mini_dokan
             const b = spawnModel(`/MapObj/mini_dokan.nsbmd`);
             setModelMtx(b, true);

@@ -198,7 +198,8 @@ interface ScrollSelectItemHeader {
 interface ScrollSelectItemSelectable {
     type: ScrollSelectItemType.Selectable;
     visible?: boolean;
-    name: string;
+    name?: string;
+    html?: string;
 }
 
 export type ScrollSelectItem = ScrollSelectItemHeader | ScrollSelectItemSelectable;
@@ -269,7 +270,10 @@ export abstract class ScrollSelect implements Widget {
                 outer.appendChild(selector);
                 const textSpan = document.createElement('span');
                 textSpan.classList.add('text');
-                textSpan.textContent = item.name;
+                if (item.html)
+                    textSpan.innerHTML = item.html;
+                else
+                    textSpan.textContent = item.name;
                 selector.appendChild(textSpan);
 
                 const index = i;
@@ -383,8 +387,8 @@ export abstract class ScrollSelect implements Widget {
         for (let i = 0; i < this.getNumItems(); i++) {
             const outer = this.getOuterForIndex(i);
 
-            const selector = outer.querySelector('.selector') as HTMLElement;
-            if (!selector)
+            const selector = outer.firstElementChild as HTMLElement;
+            if (!selector.classList.contains('selector'))
                 continue;
 
             const flair = flairs.find((flair) => flair.index === i);
@@ -978,11 +982,10 @@ class SceneSelect extends Panel {
     public setSceneGroups(sceneGroups: (string | Viewer.SceneGroup)[]) {
         this.sceneGroups = sceneGroups;
         this.sceneGroupList.setItems(sceneGroups.map((g): ScrollSelectItem => {
-            if (typeof g === 'string') {
+            if (typeof g === 'string')
                 return { type: ScrollSelectItemType.Header, html: g };
-            } else {
+            else
                 return { type: ScrollSelectItemType.Selectable, name: g.name };
-            }
         }));
         this.syncSceneDescs();
     }
@@ -1456,7 +1459,7 @@ class ViewerSettings extends Panel {
 
 <div style="display: grid; grid-template-columns: 1fr 1fr; align-items: center;">
 <div class="SettingsHeader">Camera Speed</div>
-<input class="Slider CamSpeedSlider" type="range" min="0" max="100">
+<input class="Slider CamSpeedSlider" type="range" min="0" max="200">
 </div>
 
 <div style="display: grid; grid-template-columns: 2fr 1fr 1fr; align-items: center;">
@@ -1472,7 +1475,7 @@ class ViewerSettings extends Panel {
 
         this.camSpeedSlider = this.contents.querySelector('.CamSpeedSlider');
         this.camSpeedSlider.oninput = this.updateCameraSpeed.bind(this);
-        this.camSpeedSlider.value = '6'
+        this.viewer.addKeyMoveSpeedListener(this.onCameraController.bind(this));
         this.viewer.inputManager.addScrollListener(this.onScrollWheel.bind(this));
 
         this.cameraControllerWASD = this.contents.querySelector('.CameraControllerWASD');
@@ -1501,10 +1504,14 @@ class ViewerSettings extends Panel {
         this.viewer.fovY = value * (Math.PI * 0.995);
     }
 
-    private onScrollWheel = () => {
-        this.camSpeedSlider.value = "" + ( Number(this.camSpeedSlider.value) - Math.sign(this.viewer.inputManager.dz/-4));
+    private onCameraController(): void {
+        this.camSpeedSlider.value = "" + this.viewer.cameraController.getKeyMoveSpeed();
+    }
+
+    private onScrollWheel(): void {
+        this.camSpeedSlider.value = "" + (Number(this.camSpeedSlider.value) + Math.sign(this.viewer.inputManager.dz)*4);
         this.updateCameraSpeed();
-    };
+    }
 
     private setCameraControllerClass(cameraControllerClass: CameraControllerClass) {
         this.viewer.setCameraController(new cameraControllerClass());
@@ -1513,7 +1520,7 @@ class ViewerSettings extends Panel {
     }
 
     private updateCameraSpeed(): void {
-        this.viewer.cameraController.setKeyMoveSpeed(Number(this.camSpeedSlider.value) * 10);
+        this.viewer.cameraController.setKeyMoveSpeed(Number(this.camSpeedSlider.value));
     }
 
     public cameraControllerSelected(cameraControllerClass: CameraControllerClass) {
@@ -1694,6 +1701,9 @@ class About extends Panel {
 <a href="https://twitter.com/Jawchewa">Jawchewa</a>,
 <a href="https://twitter.com/Starschulz">Starschulz</a>,
 <a href="https://twitter.com/kittensandals">SpaceCats</a>,
+<a href="https://twitter.com/TanukiMatthew">TanukiMatthew</a>,
+<a href="https://twitter.com/QuadeZaban">Quade Zaban</a>,
+<a href="https://twitter.com/Murugalstudio">Murugo</a>,
 <a href="https://twitter.com/PistonMiner">PistonMiner</a>,
 <a href="https://twitter.com/LordNed">LordNed</a>,
 <a href="https://twitter.com/SageOfMirrors">SageOfMirrors</a>,
@@ -1706,9 +1716,11 @@ class About extends Panel {
 <a href="https://twitter.com/pupperuki">Aruki</a>
 </p>
 
-<p><strong>MODELS</strong> © Nintendo, SEGA, Retro Studios, FROM Software, Konami, Neversoft, Double Fine Productions</p>
+<p><strong>MODELS</strong> © Nintendo, SEGA, Retro Studios, FROM Software,
+Konami, Neversoft, Double Fine Productions, HAL Laboratories</p>
 
-<p><strong>ICONS</strong> from <a href="https://thenounproject.com/">The Noun Project</a>, used under Creative Commons CC-BY:</p>
+<p><strong>ICONS</strong> from <a href="https://thenounproject.com/">The Noun Project</a>,
+used under Creative Commons CC-BY:</p>
 <ul>
 <li> Truncated Pyramid <span>by</span> Bohdan Burmich
 <li> Images <span>by</span> Creative Stall
