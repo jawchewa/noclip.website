@@ -94,7 +94,7 @@ export class BMDObjectRenderer implements ObjectRenderer {
         }
 
         //Temporary until lighting is properly figured out
-        GX_Material.lightSetWorldPosition(scratchLight, viewerInput.camera, 250, 250, 250);
+        GX_Material.lightSetWorldPosition(scratchLight, viewerInput.camera, 500, 500, 500);
         GX_Material.lightSetWorldDirection(scratchLight, viewerInput.camera, -250, -250, -250);
         scratchLight.Color.set(1, 1, 1, 0);
         vec3.set(scratchLight.CosAtten, 1.075, 0, 0);

@@ -85,6 +85,7 @@ class TwilightPrincessRenderer implements Viewer.SceneGfx {
     public opaqueSceneTexture = new ColorTexture();
     public modelInstances: BMDModelInstance[] = [];
     public objectRenderers: ObjectRenderer[] = [];
+    public objectsVisible: boolean = true;
 
     constructor(device: GfxDevice, public modelCache: ModelCache, public textureHolder: J3DTextureHolder, public stageRarc: RARC.RARC) {
         this.renderHelper = new GXRenderHelperGfx(device);
@@ -101,14 +102,23 @@ class TwilightPrincessRenderer implements Viewer.SceneGfx {
         enableVertexColorsCheckbox.onchanged = () => {
             for (let i = 0; i < this.modelInstances.length; i++)
                 this.modelInstances[i].setVertexColorsEnabled(enableVertexColorsCheckbox.checked);
+            for (let i = 0; i < this.objectRenderers.length; i++)
+                this.objectRenderers[i].setVertexColorsEnabled(enableVertexColorsCheckbox.checked);
         };
         renderHacksPanel.contents.appendChild(enableVertexColorsCheckbox.elem);
         const enableTextures = new UI.Checkbox('Enable Textures', true);
         enableTextures.onchanged = () => {
             for (let i = 0; i < this.modelInstances.length; i++)
                 this.modelInstances[i].setTexturesEnabled(enableTextures.checked);
+            for (let i = 0; i < this.objectRenderers.length; i++)
+                this.objectRenderers[i].setTexturesEnabled(enableTextures.checked);
         };
         renderHacksPanel.contents.appendChild(enableTextures.elem);
+        const enableObjects = new UI.Checkbox('Enable Objects', true);
+        enableObjects.onchanged = () => {
+            this.objectsVisible = enableObjects.checked;
+        };
+        renderHacksPanel.contents.appendChild(enableObjects.elem);
 
         return [layers, renderHacksPanel];
     }
@@ -123,7 +133,7 @@ class TwilightPrincessRenderer implements Viewer.SceneGfx {
         for (let i = 0; i < this.modelInstances.length; i++)
             this.modelInstances[i].prepareToRender(this.renderHelper, viewerInput);
         for (let i = 0; i < this.objectRenderers.length; i++)
-            this.objectRenderers[i].prepareToRender(this.renderHelper, viewerInput, true);
+            this.objectRenderers[i].prepareToRender(this.renderHelper, viewerInput, this.objectsVisible);
         this.renderHelper.prepareToRender(hostAccessPass);
     }
 
@@ -614,18 +624,14 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
         });
         //Kakariko NPCs
         //Renaldo
-        else if (name === 'Len') fetchArchive(`Len_TW.arc`).then((rarc) => {
-            const m = buildModel(rarc, `bmdr/len_tw.bmd`);
-            fetchArchive(`Len.arc`).then((animrarc) => {
-                m.bindANK1(parseBCK(animrarc, `bck/len_wait_a.bck`));
-            });
+        else if (name === 'Len') fetchArchive(`Len.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/len.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/len_wait_a.bck`));
         });
         //Luda
-        else if (name === 'Lud') fetchArchive(`Lud_TW.arc`).then((rarc) => {
-            const m = buildModel(rarc, `bmdr/lud_tw.bmd`);
-            fetchArchive(`Lud.arc`).then((animrarc) => {
-                m.bindANK1(parseBCK(animrarc, `bck/lud_wait_a.bck`));
-            });
+        else if (name === 'Lud') fetchArchive(`Lud.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/lud.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/lud_wait_a.bck`));
         });
         //Shad
         else if (name === 'Shad') fetchArchive(`Shad.arc`).then((rarc) => {
@@ -636,15 +642,16 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
         });
         //Gorons
         //Normal Gorons
-        else if (name === 'grA' || name === 'Obj_grA') fetchArchive(`grA_TW.arc`).then((rarc) => {
-            const m = buildModel(rarc, `bmdr/gra_tw.bmd`);
+        else if (name === 'grA' || name === 'Obj_grA') fetchArchive(`grA_mdl.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/gra_a.bmd`);
+
             fetchArchive(`grA_base.arc`).then((animrarc) => {
                 m.bindANK1(parseBCK(animrarc, `bck/gra_wait_a.bck`));
             });
         });
         //Child Gorons
-        else if (name === 'grC') fetchArchive(`grC_TW.arc`).then((rarc) => {
-            const m = buildModel(rarc, `bmdr/grc_tw.bmd`);
+        else if (name === 'grC') fetchArchive(`grC_mdl.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/grc_a.bmd`);
             fetchArchive(`grC.arc`).then((animrarc) => {
                 m.bindANK1(parseBCK(animrarc, `bck/grc_wait_a.bck`));
             });
@@ -653,6 +660,47 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
         else if (name === 'grR') fetchArchive(`grR.arc`).then((rarc) => {
             const m = buildModel(rarc, `bmdr/grr.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/grr_wait_a.bck`));
+        });
+        //Lake Hylia
+        //Thelma's Coach
+        else if (name === 'Coach') fetchArchive(`Coach.arc`).then((rarc) => {
+            //TODO Fix positions of models
+            const coach = buildModel(rarc, `bmdr/coach.bmd`);
+            const thelma = buildModel(rarc, `bmdr/theb.bmd`);
+            thelma.bindANK1(parseBCK(rarc, `bck/theb_sit.bck`));
+
+            const ilia = buildModel(rarc, `bmdr/yelia.bmd`);
+            ilia.bindANK1(parseBCK(rarc, `bck/yelia_wait.bck`));
+
+            const horse = buildModel(rarc, `bmdr/horse.bmd`);
+            horse.bindANK1(parseBCK(rarc, `bck/hu_wait_01.bck`));
+        });
+        //Fyer
+        else if (name === 'Toby') fetchArchive(`Toby.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/toby.bmd`);
+            fetchArchive(`Toby0.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/toby_wait_a.bck`));
+            });
+        });
+        //Falbi
+        else if (name === 'Raca') fetchArchive(`Raca.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/raca.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/raca_wait_a.bck`));
+        });
+        //Auru
+        else if (name === 'Rafrel') fetchArchive(`Rafrel.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/raf.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/raf_wait_a.bck`));
+        });
+        //Other NPCs
+        //Zelda
+        else if (name === 'Zelda' || name === 'Hzelda') fetchArchive(`Zelda.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmde/zelda.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/zelda_wait_a.bck`));
+        });
+        else if (name === 'Dmidna') fetchArchive(`Midna.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdv/s_md.bmd`);
+            //m.bindANK1(parseBCK(rarc, `bck/midna_wait_a.bck`));
         });
         //Mini Bosses
         //Ook Boss Monkey
@@ -729,7 +777,7 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
     private fetchRarc(path: string): Progressable<RARC.RARC | null> {
         return fetchData(path).then((buffer: ArrayBufferSlice) => {
             if (buffer.byteLength === 0) return null;
-            return Yaz0.decompress(buffer).then((buffer: ArrayBufferSlice) => RARC.parse(buffer));
+            return Yaz0.decompress(buffer).then((buffer: ArrayBufferSlice) => buffer && RARC.parse(buffer)).catch((e)=>null);
         });
     }
 }
@@ -739,82 +787,147 @@ const name = "The Legend of Zelda: Twilight Princess";
 
 // Special thanks to Jawchewa and SkrillerArt for helping me with naming the maps.
 const sceneDescs = [
-    "Ordon Village",
+    "Ordon Province",
     new TwilightPrincessSceneDesc("Ordon Village", "F_SP103", ["R00_00"]),
     new TwilightPrincessSceneDesc("Outside Link's House", "F_SP103", ["R01_00"]),
     new TwilightPrincessSceneDesc("Ordon Ranch", "F_SP00"),
+    new TwilightPrincessSceneDesc("Ordon Woods", "F_SP104"),
 
-    "Ordon Village Indoors",
+    "Ordon Province Indoors",
     new TwilightPrincessSceneDesc("Mayor's House", "R_SP01", ["R00_00"]),
     new TwilightPrincessSceneDesc("Sera's Sundries", "R_SP01", ["R01_00"]),
     new TwilightPrincessSceneDesc("Talo and Malo's House", "R_SP01", ["R02_00"]),
     new TwilightPrincessSceneDesc("Link's House", "R_SP01", ["R04_00", "R07_00"]),
     new TwilightPrincessSceneDesc("Rusl's House", "R_SP01", ["R05_00"]),
 
-    "Overworld Maps",
+    "Faron Province", 
+    new TwilightPrincessSceneDesc("Faron Woods", "F_SP108"),//TODO: Split up
+    new TwilightPrincessSceneDesc("Coro's House", "R_SP108"),
+    new TwilightPrincessSceneDesc("Sacred Grove", "F_SP117", ["R01_00"]),
+    new TwilightPrincessSceneDesc("Sacred Grove - Temple of Time Entrance", "F_SP117", ["R02_00"]),
+    new TwilightPrincessSceneDesc("Sacred Grove Forest", "F_SP117", ["R03_00"]),
+
+    "Kakariko Village",
+    new TwilightPrincessSceneDesc("Kakariko Village", "F_SP109"),
+    new TwilightPrincessSceneDesc("Kakariko Graveyard", "F_SP111"),
+
+    "Kakariko Village Indoors",
+    new TwilightPrincessSceneDesc("Barnes Bomb Shop", "R_SP109", ["R01_00"]),
+    new TwilightPrincessSceneDesc("Elde Inn", "R_SP109", ["R02_00"]),
+    new TwilightPrincessSceneDesc("Malo Mart", "R_SP109", ["R03_00"]),
+    new TwilightPrincessSceneDesc("Watch Tower", "R_SP109", ["R04_00"]),
+    new TwilightPrincessSceneDesc("Flammable House", "R_SP109", ["R05_00"]),
+    new TwilightPrincessSceneDesc("Abandoned House", "R_SP109", ["R06_00"]),
+    new TwilightPrincessSceneDesc("Kakariko Sanctuary", "R_SP109", ["R00_00"]),
+    new TwilightPrincessSceneDesc("Kakariko Sanctuary Cellar", "R_SP209"),
+
+    "Death Mountain",
+    new TwilightPrincessSceneDesc("Death Mountain", "F_SP110"),
+    new TwilightPrincessSceneDesc("Goron Mines Entrance", "R_SP110"),
+
+    "Lake Hylia",
+    new TwilightPrincessSceneDesc("Lake Hylia", "F_SP115", ["R00_00"]),
+    new TwilightPrincessSceneDesc("Lanayru's Spring", "F_SP115", ["R01_00"]),
+    
+    "Zora's Domain",
+    new TwilightPrincessSceneDesc("Zora's Domain", "F_SP113", ["R01_00"]),
+    new TwilightPrincessSceneDesc("Throne Room", "F_SP113", ["R00_00"]),
+    new TwilightPrincessSceneDesc("Zora's River", "F_SP126"),
+    new TwilightPrincessSceneDesc("Rapids Ride", "F_SP112"),
+
+    "Fishing Hole",
+    new TwilightPrincessSceneDesc("Fishing Pond", "F_SP127"),
+    new TwilightPrincessSceneDesc("Hena's Fishing Hole - Indoors", "R_SP127"),
+
+    "Castle Town", 
+    new TwilightPrincessSceneDesc("Castle Town Central Square", "F_SP116", ["R00_00"]),
+    new TwilightPrincessSceneDesc("Hyrule Castle Entrance", "F_SP116", ["R01_00"]),
+    new TwilightPrincessSceneDesc("Castle Town West Road", "F_SP116", ["R02_00"]),
+    new TwilightPrincessSceneDesc("Castle Town South Road", "F_SP116", ["R03_00"]),
+    new TwilightPrincessSceneDesc("Castle Town East Road", "F_SP116", ["R04_00"]),
+
+    "Castle Town Indoors",
+    new TwilightPrincessSceneDesc("Telma's Bar", "R_SP116", ["R05_00"]),
+    new TwilightPrincessSceneDesc("Castle Town Sewers", "R_SP116", ["R06_00"]),
+
+    new TwilightPrincessSceneDesc("Malo Mart / Chudley's Fine Goods and Fancy Trinkets Emporium", "R_SP160", ["R00_00"]),
+    new TwilightPrincessSceneDesc("Fanadi's Palace", "R_SP160", ["R01_00"]),
+    new TwilightPrincessSceneDesc("Medical Clinic", "R_SP160", ["R02_00"]),
+    new TwilightPrincessSceneDesc("Agitha's Castle", "R_SP160", ["R03_00"]),
+    new TwilightPrincessSceneDesc("Goron Watch Tower", "R_SP160", ["R04_00"]),
+    new TwilightPrincessSceneDesc("Jovani's House", "R_SP160", ["R05_00"]),
+
+    new TwilightPrincessSceneDesc("Star Tent", "R_SP161"),
+
+    "Snowpeak Mountain",
+    new TwilightPrincessSceneDesc("Snowpeak Mountain", "F_SP114", ["R00_00"]),
+    new TwilightPrincessSceneDesc("Snowpeak Top", "F_SP114", ["R01_00"]),
+    new TwilightPrincessSceneDesc("Snowpeak Cave", "F_SP114", ["R02_00"]),
+    
+    "Gerudo Desert",
+    new TwilightPrincessSceneDesc("Gerudo Desert", "F_SP124"),
+    new TwilightPrincessSceneDesc("Gerudo Desert Bulblin Base", "F_SP118"),
+    new TwilightPrincessSceneDesc("Arbiter's Grounds Mirror Chamber", "F_SP125"),
+
+    "Hidden Village",
+    new TwilightPrincessSceneDesc("Hidden Village", "F_SP128"),
+    new TwilightPrincessSceneDesc("Impaz's House", "R_SP128"),
+
+    "Hyrule Field",
     new TwilightPrincessSceneDesc("Hyrule Field Map 1", "F_SP102"),
     new TwilightPrincessSceneDesc("Hyrule Field Map 2", "F_SP121"),
     new TwilightPrincessSceneDesc("Hyrule Field Map 3", "F_SP122"),
-    new TwilightPrincessSceneDesc("Lake Hylia", "F_SP123"),
-
-    new TwilightPrincessSceneDesc("Ordon Woods", "F_SP104"),
-    new TwilightPrincessSceneDesc("Faron Woods", "F_SP108"),
-    new TwilightPrincessSceneDesc("Kakariko Village", "F_SP109"),
-    new TwilightPrincessSceneDesc("Death Mountain Trail", "F_SP110"),
-    new TwilightPrincessSceneDesc("Kakariko Graveyard", "F_SP111"),
-    new TwilightPrincessSceneDesc("Rapids Ride", "F_SP112"),
-    new TwilightPrincessSceneDesc("Zora's Domain", "F_SP113"),
-    new TwilightPrincessSceneDesc("Snowpeak Mountain", "F_SP114"),
-    new TwilightPrincessSceneDesc("Lanayru's Spring", "F_SP115"),
-    new TwilightPrincessSceneDesc("Castle Town", "F_SP116"),
-    new TwilightPrincessSceneDesc("Sacred Grove", "F_SP117"),
-    new TwilightPrincessSceneDesc("Gerudo Desert Bulblin Base", "F_SP118"),
-    new TwilightPrincessSceneDesc("Gerudo Desert", "F_SP124"),
-    new TwilightPrincessSceneDesc("Arbiter's Grounds Mirror Chamber", "F_SP125"),
-    new TwilightPrincessSceneDesc("Zora's River", "F_SP126"),
-    new TwilightPrincessSceneDesc("Fishing Pond", "F_SP127"),
-    new TwilightPrincessSceneDesc("Hidden Village", "F_SP128"),
+    new TwilightPrincessSceneDesc("Hyrule Field Map 4", "F_SP123"),
     new TwilightPrincessSceneDesc("Wolf Howling Cutscene Map", "F_SP200"),
-
-    "Dungeons",
+    new TwilightPrincessSceneDesc("Final Boss Arena (On Horseback)", "D_MN09B"),
+    new TwilightPrincessSceneDesc("Final Boss Arena", "D_MN09C"),
+    
+    "Forest Temple",
     new TwilightPrincessSceneDesc("Forest Temple", "D_MN05"),
     new TwilightPrincessSceneDesc("Forest Temple Boss Arena", "D_MN05A"),
     new TwilightPrincessSceneDesc("Forest Temple Mini-Boss Arena", "D_MN05B"),
 
+    "Goron Mines",
     new TwilightPrincessSceneDesc("Goron Mines", "D_MN04"),
     new TwilightPrincessSceneDesc("Goron Mines Boss Arena", "D_MN04A"),
     new TwilightPrincessSceneDesc("Goron Mines Mini-Boss Arena", "D_MN04B"),
 
+    "Lakebed Temple",
     new TwilightPrincessSceneDesc("Lakebed Temple", "D_MN01"),
     new TwilightPrincessSceneDesc("Lakebed Temple Boss Arena", "D_MN01A"),
     new TwilightPrincessSceneDesc("Lakebed Temple Mini-Boss Arena", "D_MN01B"),
 
+    "Arbiter's Grounds",
     new TwilightPrincessSceneDesc("Arbiter's Grounds", "D_MN10"),
     new TwilightPrincessSceneDesc("Arbiter's Grounds Boss Arena", "D_MN10A"),
     new TwilightPrincessSceneDesc("Arbiter's Grounds Mini-Boss Arena", "D_MN10B"),
 
+    "Snowpeak Ruins",
     new TwilightPrincessSceneDesc("Snowpeak Ruins", "D_MN11"),
     new TwilightPrincessSceneDesc("Snowpeak Ruins Boss Arena", "D_MN11A"),
     new TwilightPrincessSceneDesc("Snowpeak Ruins Mini-Boss Arena", "D_MN11B"),
 
+    "Temple of Time",
     new TwilightPrincessSceneDesc("Temple of Time", "D_MN06"),
     new TwilightPrincessSceneDesc("Temple of Time Boss Arena", "D_MN06A"),
     new TwilightPrincessSceneDesc("Temple of Time Mini-Boss Arena", "D_MN06B"),
 
+    "City in the Sky",
     new TwilightPrincessSceneDesc("City in the Sky", "D_MN07"),
     new TwilightPrincessSceneDesc("City in the Sky Boss Arena", "D_MN07A"),
     new TwilightPrincessSceneDesc("City in the Sky Mini-Boss Arena", "D_MN07B"),
 
+    "Palace of Twilight", 
     new TwilightPrincessSceneDesc("Palace of Twilight", "D_MN08"),
     new TwilightPrincessSceneDesc("Palace of Twilight Boss Arena 1", "D_MN08A"),
     new TwilightPrincessSceneDesc("Palace of Twilight Mini-Boss Arena 1", "D_MN08B"),
     new TwilightPrincessSceneDesc("Palace of Twilight Mini-Boss Arena 2", "D_MN08C"),
     new TwilightPrincessSceneDesc("Palace of Twilight Boss Rush Arena", "D_MN08D"),
 
+    "Hyrule Castle",
+    new TwilightPrincessSceneDesc("Hyrule Castle Wolf Escape", "R_SP107"),
     new TwilightPrincessSceneDesc("Hyrule Castle", "D_MN09"),
     new TwilightPrincessSceneDesc("Hyrule Castle Boss Arena", "D_MN09A"),
-    new TwilightPrincessSceneDesc("Final Boss Arena (On Horseback)", "D_MN09B"),
-    new TwilightPrincessSceneDesc("Final Boss Arena", "D_MN09C"),
 
     "Mini-Dungeons and Grottos",
     new TwilightPrincessSceneDesc("Ice Cavern", "D_SB00"),
@@ -829,19 +942,10 @@ const sceneDescs = [
     new TwilightPrincessSceneDesc("Snow Cave 2", "D_SB08"),
     new TwilightPrincessSceneDesc("Water Cave", "D_SB09"),
 
-    "Houses / Indoors",
-    new TwilightPrincessSceneDesc("Hyrule Castle Wolf Escape", "R_SP107"),
-    new TwilightPrincessSceneDesc("Caro's House", "R_SP108"),
-    new TwilightPrincessSceneDesc("Kakariko Village Houses", "R_SP109"),
-    new TwilightPrincessSceneDesc("Goron Mines Entrance", "R_SP110"),
-    new TwilightPrincessSceneDesc("Telma's Bar + Castle Town Sewers", "R_SP116"),
-    new TwilightPrincessSceneDesc("Fishing Hole Interior", "R_SP127"),
-    new TwilightPrincessSceneDesc("Impaz's House", "R_SP128"),
-    new TwilightPrincessSceneDesc("Castle Town Houses", "R_SP160"),
-    new TwilightPrincessSceneDesc("Star Tent", "R_SP161"),
-    new TwilightPrincessSceneDesc("Kakariko Sanctuary", "R_SP209"),
-    new TwilightPrincessSceneDesc("Cutscene: Light Arrow Area", "R_SP300"),
-    new TwilightPrincessSceneDesc("Cutscene: Hyrule Castle Throne Room", "R_SP301"),    
+    "Cutscenes",
+    new TwilightPrincessSceneDesc("Hyrule Castle Throne Room", "R_SP301"),  
+    new TwilightPrincessSceneDesc("Light Arrow Area", "R_SP300"),
+  
 ];
 
 export const sceneGroup: Viewer.SceneGroup = { id, name, sceneDescs };
