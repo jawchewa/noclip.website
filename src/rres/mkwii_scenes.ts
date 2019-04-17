@@ -32,7 +32,7 @@ class ModelCache {
             v.destroy(device);
     }
 
-    public ensureModel(device: GfxDevice, arc: U8.U8Archive, renderer: MarioKartWiiRenderer, path: string): void {
+    public ensureRRES(device: GfxDevice, renderer: MarioKartWiiRenderer, arc: U8.U8Archive, path: string): BRRES.RRES {
         if (!this.rresCache.has(path)) {
             const rres = BRRES.parse(arc.findFileData(path));
             renderer.textureHolder.addRRESTextures(device, rres);
@@ -43,6 +43,8 @@ class ModelCache {
                 this.modelCache.set(rres.mdl0[i].name, mdl0Model);
             }
         }
+
+        return this.rresCache.get(path);
     }
 }
 
@@ -204,10 +206,8 @@ const posMtx = mat4.fromScaling(mat4.create(), [scaleFactor, scaleFactor, scaleF
 class MarioKartWiiSceneDesc implements Viewer.SceneDesc {
     constructor(public id: string, public name: string) {}
 
-    private spawnObjectFromRRESPath(device: GfxDevice, renderer: MarioKartWiiRenderer, arc: U8.U8Archive, arcPath: string, objectName: string): MDL0ModelInstance {
+    private spawnObjectFromRRES(device: GfxDevice, renderer: MarioKartWiiRenderer, rres: BRRES.RRES, objectName: string): MDL0ModelInstance {
         const modelCache = renderer.modelCache;
-        modelCache.ensureModel(device, arc, renderer, arcPath);
-        const rres = modelCache.rresCache.get(arcPath);
         const mdl0Model = modelCache.modelCache.get(objectName);
         const mdl0Instance = new MDL0ModelInstance(device, renderer.renderHelper, renderer.textureHolder, mdl0Model);
         mdl0Instance.bindRRESAnimations(renderer.animationController, rres);
@@ -219,13 +219,13 @@ class MarioKartWiiSceneDesc implements Viewer.SceneDesc {
     private spawnObjectFromKMP(device: GfxDevice, renderer: MarioKartWiiRenderer, arc: U8.U8Archive, gobj: GOBJ): void {
         const getRRES = (objectName: string): BRRES.RRES => {
             const arcPath = `./${objectName}.brres`;
-            // Should have already been loaded by now.
+            renderer.modelCache.ensureRRES(device, renderer, arc, arcPath);
             return assertExists(renderer.modelCache.rresCache.get(arcPath));
         };
 
         const spawnObject = (objectName: string): MDL0ModelInstance => {
-            const arcPath = `./${objectName}.brres`;
-            const b = this.spawnObjectFromRRESPath(device, renderer, arc, arcPath, objectName);
+            const rres = getRRES(objectName);
+            const b = this.spawnObjectFromRRES(device, renderer, rres, objectName);
             calcModelMtx(b.modelMatrix, gobj.scaleX, gobj.scaleY, gobj.scaleZ, gobj.rotationX, gobj.rotationY, gobj.rotationZ, gobj.translationX, gobj.translationY, gobj.translationZ);
             mat4.mul(b.modelMatrix, posMtx, b.modelMatrix);
             return b;
@@ -233,7 +233,22 @@ class MarioKartWiiSceneDesc implements Viewer.SceneDesc {
 
         // Object IDs taken from http://wiki.tockdom.com/wiki/Object
 
-        if (gobj.objectId === 0x0003) { // lensFX
+        if (gobj.objectId === 0x0002) { // Psea
+            const rres = getRRES(`Psea`);
+            const b1 = this.spawnObjectFromRRES(device, renderer, rres, `Psea1sand`);
+            const b2 = this.spawnObjectFromRRES(device, renderer, rres, `Psea2dark`);
+            const b3 = this.spawnObjectFromRRES(device, renderer, rres, `Psea3nami`);
+            const b4 = this.spawnObjectFromRRES(device, renderer, rres, `Psea4tex`);
+            const b5 = this.spawnObjectFromRRES(device, renderer, rres, `Psea5spc`);
+
+            // Value established by trial and error. Needs more research. See
+            // http://wiki.tockdom.com/wiki/Object/Psea
+            b1.modelMatrix[13] -= 8550;
+            b2.modelMatrix[13] -= 8550;
+            b3.modelMatrix[13] -= 8550;
+            b4.modelMatrix[13] -= 8550;
+            b5.modelMatrix[13] -= 8550;
+        } else if (gobj.objectId === 0x0003) { // lensFX
             // Lens flare effect -- runtime determined, not a BRRES.
         } else if (gobj.objectId === 0x0015) { // sound_Mii
             // sound generator
@@ -245,16 +260,123 @@ class MarioKartWiiSceneDesc implements Viewer.SceneDesc {
         } else if (gobj.objectId === 0x006F) { // sun
             // TODO(jstpierre): Sun doesn't show up? Need to figure out what this is...
             spawnObject(`sun`);
+        } else if (gobj.objectId === 0x0071) { // KmoonZ
+            spawnObject(`KmoonZ`);
+        } else if (gobj.objectId === 0x0072) { // sunDS
+            spawnObject(`sunDS`);
+        } else if (gobj.objectId === 0x0073) { // coin
+            spawnObject(`coin`);  
+            // Kinda partially clipped into the floor, and doesn't spin
+        } else if (gobj.objectId === 0x00ca) { // MashBalloonGC
+            spawnObject(`MashBalloonGC`);
+        } else if (gobj.objectId === 0x00cb) { // WLwallGC
+            spawnObject(`WLwallGC`);
+        } else if (gobj.objectId === 0x00cc) { // CarA1
+            spawnObject(`CarA1`);
+        } else if (gobj.objectId === 0x00cd) { // basabasa
+            spawnObject(`basabasa`);
+        } else if (gobj.objectId === 0x00ce) { // HeyhoShipGBA
+            spawnObject(`HeyhoShipGBA`);
+        //} else if (gobj.objectId === 0x00d0) { // kart_truck
+        //    spawnObject(`K_truck`);
+        //} else if (gobj.objectId === 0x00d1) { // car_body
+        //    spawnObject(`K_car_body`);
+        } else if (gobj.objectId === 0x00d2) { // skyship
+            spawnObject(`skyship`);
+        } else if (gobj.objectId === 0x00d7) { // penguin_s
+            spawnObject(`penguin_s`);
+            // wiki says they should be creating a mirrored one below it, for the fake reflection but it isnt
+        } else if (gobj.objectId === 0x00d8) { // penguin_m
+            spawnObject(`penguin_m`);
+        } else if (gobj.objectId === 0x00d9) { // penguin_l
+            spawnObject(`penguin_l`);
+            // penguins are missing eyes, the horror!
+        } else if (gobj.objectId === 0x00da) { // castleballoon1
+            spawnObject(`castleballoon1`);
+        } else if (gobj.objectId === 0x00db) { // dossunc
+            spawnObject(`dossun`);
+        } else if (gobj.objectId === 0x00dd) { // boble
+            spawnObject(`boble`);
+        } else if (gobj.objectId === 0x00de) { // K_bomb_car
+            spawnObject(`K_bomb_car`);
+        //} else if (gobj.objectId === 0x00e2) { // hanachan
+        //    spawnObject(`hanachan`);
+            // only shows up as his head
+        } else if (gobj.objectId === 0x00e3) { // seagull
+            spawnObject(`seagull`);
+        } else if (gobj.objectId === 0x00e4) { // moray
+            spawnObject(`moray`);
+        } else if (gobj.objectId === 0x00e5) { // crab
+            spawnObject(`crab`);
+        } else if (gobj.objectId === 0x00e7) { // CarA2
+            spawnObject(`CarA2`);
+        } else if (gobj.objectId === 0x00e8) { // CarA3
+            spawnObject(`CarA3`);
+        //} else if (gobj.objectId === 0x00e9) { // Hwanwan
+        //    spawnObject(`wanwan`);
+            // smaller than it should be and half clipped into the floor
+        } else if (gobj.objectId === 0x00eb) { // Twanwan
+            const b = spawnObject(`Twanwan`);
+            b.modelMatrix[13] += 150;
+            // offset a bit so he fits into the pipe nicer.
+        } else if (gobj.objectId === 0x00ec) { // cruiserR
+            spawnObject(`cruiser`);
+        } else if (gobj.objectId === 0x00ed) { // bird
+            spawnObject(`bird`);
         } else if (gobj.objectId === 0x012E) { // dokan_sfc
             spawnObject(`dokan_sfc`);
+        } else if (gobj.objectId === 0x012f) { // castletree1
+            spawnObject(`castletree1`);
+        } else if (gobj.objectId === 0x0130) { // castletree1c
+            spawnObject(`castletree1`);
+        } else if (gobj.objectId === 0x0131) { // castletree2
+            spawnObject(`castletree2`);
+        } else if (gobj.objectId === 0x0132) { // castleflower1
+            spawnObject(`castleflower1`);
+        } else if (gobj.objectId === 0x0133) { // mariotreeGC
+            spawnObject(`mariotreeGC`);
+        } else if (gobj.objectId === 0x0134) { // mariotreeGCc
+            spawnObject(`mariotreeGC`);
+        } else if (gobj.objectId === 0x0135) { // donkytree1GC
+            spawnObject(`donkytree1GC`);
+        } else if (gobj.objectId === 0x0136) { // donkytree2GC
+            spawnObject(`donkytree2GC`);
+        } else if (gobj.objectId === 0x0137) { // peachtreeGC
+            spawnObject(`peachtreeGC`);
+        } else if (gobj.objectId === 0x0138) { // peachtreeGCc
+            spawnObject(`peachtreeGC`);
+        } else if (gobj.objectId === 0x013c) { // obakeblockSFCc
+            spawnObject(`obakeblockSFC`);
         } else if (gobj.objectId === 0x014D) { // MiiObj01
             spawnObject(`MiiObj01`);
         } else if (gobj.objectId === 0x014E) { // MiiObj02
             spawnObject(`MiiObj02`);
         } else if (gobj.objectId === 0x014F) { // MiiObj03
             spawnObject(`MiiObj03`);
+        } else if (gobj.objectId === 0x0150) { // gardentreeDS
+            spawnObject(`gardentreeDS`);
+        } else if (gobj.objectId === 0x0151) { // gardentreeDSc
+            spawnObject(`gardentreeDS`);
+        } else if (gobj.objectId === 0x0152) { // FlagA1
+            spawnObject(`FlagA1`);
+        } else if (gobj.objectId === 0x0153) { // FlagA2
+            spawnObject(`FlagA2`);
+        } else if (gobj.objectId === 0x0154) { // FlagB1
+            spawnObject(`FlagB1`);
         } else if (gobj.objectId === 0x0155) { // FlagB2
             spawnObject(`FlagB2`);
+        } else if (gobj.objectId === 0x0156) { // FlagA3
+            spawnObject(`FlagA3`);
+        } else if (gobj.objectId === 0x0157) { // DKtreeA64
+            spawnObject(`DKtreeA64`);
+        } else if (gobj.objectId === 0x0158) { // DKtreeA64c
+            spawnObject(`DKtreeA64`);
+        } else if (gobj.objectId === 0x0159) { // DKtreeB64
+            spawnObject(`DKtreeB64`);
+        } else if (gobj.objectId === 0x015a) { // DKtreeB64c
+            spawnObject(`DKtreeB64`);
+        } else if (gobj.objectId === 0x015b) { // TownTreeDSc
+            spawnObject(`TownTreeDS`);
         } else if (gobj.objectId === 0x018E) { // MiiKanban
             spawnObject(`MiiKanban`);
         } else if (gobj.objectId === 0x0191) { // kuribo
@@ -279,10 +401,14 @@ class MarioKartWiiSceneDesc implements Viewer.SceneDesc {
             console.log(arc, kmp);
             const renderer = new MarioKartWiiRenderer(device);
 
-            const courseInstance = this.spawnObjectFromRRESPath(device, renderer, arc, `./course_model.brres`, 'course');
+            const modelCache = renderer.modelCache;
+
+            const courseRRES = modelCache.ensureRRES(device, renderer, arc, `./course_model.brres`);;
+            const courseInstance = this.spawnObjectFromRRES(device, renderer, courseRRES, 'course');
             mat4.copy(courseInstance.modelMatrix, posMtx);
 
-            const skyboxInstance = this.spawnObjectFromRRESPath(device, renderer, arc, `./vrcorn_model.brres`, 'vrcorn');
+            const skyboxRRES = modelCache.ensureRRES(device, renderer, arc, `./vrcorn_model.brres`);
+            const skyboxInstance = this.spawnObjectFromRRES(device, renderer, skyboxRRES, 'vrcorn');
             mat4.copy(skyboxInstance.modelMatrix, posMtx);
             skyboxInstance.passMask = MKWiiPass.SKYBOX;
 
