@@ -623,6 +623,16 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
             const m = buildModel(rarc, `bmdr/moir.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/moir_wait_a.bck`));
         });
+        //Coro
+        else if (name === 'Kkri') fetchArchive(`Kkri.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/kkri.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/kkri_waitsit_a.bck`));
+        });
+        //Trill
+        else if (name === 'MYNA') fetchArchive(`NPC_myna.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/myna.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/myna_wait_a.bck`));
+        });
         //Kakariko NPCs
         //Renaldo
         else if (name === 'Len') fetchArchive(`Len.arc`).then((rarc) => {
@@ -633,6 +643,11 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
         else if (name === 'Lud') fetchArchive(`Lud.arc`).then((rarc) => {
             const m = buildModel(rarc, `bmdr/lud.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/lud_wait_a.bck`));
+        });
+        //Barns
+        else if (name === 'Bans') fetchArchive(`Bans.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmde/bans.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/bans_wait_a.bck`));
         });
         //Shad
         else if (name === 'Shad') fetchArchive(`Shad.arc`).then((rarc) => {
@@ -657,10 +672,30 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
                 m.bindANK1(parseBCK(animrarc, `bck/grc_wait_a.bck`));
             });
         });
+        //Gor Coron
+        else if (name === 'grD' || name === 'grD1') fetchArchive(`grD.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/grd.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/grd_wait_a.bck`));
+        });
+        //Gor Ebizo
+        else if (name === 'grO') fetchArchive(`grO.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/gro_a.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/gro_wait_a.bck`));
+        });
         //Gor Liggs
         else if (name === 'grR') fetchArchive(`grR.arc`).then((rarc) => {
             const m = buildModel(rarc, `bmdr/grr.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/grr_wait_a.bck`));
+        });
+        //Gor Amato
+        else if (name === 'grS') fetchArchive(`grS.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/grs.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/grs_wait_a.bck`));
+        });
+        //Darbus
+        else if (name === 'grZ') fetchArchive(`grZ.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/grz.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/grz_wait_a.bck`));
         });
         //Lake Hylia
         //Thelma's Coach
@@ -693,6 +728,301 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
             const m = buildModel(rarc, `bmdr/raf.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/raf_wait_a.bck`));
         });
+        //Plumm
+        else if (name === 'myna2') fetchArchive(`MYNA_b.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/myna_b.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/myna_b_wait_a.bck`));
+        });
+        //Zora's River
+        //Iza
+        else if (name === 'Hoz') fetchArchive(`Hoz.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/hoz.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/hoz_wait_a.bck`));
+        });
+        //Hena
+        else if (name === 'Henna') fetchArchive(`Henna.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/henna.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/henna_wait_a.bck`));
+        });
+        //Zoras
+        //Rutela
+        else if (name === 'zraC') fetchArchive(`zrZ_GT.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/zrz_gt.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/zrz_wait_gt_a.bck`));
+        });   
+        //Prince Ralis
+        else if (name === 'zrC') fetchArchive(`zrC_MDL.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdv/zrc.bmd`);
+            fetchArchive(`zrC.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/zrc_wait_a.bck`));
+            });
+        });
+        //Normal Zoras
+        else if (name === 'zrA') fetchArchive(`zrA_MDL.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdv/zra.bmd`);
+            fetchArchive(`zrA_sp.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/zra_wait_sp.bck`));
+            });
+        });        
+        //Castle Town
+        //Telma
+        else if (name === 'The') fetchArchive(`The.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/the.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/the_wait_a.bck`));
+        });
+        //Louise - Telma's Cat
+        else if (name === 'Peru') fetchArchive(`Peru.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/gz_ne.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/gz_ne_wait_a.bck`));
+        });
+        //Postman
+        else if (name === 'Post') fetchArchive(`Post.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/post.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/post_wait_a.bck`));
+        });
+        //Jovani
+        else if (name === 'Pouya') fetchArchive(`PouyaA.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdv/pouyaa.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/pouyaa_wait_a.bck`));
+        });
+        //Agitha
+        else if (name === 'ins') fetchArchive(`Ins.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/ins.bmd`);
+            fetchArchive(`Ins1.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/ins_wait_a.bck`));
+            });
+        });
+        //Chudley
+        else if (name === 'clerkA') fetchArchive(`clerkA.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/clerka.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/clerka_wait_a.bck`));
+        });
+        else if (name === 'clerkB') fetchArchive(`clerkB.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/clerkb.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/clerkb_wait_a.bck`));
+        });
+        //Soal
+        else if (name === 'shoe') fetchArchive(`shoe.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/shoe.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/shoe_talk_a.bck`));//fix
+        });
+        //Dr. Borville
+        else if (name === 'Doc') fetchArchive(`Doc.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/doc.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/doc_wait_a.bck`));
+        });
+        //Charlo
+        else if (name === 'prayer') fetchArchive(`Prayer.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/prayer.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/w_pray.bck`));
+        });
+        //Purlo
+        else if (name === 'chin') fetchArchive(`chin_mdl.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/chin.bmd`);
+            fetchArchive(`Chin.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/chin_wait_a.bck`));//fix
+            });
+        });
+        //Hannah
+        else if (name === 'km_Hana') fetchArchive(`kasi_hana.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/hana.bmd`);
+            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));//fix
+            });
+        });
+        //Kili
+        else if (name === 'km_Kyu') fetchArchive(`kasi_kyu.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/kyu.bmd`);
+            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));//fix
+            });
+        });
+        //Misha
+        else if (name === 'km_Mich') fetchArchive(`kasi_mich.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/mich.bmd`);
+            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));//fix
+            });
+        });
+        //Random Castle Town NPCs
+        else if (name === 'WAD_a') fetchArchive(`WAD_a.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/wad_a.bmd`);
+            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
+            });
+        });
+        else if (name === 'WAD_a2') fetchArchive(`WAD_a2.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/wad_a2.bmd`);
+            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
+            });
+        });
+        else if (name === 'WAN_a') fetchArchive(`WAN_a.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/wan_a.bmd`);
+            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
+            });
+        });
+        else if (name === 'WAN_a2') fetchArchive(`WAN_a2.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/wan_a2.bmd`);
+            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
+            });
+        });
+        else if (name === 'WAN_b') fetchArchive(`WAN_b.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/wan_b.bmd`);
+            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
+            });
+        });
+        else if (name === 'WAN_b2') fetchArchive(`WAN_b2.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/wan_b2.bmd`);
+            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
+            });
+        });
+        else if (name === 'WGN_a') fetchArchive(`WGN_a.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/wgn_a.bmd`);
+            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
+            });
+        });
+        else if (name === 'WGN_a2') fetchArchive(`WGN_a2.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/wgn_a2.bmd`);
+            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
+            });
+        });
+        else if (name === 'WCN_a') fetchArchive(`WCN_a.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/wcn_a.bmd`);
+            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
+            });//fix
+        });
+        else if (name === 'WCN_a2') fetchArchive(`WCN_a2.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/wcn_a2.bmd`);
+            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
+            });//fix
+        });
+        else if (name === 'WON_a2') fetchArchive(`WON_a2.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/won_a2.bmd`);
+            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
+            });
+        });
+        else if (name === 'DoorBoy') fetchArchive(`DoorBoy.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/doorboy.bmd`);
+            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            });
+        });
+        else if (name === 'MAN_a') fetchArchive(`MAN_a.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/man_a.bmd`);
+            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            });
+        });
+        else if (name === 'MAN_a2') fetchArchive(`MAN_a2.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/man_a2.bmd`);
+            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            });
+        });
+        else if (name === 'MCN_a') fetchArchive(`MCN_a.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/mcn_a.bmd`);
+            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            });//fix
+        });
+        else if (name === 'MCN_a2') fetchArchive(`MCN_a2.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/mcn_a2.bmd`);
+            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            });//fix
+        });
+        else if (name === 'MAN_b') fetchArchive(`MAN_b.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/man_b.bmd`);
+            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            });
+        });
+        else if (name === 'MAN_c') fetchArchive(`MAN_c.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/man_c.bmd`);
+            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            });
+        });
+        else if (name === 'MAT_a') fetchArchive(`MAT_a.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/mat_a.bmd`);
+            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            });
+        });
+        else if (name === 'MAT_a2') fetchArchive(`MAT_a2.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/mat_a2.bmd`);
+            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            });
+        });
+        else if (name === 'MAS_a') fetchArchive(`MAS_a.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/mas_a.bmd`);
+            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            });
+        });
+        else if (name === 'MAD_a') fetchArchive(`MAD_a.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/mad_a.bmd`);
+            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            });//fix
+        });
+        else if (name === 'MAD_a2') fetchArchive(`MAD_a2.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/mad_a2.bmd`);
+            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            });//fix
+        });
+        else if (name === 'MBN_a') fetchArchive(`MBN_a.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/mbn_a.bmd`);
+            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            });
+        });
+        else if (name === 'MBN_a2') fetchArchive(`MBN_a2.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/mbn_a2.bmd`);
+            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            });
+        });
+        else if (name === 'MON_a') fetchArchive(`MON_a.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/mon_a.bmd`);
+            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            });
+        });
+        else if (name === 'MON_a2') fetchArchive(`MON_a2.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/mon_a.bmd`);
+            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            });
+        });
+        //Snowpeak NPCs
+        //Yeta
+        else if (name === 'ykW') fetchArchive(`ykW.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/ykw.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/ykw_wait_a.bck`));
+        });
+        //Yeto
+        else if (name === 'ykM') fetchArchive(`ykM.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/ykm.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/ykm_wait_a.bck`));
+        });
+        //Ashei
+        else if (name === 'Ash') fetchArchive(`Ash.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmdr/ash.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/ash_wait_a.bck`));
+        });
         //Other NPCs
         //Zelda
         else if (name === 'Zelda' || name === 'Hzelda') fetchArchive(`Zelda.arc`).then((rarc) => {
@@ -709,11 +1039,19 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
             const m = buildModel(rarc, `bmdr/mk.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/mk_wait.bck`));
         });
+        //Bosses
+        //Blizzeta
+        else if (name === 'B_yo') fetchArchive(`B_yo.arc`).then((rarc) => {
+            const m = buildModel(rarc, `bmde/ykw_b.bmd`);
+            m.bindANK1(parseBCK(rarc, `bck/ykw_b_waita.bck`));
+        });
         //Objects
         //Pumpkin
         else if (name === 'Pumpkin') fetchArchive(`pumpkin.arc`).then((rarc) => buildModel(rarc, `bmdr/pumpkin.bmd`));
         else
+        {
             console.warn(`Unknown object: ${name}`);
+        }
     }
 
     public createScene(device: GfxDevice, abortSignal: AbortSignal): Progressable<Viewer.SceneGfx> {
@@ -858,7 +1196,7 @@ const sceneDescs = [
     new TwilightPrincessSceneDesc("Goron Watch Tower", "R_SP160", ["R04_00"]),
     new TwilightPrincessSceneDesc("Jovani's House", "R_SP160", ["R05_00"]),
 
-    new TwilightPrincessSceneDesc("Star Tent", "R_SP161"),
+    new TwilightPrincessSceneDesc("STAR Tent", "R_SP161"),
 
     "Snowpeak Mountain",
     new TwilightPrincessSceneDesc("Snowpeak Mountain", "F_SP114", ["R00_00"]),
