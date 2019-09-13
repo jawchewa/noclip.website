@@ -1,5 +1,5 @@
 
-import { vec3, mat4, vec4 } from "gl-matrix";
+import { vec3, mat4 } from "gl-matrix";
 import { nArray } from "./util";
 
 class Plane {
@@ -11,7 +11,7 @@ class Plane {
     // Distance
     public d: number;
 
-    public test(x: number, y: number, z: number): number {
+    public distance(x: number, y: number, z: number): number {
         const dot = x*this.x + y*this.y + z*this.z;
         return this.d + dot;
     }
@@ -106,6 +106,22 @@ export class AABB {
             a.minZ > b.maxZ || b.minZ > a.maxZ);
     }
 
+    public containsPoint(v: vec3): boolean {
+        const pX = v[0], pY = v[1], pZ = v[2];
+        return (
+            pX >= this.minX && pX <= this.maxX &&
+            pY >= this.minY && pY <= this.maxY &&
+            pZ >= this.minZ && pZ <= this.maxZ);
+    }
+
+    public containsSphere(v: vec3, rad: number): boolean {
+        const pX = v[0], pY = v[1], pZ = v[2];
+        return (
+            pX >= this.minX - rad && pX <= this.maxX + rad &&
+            pY >= this.minY - rad && pY <= this.maxY + rad &&
+            pZ >= this.minZ - rad && pZ <= this.maxZ + rad);
+    }
+
     public centerPoint(v: vec3): void {
         v[0] = (this.minX + this.maxX) / 2;
         v[1] = (this.minY + this.maxY) / 2;
@@ -122,7 +138,7 @@ export class AABB {
         const extX = (this.maxX - this.minX);
         const extY = (this.maxY - this.minY);
         const extZ = (this.maxZ - this.minZ);
-        const chord = Math.sqrt(extX*extX + extY*extY + extZ*extZ);
+        const chord = Math.hypot(extX, extY, extZ);
         return chord / 2;
     }
 
@@ -147,7 +163,7 @@ class FrustumVisualizer {
         this.canvas.style.left = '0';
         this.canvas.style.opacity = '0.5';
         this.canvas.style.pointerEvents = 'none';
-        this.ctx = this.canvas.getContext('2d');
+        this.ctx = this.canvas.getContext('2d')!;
     }
 
     public newFrame(): void {
@@ -173,6 +189,15 @@ class FrustumVisualizer {
         const y2 = this.dsy(aabb.maxZ);
         this.ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
     }
+
+    public dsph(v: vec3, rad: number): void {
+        const xc = this.dsx(v[0]);
+        const yc = this.dsy(v[2]);
+        this.ctx.beginPath();
+        this.ctx.ellipse(xc, yc, rad*this.scale*this.canvas.width, rad*this.scale*this.canvas.height, 0, 0, Math.PI * 2);
+        this.ctx.closePath();
+        this.ctx.stroke();
+    }
 }
 
 export enum IntersectionState {
@@ -191,6 +216,7 @@ export class Frustum {
     public top: number;
     public near: number;
     public far: number;
+    public isOrthographic: boolean;
 
     // World-space configuration.
     public aabb: AABB = new AABB();
@@ -204,19 +230,20 @@ export class Frustum {
         return this.visualizer;
     }
 
-    public setViewFrustum(left: number, right: number, bottom: number, top: number, n: number, f: number): void {
+    public setViewFrustum(left: number, right: number, bottom: number, top: number, n: number, f: number, isOrthographic: boolean): void {
         this.left = left;
         this.right = right;
         this.bottom = bottom;
         this.top = top;
         this.near = -n;
         this.far = -f;
+        this.isOrthographic = isOrthographic;
     }
 
     public updateWorldFrustum(worldMatrix: mat4): void {
         const scratch = Frustum.scratchPlaneVec3;
 
-        const fn = this.far / this.near;
+        const fn = this.isOrthographic ? 1 : this.far / this.near;
         vec3.set(scratch[0], this.left, this.top, this.near);
         vec3.set(scratch[1], this.right, this.top, this.near);
         vec3.set(scratch[2], this.right, this.bottom, this.near);
@@ -241,9 +268,6 @@ export class Frustum {
 
         if (this.visualizer) {
             const ctx = this.visualizer.ctx;
-            const scale = this.visualizer.scale;
-            // TODO(jstpierre): why isn't this working?
-            ctx.setTransform(1, 0, 0, 1, -worldMatrix[12]*scale, -worldMatrix[14]*scale);
             ctx.strokeStyle = 'red';
             this.visualizer.daabb(this.aabb);
 
@@ -278,13 +302,13 @@ export class Frustum {
             const px = plane.x >= 0 ? aabb.minX : aabb.maxX;
             const py = plane.y >= 0 ? aabb.minY : aabb.maxY;
             const pz = plane.z >= 0 ? aabb.minZ : aabb.maxZ;
-            if (plane.test(px, py, pz) > 0)
+            if (plane.distance(px, py, pz) > 0)
                 return IntersectionState.FULLY_OUTSIDE;
             // Farthest point from the frustum.
             const fx = plane.x >= 0 ? aabb.maxX : aabb.minX;
             const fy = plane.y >= 0 ? aabb.maxY : aabb.minY;
             const fz = plane.z >= 0 ? aabb.maxZ : aabb.minZ;
-            if (plane.test(fx, fy, fz) > 0)
+            if (plane.distance(fx, fy, fz) > 0)
                 ret = IntersectionState.PARTIAL_INTERSECT;
         }
 
@@ -305,6 +329,49 @@ export class Frustum {
 
     public contains(aabb: AABB): boolean {
         return this.intersect(aabb) !== IntersectionState.FULLY_OUTSIDE;
+    }
+
+    private _intersectSphere(v: vec3, radius: number): IntersectionState {
+        if (!this.aabb.containsSphere(v, radius))
+            return IntersectionState.FULLY_OUTSIDE;
+
+        let res = IntersectionState.FULLY_INSIDE;
+        for (let i = 0; i < 6; i++) {
+            const dist = this.planes[i].distance(v[0], v[1], v[2]);
+            if (dist > radius)
+                return IntersectionState.FULLY_OUTSIDE;
+            else if (dist > -radius)
+                res = IntersectionState.PARTIAL_INTERSECT;
+        }
+
+        return res;
+    }
+
+    public intersectSphere(v: vec3, radius: number): IntersectionState {
+        const res = this._intersectSphere(v, radius);
+
+        if (this.visualizer) {
+            const ctx = this.visualizer.ctx;
+            ctx.strokeStyle = res === IntersectionState.FULLY_INSIDE ? 'black' : res === IntersectionState.FULLY_OUTSIDE ? 'red' : 'cyan';
+            this.visualizer.dsph(v, radius);
+        }
+
+        return res;
+    }
+
+    public containsSphere(v: vec3, radius: number): boolean {
+        return this.intersectSphere(v, radius) !== IntersectionState.FULLY_OUTSIDE;
+    }
+
+    public containsPoint(v: vec3): boolean {
+        if (!this.aabb.containsPoint(v))
+            return false;
+
+        for (let i = 0; i < 6; i++)
+            if (this.planes[i].distance(v[0], v[1], v[2]) > 0)
+                return false;
+
+        return true;
     }
 
     public newFrame(): void {

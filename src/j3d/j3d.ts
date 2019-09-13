@@ -1,7 +1,7 @@
 
 // Implements Nintendo's J3D formats (BMD, BDL, BTK, etc.)
 
-import { mat4, quat, vec3 } from 'gl-matrix';
+import { mat4, vec3 } from 'gl-matrix';
 
 import ArrayBufferSlice from '../ArrayBufferSlice';
 import { Endianness } from '../endian';
@@ -14,7 +14,12 @@ import AnimationController from '../AnimationController';
 import { ColorKind } from '../gx/gx_render';
 import { AABB } from '../Geometry';
 import { getPointHermite } from '../Spline';
+import { computeModelMatrixSRT } from '../MathHelpers';
+import BitMap from '../BitMap';
+import { autoOptimizeMaterial } from '../gx/gx_render';
+import { Color, colorNew } from '../Color';
 
+//#region Helpers
 function readStringTable(buffer: ArrayBufferSlice, offs: number): string[] {
     const view = buffer.createDataView(offs);
     const stringCount = view.getUint16(0x00);
@@ -31,88 +36,139 @@ function readStringTable(buffer: ArrayBufferSlice, offs: number): string[] {
     return strings;
 }
 
+export class JSystemFileReaderHelper {
+    public view: DataView;
+    public magic: string;
+    public size: number;
+    public numChunks: number;
+    public offs: number = 0x20;
+
+    constructor(public buffer: ArrayBufferSlice) {
+        this.view = this.buffer.createDataView();
+        this.magic = readString(this.buffer, 0, 8);
+        this.size = this.view.getUint32(0x08);
+        this.numChunks = this.view.getUint32(0x0C);
+        this.offs = 0x20;
+    }
+
+    public maybeNextChunk(maybeChunkId: string, sizeBias: number = 0): ArrayBufferSlice {
+        const chunkStart = this.offs;
+        const chunkId = readString(this.buffer, chunkStart + 0x00, 4);
+        const chunkSize = this.view.getUint32(chunkStart + 0x04) + sizeBias;
+        if (chunkId === maybeChunkId) {
+            this.offs += chunkSize;
+            return this.buffer.subarray(chunkStart, chunkSize);
+        } else {
+            return null;
+        }
+    }
+
+    public nextChunk(expectedChunkId: string, sizeBias: number = 0): ArrayBufferSlice {
+        const chunkStart = this.offs;
+        const chunkId = readString(this.buffer, chunkStart + 0x00, 4);
+        const chunkSize = this.view.getUint32(chunkStart + 0x04) + sizeBias;
+        assert(chunkId === expectedChunkId);
+        this.offs += chunkSize;
+        return this.buffer.subarray(chunkStart, chunkSize);
+    }
+}
+//#endregion
+//#region BTI_Texture
+export interface BTI_Texture {
+    name: string;
+    format: GX.TexFormat;
+    width: number;
+    height: number;
+    wrapS: GX.WrapMode;
+    wrapT: GX.WrapMode;
+    minFilter: GX.TexFilter;
+    magFilter: GX.TexFilter;
+    minLOD: number;
+    maxLOD: number;
+    lodBias: number;
+    mipCount: number;
+    data: ArrayBufferSlice | null;
+
+    // Palette data
+    paletteFormat: GX.TexPalette;
+    paletteData: ArrayBufferSlice | null;
+}
+
+function readBTI_Texture(buffer: ArrayBufferSlice, name: string): BTI_Texture {
+    const view = buffer.createDataView();
+
+    const format: GX.TexFormat = view.getUint8(0x00);
+    const width = view.getUint16(0x02);
+    const height = view.getUint16(0x04);
+    const wrapS = view.getUint8(0x06);
+    const wrapT = view.getUint8(0x07);
+    const paletteFormat = view.getUint8(0x09);
+    const paletteCount = view.getUint16(0x0A);
+    const paletteOffs = view.getUint32(0x0C);
+    const minFilter = view.getUint8(0x14);
+    const magFilter = view.getUint8(0x15);
+    const minLOD = view.getInt8(0x16) * 1/8;
+    const maxLOD = view.getInt8(0x17) * 1/8;
+    const mipCount = view.getUint8(0x18);
+    const lodBias = view.getInt16(0x1A) * 1/100;
+    const dataOffs = view.getUint32(0x1C);
+
+    assert(minLOD === 0);
+
+    let data: ArrayBufferSlice | null = null;
+    if (dataOffs !== 0)
+        data = buffer.slice(dataOffs);
+
+    let paletteData: ArrayBufferSlice | null = null;
+    if (paletteOffs !== 0)
+        paletteData = buffer.subarray(paletteOffs, paletteCount * 2);
+
+    return { name, format, width, height, wrapS, wrapT, minFilter, magFilter, minLOD, maxLOD, mipCount, lodBias, data, paletteFormat, paletteData };
+}
+//#endregion
+//#region BTI
+export class BTI {
+    texture: BTI_Texture;
+
+    public static parse(buffer: ArrayBufferSlice, name: string): BTI {
+        const bti = new BTI();
+        bti.texture = readBTI_Texture(buffer, name);
+        return bti;
+    }
+}
+//#endregion
+//#region J3DModel
 //#region INF1
-export enum HierarchyType {
+export const enum MatrixCalcType {
+    BASIC = 0x00,
+    XSI   = 0x01,
+    MAYA  = 0x02,
+}
+
+export enum HierarchyNodeType {
     End = 0x00,
     Open = 0x01,
     Close = 0x02,
     Joint = 0x10,
     Material = 0x11,
     Shape = 0x12,
-}
-
-// Build the scene graph.
-export interface HierarchyRootNode {
-    type: HierarchyType.End;
-    children: HierarchyNode[];
-}
-export interface HierarchyShapeNode {
-    type: HierarchyType.Shape;
-    children: HierarchyNode[];
-    shapeIdx: number;
-}
-export interface HierarchyJointNode {
-    type: HierarchyType.Joint;
-    children: HierarchyNode[];
-    jointIdx: number;
-}
-export interface HierarchyMaterialNode {
-    type: HierarchyType.Material;
-    children: HierarchyNode[];
-    materialIdx: number;
-}
-export type HierarchyNode = HierarchyRootNode | HierarchyShapeNode | HierarchyJointNode | HierarchyMaterialNode;
+};
 
 export interface INF1 {
-    sceneGraph: HierarchyNode;
+    hierarchyData: ArrayBufferSlice;
+    matrixCalcType: MatrixCalcType;
 }
 
 function readINF1Chunk(buffer: ArrayBufferSlice): INF1 {
     const view = buffer.createDataView();
-    // unk
+    const matrixCalcType: MatrixCalcType = view.getUint16(0x08) & 0x0F;
     const packetCount = view.getUint32(0x0C);
     const vertexCount = view.getUint32(0x10);
     const hierarchyOffs = view.getUint32(0x14);
-
-    let node: HierarchyNode = { type: HierarchyType.End, children: [] };
-    const parentStack: HierarchyNode[] = [node];
-    let offs = hierarchyOffs;
-
-    outer:
-    while (true) {
-        const type: HierarchyType = view.getUint16(offs + 0x00);
-        const value: number = view.getUint16(offs + 0x02);
-
-        offs += 0x04;
-        switch (type) {
-        case HierarchyType.End:
-            break outer;
-        case HierarchyType.Open:
-            parentStack.unshift(node);
-            break;
-        case HierarchyType.Close:
-            node = parentStack.shift();
-            break;
-        case HierarchyType.Joint:
-            node = { type, children: [], jointIdx: value };
-            parentStack[0].children.unshift(node);
-            break;
-        case HierarchyType.Material:
-            node = { type, children: [], materialIdx: value };
-            parentStack[0].children.unshift(node);
-            break;
-        case HierarchyType.Shape:
-            node = { type, children: [], shapeIdx: value };
-            parentStack[0].children.unshift(node);
-            break;
-        }
-    }
-
-    assert(parentStack.length === 1);
-    return { sceneGraph: parentStack.pop() };
+    const hierarchyData = buffer.slice(hierarchyOffs);
+    return { hierarchyData, matrixCalcType };
 }
 //#endregion
-
 //#region VTX1
 export interface VertexArray {
     vtxAttrib: GX.VertexAttribute;
@@ -198,11 +254,10 @@ function readVTX1Chunk(buffer: ArrayBufferSlice): VTX1 {
     return { vertexArrays };
 }
 //#endregion
-
 //#region EVP1
 interface WeightedBone {
     weight: number;
-    index: number;
+    jointIndex: number;
 }
 
 interface Envelope {
@@ -233,7 +288,7 @@ function readEVP1Chunk(buffer: ArrayBufferSlice): EVP1 {
         for (let j = 0; j < numWeightedBones; j++) {
             const index = view.getUint16(weightedBoneIndexTableOffs + weightedBoneId * 0x02);
             const weight = view.getFloat32(weightedBoneWeightTableOffs + weightedBoneId * 0x04);
-            weightedBones.push({ index, weight });
+            weightedBones.push({ jointIndex: index, weight });
             maxBoneIndex = Math.max(maxBoneIndex, index);
             weightedBoneId++;
         }
@@ -269,7 +324,6 @@ function readEVP1Chunk(buffer: ArrayBufferSlice): EVP1 {
     return { envelopes, inverseBinds };
 }
 //#endregion
-
 //#region DRW1
 export enum DRW1MatrixKind {
     Joint = 0x00,
@@ -312,50 +366,24 @@ function readDRW1Chunk(buffer: ArrayBufferSlice): DRW1 {
     return { matrixDefinitions };
 }
 //#endregion
-
 //#region JNT1
 export interface Joint {
     name: string;
-    matrix: mat4;
     scaleX: number;
     scaleY: number;
     scaleZ: number;
+    rotationX: number;
+    rotationY: number;
+    rotationZ: number;
+    translationX: number;
+    translationY: number;
+    translationZ: number;
     boundingSphereRadius: number;
     bbox: AABB;
 }
 
 export interface JNT1 {
     joints: Joint[];
-}
-
-function calcModelMtx(dst: mat4, scaleX: number, scaleY: number, scaleZ: number, rotationX: number, rotationY: number, rotationZ: number, translationX: number, translationY: number, translationZ: number): void {
-    const rX = Math.PI / 180 * rotationX;
-    const rY = Math.PI / 180 * rotationY;
-    const rZ = Math.PI / 180 * rotationZ;
-
-    const sinX = Math.sin(rX), cosX = Math.cos(rX);
-    const sinY = Math.sin(rY), cosY = Math.cos(rY);
-    const sinZ = Math.sin(rZ), cosZ = Math.cos(rZ);
-
-    dst[0] =  scaleX * (cosY * cosZ);
-    dst[1] =  scaleX * (sinZ * cosY);
-    dst[2] =  scaleX * (-sinY);
-    dst[3] =  0.0;
-
-    dst[4] =  scaleY * (sinX * cosZ * sinY - cosX * sinZ);
-    dst[5] =  scaleY * (sinX * sinZ * sinY + cosX * cosZ);
-    dst[6] =  scaleY * (sinX * cosY);
-    dst[7] =  0.0;
-
-    dst[8] =  scaleZ * (cosX * cosZ * sinY + sinX * sinZ);
-    dst[9] =  scaleZ * (cosX * sinZ * sinY - sinX * cosZ);
-    dst[10] = scaleZ * (cosY * cosX);
-    dst[11] = 0.0;
-
-    dst[12] = translationX;
-    dst[13] = translationY;
-    dst[14] = translationZ;
-    dst[15] = 1.0;
 }
 
 function readJNT1Chunk(buffer: ArrayBufferSlice): JNT1 {
@@ -378,12 +406,16 @@ function readJNT1Chunk(buffer: ArrayBufferSlice): JNT1 {
     for (let i = 0; i < jointDataCount; i++) {
         const name = nameTable[i];
         const jointDataTableIdx = jointDataTableOffs + (remapTable[i] * 0x40);
+        const mtxTypeFlags = view.getUint16(jointDataTableIdx + 0x00);
+        // Used in J3DMtxCalcCalcTransformMaya::calcTransform.
+        // Doesn't appear to be used in basic transforms...
+        const ignoreParentScale = view.getUint16(jointDataTableIdx + 0x02);
         const scaleX = view.getFloat32(jointDataTableIdx + 0x04);
         const scaleY = view.getFloat32(jointDataTableIdx + 0x08);
         const scaleZ = view.getFloat32(jointDataTableIdx + 0x0C);
-        const rotationX = view.getInt16(jointDataTableIdx + 0x10) / 0x7FFF * 180;
-        const rotationY = view.getInt16(jointDataTableIdx + 0x12) / 0x7FFF * 180;
-        const rotationZ = view.getInt16(jointDataTableIdx + 0x14) / 0x7FFF * 180;
+        const rotationX = view.getInt16(jointDataTableIdx + 0x10) / 0x7FFF * Math.PI;
+        const rotationY = view.getInt16(jointDataTableIdx + 0x12) / 0x7FFF * Math.PI;
+        const rotationZ = view.getInt16(jointDataTableIdx + 0x14) / 0x7FFF * Math.PI;
         const translationX = view.getFloat32(jointDataTableIdx + 0x18);
         const translationY = view.getFloat32(jointDataTableIdx + 0x1C);
         const translationZ = view.getFloat32(jointDataTableIdx + 0x20);
@@ -395,15 +427,12 @@ function readJNT1Chunk(buffer: ArrayBufferSlice): JNT1 {
         const bboxMaxY = view.getFloat32(jointDataTableIdx + 0x38);
         const bboxMaxZ = view.getFloat32(jointDataTableIdx + 0x3C);
         const bbox = new AABB(bboxMinX, bboxMinY, bboxMinZ, bboxMaxX, bboxMaxY, bboxMaxZ);
-        const matrix = mat4.create();
-        calcModelMtx(matrix, scaleX, scaleY, scaleZ, rotationX, rotationY, rotationZ, translationX, translationY, translationZ);
-        joints.push({ name, matrix, scaleX, scaleY, scaleZ, boundingSphereRadius, bbox });
+        joints.push({ name, scaleX, scaleY, scaleZ, rotationX, rotationY, rotationZ, translationX, translationY, translationZ, boundingSphereRadius, bbox });
     }
 
     return { joints };
 }
 //#endregion
-
 //#region SHP1
 // A packet is a series of draw calls that use the same matrix table.
 interface Packet {
@@ -426,6 +455,7 @@ export interface Shape {
     packets: Packet[];
     bbox: AABB;
     boundingSphereRadius: number;
+    materialIndex: number;
 }
 
 export interface SHP1 {
@@ -528,8 +558,10 @@ function readSHP1Chunk(buffer: ArrayBufferSlice, bmd: BMD): SHP1 {
         const bboxMaxZ = view.getFloat32(shapeIdx + 0x24);
         const bbox = new AABB(bboxMinX, bboxMinY, bboxMinZ, bboxMaxX, bboxMaxY, bboxMaxZ);
 
+        const materialIdx = -1;
+
         // Now we should have a complete shape. Onto the next!
-        shapes.push({ displayFlags, loadedVertexLayout, packets, bbox, boundingSphereRadius });
+        shapes.push({ displayFlags, loadedVertexLayout, packets, bbox, boundingSphereRadius, materialIndex: materialIdx });
 
         shapeIdx += 0x28;
     }
@@ -537,15 +569,14 @@ function readSHP1Chunk(buffer: ArrayBufferSlice, bmd: BMD): SHP1 {
     return { vat, shapes };
 }
 //#endregion
-
 //#region MAT3
 export const enum TexMtxProjection {
-    ST = 0,
-    STQ = 1,
+    MTX3x4 = 0,
+    MTX2x4 = 1,
 }
 
 export interface TexMtx {
-    type: number;
+    info: number;
     projection: TexMtxProjection;
     effectMatrix: mat4;
     matrix: mat4;
@@ -558,12 +589,11 @@ export interface MaterialEntry {
     textureIndexes: number[];
     gxMaterial: GX_Material.GXMaterial;
     texMatrices: TexMtx[];
-    postTexMatrices: TexMtx[];
     indTexMatrices: Float32Array[];
-    colorMatRegs: GX_Material.Color[];
-    colorAmbRegs: GX_Material.Color[];
-    colorConstants: GX_Material.Color[];
-    colorRegisters: GX_Material.Color[];
+    colorMatRegs: Color[];
+    colorAmbRegs: Color[];
+    colorConstants: Color[];
+    colorRegisters: Color[];
 }
 
 export interface MAT3 {
@@ -584,20 +614,35 @@ function calcTexMtx(m: mat4, scaleS: number, scaleT: number, rotation: number, t
     return m;
 }
 
-function readColor32(view: DataView, srcOffs: number): GX_Material.Color {
-    const r = view.getUint8(srcOffs + 0x00) / 255;
-    const g = view.getUint8(srcOffs + 0x01) / 255;
-    const b = view.getUint8(srcOffs + 0x02) / 255;
-    const a = view.getUint8(srcOffs + 0x03) / 255;
-    return new GX_Material.Color(r, g, b, a);
+function calcTexMtx_Maya(dst: mat4, scaleS: number, scaleT: number, rotation: number, translationS: number, translationT: number): void {
+    const theta = rotation * rotation;
+    const sinR = Math.sin(theta);
+    const cosR = Math.cos(theta);
+
+    mat4.identity(dst);
+
+    dst[0]  = scaleS *  cosR;
+    dst[1]  = scaleT * -sinR;
+    dst[4]  = scaleS *  sinR;
+    dst[5]  = scaleT *  cosR;
+    dst[12] = scaleS * ((-0.5 * cosR) - (0.5 * sinR - 0.5) - translationS);
+    dst[13] = scaleT * ((-0.5 * cosR) + (0.5 * sinR - 0.5) + translationT) + 1;
 }
 
-function readColorShort(view: DataView, srcOffs: number): GX_Material.Color {
-    const r = view.getInt16(srcOffs + 0x00) / 255;
-    const g = view.getInt16(srcOffs + 0x02) / 255;
-    const b = view.getInt16(srcOffs + 0x04) / 255;
-    const a = view.getInt16(srcOffs + 0x06) / 255;
-    return new GX_Material.Color(r, g, b, a);
+function readColorU8(view: DataView, srcOffs: number): Color {
+    const r = view.getUint8(srcOffs + 0x00) / 0xFF;
+    const g = view.getUint8(srcOffs + 0x01) / 0xFF;
+    const b = view.getUint8(srcOffs + 0x02) / 0xFF;
+    const a = view.getUint8(srcOffs + 0x03) / 0xFF;
+    return colorNew(r, g, b, a);
+}
+
+function readColorS16(view: DataView, srcOffs: number): Color {
+    const r = view.getInt16(srcOffs + 0x00) / 0xFF;
+    const g = view.getInt16(srcOffs + 0x02) / 0xFF;
+    const b = view.getInt16(srcOffs + 0x04) / 0xFF;
+    const a = view.getInt16(srcOffs + 0x06) / 0xFF;
+    return colorNew(r, g, b, a);
 }
 
 function readMAT3Chunk(buffer: ArrayBufferSlice): MAT3 {
@@ -648,19 +693,19 @@ function readMAT3Chunk(buffer: ArrayBufferSlice): MAT3 {
         const depthModeIndex = view.getUint8(materialEntryIdx + 0x06);
         // unk
 
-        const colorMatRegs: GX_Material.Color[] = [null, null];
+        const colorMatRegs: Color[] = [null, null];
         for (let j = 0; j < 2; j++) {
             const matColorIndex = view.getUint16(materialEntryIdx + 0x08 + j * 0x02);
             const matColorOffs = materialColorTableOffs + matColorIndex * 0x04;
-            const matColorReg = readColor32(view, matColorOffs);
+            const matColorReg = readColorU8(view, matColorOffs);
             colorMatRegs[j] = matColorReg;
         }
 
-        const colorAmbRegs: GX_Material.Color[] = [null, null];
+        const colorAmbRegs: Color[] = [null, null];
         for (let j = 0; j < 2; j++) {
             const ambColorIndex = view.getUint16(materialEntryIdx + 0x14 + j * 0x02);
             const ambColorOffs = ambientColorTableOffs + ambColorIndex * 0x04;
-            const ambColorReg = readColor32(view, ambColorOffs);
+            const ambColorReg = readColorU8(view, ambColorOffs);
             colorAmbRegs[j] = ambColorReg;
         }
 
@@ -706,11 +751,11 @@ function readMAT3Chunk(buffer: ArrayBufferSlice): MAT3 {
 
         const texMatrices: TexMtx[] = [];
         for (let j = 0; j < 10; j++) {
-            texMatrices[j] = null;
             const texMtxIndex = view.getInt16(materialEntryIdx + 0x48 + j * 0x02);
-            if (texMtxIndex < 0)
-                continue;
-            texMatrices[j] = readTexMatrix(texMtxTableOffs, j, texMtxIndex);
+            if (texMtxIndex >= 0)
+                texMatrices[j] = readTexMatrix(texMtxTableOffs, j, texMtxIndex);
+            else
+                texMatrices[j] = null;
         }
         // Since texture matrices are assigned in order, we should never actually have more than 8 of these.
         assert(texMatrices[8] === null);
@@ -725,17 +770,17 @@ function readMAT3Chunk(buffer: ArrayBufferSlice): MAT3 {
             postTexMatrices[j] = readTexMatrix(postTexMtxTableOffs, j, postTexMtxIndex);
         }
 
-        const colorConstants: GX_Material.Color[] = [];
+        const colorConstants: Color[] = [];
         for (let j = 0; j < 4; j++) {
             const colorIndex = view.getUint16(materialEntryIdx + 0x94 + j * 0x02);
-            const color = readColor32(view, colorConstantTableOffs + colorIndex * 0x04);
+            const color = readColorU8(view, colorConstantTableOffs + colorIndex * 0x04);
             colorConstants.push(color);
         }
 
-        const colorRegisters: GX_Material.Color[] = [];
+        const colorRegisters: Color[] = [];
         for (let j = 0; j < 4; j++) {
             const colorIndex = view.getUint16(materialEntryIdx + 0xDC + j * 0x02);
-            const color = readColorShort(view, colorRegisterTableOffs + colorIndex * 0x08);
+            const color = readColorS16(view, colorRegisterTableOffs + colorIndex * 0x08);
             colorRegisters.push(color);
         }
 
@@ -785,8 +830,8 @@ function readMAT3Chunk(buffer: ArrayBufferSlice): MAT3 {
                 const p12 = view.getFloat32(indTexMatrixOffs + 0x14);
                 const scale = Math.pow(2, view.getInt8(indTexMatrixOffs + 0x18));
                 const m = new Float32Array([
-                    p00*scale, p01*scale, p02*scale,
-                    p10*scale, p11*scale, p12*scale,
+                    p00*scale, p01*scale, p02*scale, scale,
+                    p10*scale, p11*scale, p12*scale, 0.0,
                 ]);
                 indTexMatrices.push(m);
             }
@@ -936,12 +981,13 @@ function readMAT3Chunk(buffer: ArrayBufferSlice): MAT3 {
             ropInfo,
         };
 
+        autoOptimizeMaterial(gxMaterial);
+
         materialEntries.push({
             index, name,
             translucent,
             textureIndexes,
             texMatrices,
-            postTexMatrices,
             gxMaterial,
             indTexMatrices,
             colorMatRegs,
@@ -970,7 +1016,7 @@ function readMAT3Chunk(buffer: ArrayBufferSlice): MAT3 {
             return null;
         const texMtxOffs = tableOffs + texMtxIndex * 0x64;
         const projection: TexMtxProjection = view.getUint8(texMtxOffs + 0x00);
-        const type = view.getUint8(texMtxOffs + 0x01);
+        const info = view.getUint8(texMtxOffs + 0x01);
         assert(view.getUint16(texMtxOffs + 0x02) === 0xFFFF);
         const centerS = view.getFloat32(texMtxOffs + 0x04);
         const centerT = view.getFloat32(texMtxOffs + 0x08);
@@ -982,7 +1028,6 @@ function readMAT3Chunk(buffer: ArrayBufferSlice): MAT3 {
         const translationS = view.getFloat32(texMtxOffs + 0x1C);
         const translationT = view.getFloat32(texMtxOffs + 0x20);
 
-        // A second matrix?
         const p00 = view.getFloat32(texMtxOffs + 0x24);
         const p01 = view.getFloat32(texMtxOffs + 0x28);
         const p02 = view.getFloat32(texMtxOffs + 0x2C);
@@ -1007,71 +1052,21 @@ function readMAT3Chunk(buffer: ArrayBufferSlice): MAT3 {
             p03, p13, p23, p33,
         );
 
+        const maya = !!((info) & 0x80);
         const matrix = mat4.create();
-        calcTexMtx(matrix, scaleS, scaleT, rotation, translationS, translationT, centerS, centerT, centerQ);
+        if (maya) {
+            calcTexMtx_Maya(matrix, scaleS, scaleT, rotation, translationS, translationT);
+        } else {
+            calcTexMtx(matrix, scaleS, scaleT, rotation, translationS, translationT, centerS, centerT, centerQ);
+        }
 
-        const texMtx: TexMtx = { type, projection, effectMatrix, matrix };
+        const texMtx: TexMtx = { info, projection, effectMatrix, matrix };
         return texMtx;
     }
 
     return { materialEntries };
 }
 //#endregion
-
-//#region BTI_Texture
-export interface BTI_Texture {
-    name: string;
-    format: GX.TexFormat;
-    width: number;
-    height: number;
-    wrapS: GX.WrapMode;
-    wrapT: GX.WrapMode;
-    minFilter: GX.TexFilter;
-    magFilter: GX.TexFilter;
-    minLOD: number;
-    maxLOD: number;
-    lodBias: number;
-    mipCount: number;
-    data: ArrayBufferSlice | null;
-
-    // Palette data
-    paletteFormat: GX.TexPalette;
-    paletteData: ArrayBufferSlice | null;
-}
-
-function readBTI_Texture(buffer: ArrayBufferSlice, name: string): BTI_Texture {
-    const view = buffer.createDataView();
-
-    const format: GX.TexFormat = view.getUint8(0x00);
-    const width = view.getUint16(0x02);
-    const height = view.getUint16(0x04);
-    const wrapS = view.getUint8(0x06);
-    const wrapT = view.getUint8(0x07);
-    const paletteFormat = view.getUint8(0x09);
-    const paletteCount = view.getUint16(0x0A);
-    const paletteOffs = view.getUint32(0x0C);
-    const minFilter = view.getUint8(0x14);
-    const magFilter = view.getUint8(0x15);
-    const minLOD = view.getInt8(0x16) * 1/8;
-    const maxLOD = view.getInt8(0x17) * 1/8;
-    const mipCount = view.getUint8(0x18);
-    const lodBias = view.getInt16(0x1A) * 1/100;
-    const dataOffs = view.getUint32(0x1C);
-
-    assert(minLOD === 0);
-
-    let data: ArrayBufferSlice | null = null;
-    if (dataOffs !== 0)
-        data = buffer.slice(dataOffs);
-
-    let paletteData: ArrayBufferSlice | null = null;
-    if (paletteOffs !== 0)
-        paletteData = buffer.subarray(paletteOffs, paletteCount * 2);
-
-    return { name, format, width, height, wrapS, wrapT, minFilter, magFilter, minLOD, maxLOD, mipCount, lodBias, data, paletteFormat, paletteData };
-}
-//#endregion
-
 //#region TEX1
 // The way this works is a bit complicated. Basically, textures can have different
 // LOD or wrap modes but share the same literal texture data. As such, we do a bit
@@ -1079,7 +1074,6 @@ function readBTI_Texture(buffer: ArrayBufferSlice, name: string): BTI_Texture {
 // TEX1_Sampler contains the "sampling" parameters like LOD or wrap mode, along with
 // its associated texture data. Each texture in the TEX1 chunk is turned into a
 // TEX1_Surface.
-
 export interface TEX1_TextureData {
     // The name can be used for external lookups and is required.
     name: string;
@@ -1165,51 +1159,41 @@ function readTEX1Chunk(buffer: ArrayBufferSlice): TEX1 {
 
     return { textureDatas, samplers };
 }
-
-class J3DFileReaderHelper {
-    public view: DataView;
-    public magic: string;
-    public size: number;
-    public numChunks: number;
-    public offs: number = 0x20;
-
-    constructor(public buffer: ArrayBufferSlice) {
-        this.view = this.buffer.createDataView();
-        this.magic = readString(this.buffer, 0, 8);
-        this.size = this.view.getUint32(0x08);
-        this.numChunks = this.view.getUint32(0x0C);
-        this.offs = 0x20;
-    }
-
-    public maybeNextChunk(maybeChunkId: string, sizeBias: number = 0): ArrayBufferSlice {
-        const chunkStart = this.offs;
-        const chunkId = readString(this.buffer, chunkStart + 0x00, 4);
-        const chunkSize = this.view.getUint32(chunkStart + 0x04) + sizeBias;
-        if (chunkId === maybeChunkId) {
-            this.offs += chunkSize;
-            return this.buffer.subarray(chunkStart, chunkSize);
-        } else {
-            return null;
-        }
-    }
-
-    public nextChunk(expectedChunkId: string, sizeBias: number = 0): ArrayBufferSlice {
-        const chunkStart = this.offs;
-        const chunkId = readString(this.buffer, chunkStart + 0x00, 4);
-        const chunkSize = this.view.getUint32(chunkStart + 0x04) + sizeBias;
-        assert(chunkId === expectedChunkId);
-        this.offs += chunkSize;
-        return this.buffer.subarray(chunkStart, chunkSize);
-    }
-}
 //#endregion
-
 //#region BMD
+function assocHierarchy(bmd: BMD): void {
+    const view = bmd.inf1.hierarchyData.createDataView();
+
+    let offs = 0x00;
+    let currentMaterialIndex = -1;
+    while (true) {
+        const type: HierarchyNodeType = view.getUint16(offs + 0x00);
+        const value = view.getUint16(offs + 0x02);
+
+        if (type === HierarchyNodeType.End) {
+            break;
+        } else if (type === HierarchyNodeType.Material) {
+            currentMaterialIndex = value;
+        } else if (type === HierarchyNodeType.Shape) {
+            const shape = bmd.shp1.shapes[value];
+            assert(currentMaterialIndex !== -1);
+            assert(shape.materialIndex === -1);
+            shape.materialIndex = currentMaterialIndex;
+        }
+
+        offs += 0x04;
+    }
+
+    // Double-check that we have everything done.
+    for (let i = 0; i < bmd.shp1.shapes.length; i++)
+        assert(bmd.shp1.shapes[i].materialIndex !== -1);
+}
+
 export class BMD {
     public static parse(buffer: ArrayBufferSlice): BMD {
         const bmd = new BMD();
 
-        const j3d = new J3DFileReaderHelper(buffer);
+        const j3d = new JSystemFileReaderHelper(buffer);
         assert(j3d.magic === 'J3D2bmd3' || j3d.magic === 'J3D2bdl4');
 
         bmd.inf1 = readINF1Chunk(j3d.nextChunk('INF1'));
@@ -1221,6 +1205,8 @@ export class BMD {
         bmd.mat3 = readMAT3Chunk(j3d.nextChunk('MAT3'));
         const mdl3 = j3d.maybeNextChunk('MDL3');
         bmd.tex1 = readTEX1Chunk(j3d.nextChunk('TEX1'));
+
+        assocHierarchy(bmd);
 
         return bmd;
     }
@@ -1235,13 +1221,13 @@ export class BMD {
     public tex1: TEX1;
 }
 //#endregion
-
+//#endregion
 //#region BMT
 export class BMT {
     public static parse(buffer: ArrayBufferSlice): BMT {
         const bmt = new BMT();
 
-        const j3d = new J3DFileReaderHelper(buffer);
+        const j3d = new JSystemFileReaderHelper(buffer);
         assert(j3d.magic === 'J3D2bmt3');
 
         const mat3Chunk = j3d.maybeNextChunk('MAT3');
@@ -1258,19 +1244,6 @@ export class BMT {
     public tex1: TEX1;
 }
 //#endregion
-
-//#region BTI
-export class BTI {
-    texture: BTI_Texture;
-
-    public static parse(buffer: ArrayBufferSlice, name: string = null): BTI {
-        const bti = new BTI();
-        bti.texture = readBTI_Texture(buffer, name);
-        return bti;
-    }
-}
-//#endregion
-
 //#region Animation Core
 export const enum LoopMode {
     ONCE = 0,
@@ -1318,10 +1291,6 @@ function getAnimFrame(anim: AnimationBase, frame: number, loopMode: LoopMode = a
     const normTime = frame / lastFrame;
     const animFrame = applyLoopMode(normTime, loopMode) * lastFrame;
     return animFrame;
-}
-
-function lerp(k0: AnimationKeyframe, k1: AnimationKeyframe, t: number) {
-    return k0.value + (k1.value - k0.value) * t;
 }
 
 function hermiteInterpolate(k0: AnimationKeyframe, k1: AnimationKeyframe, t: number): number {
@@ -1390,9 +1359,9 @@ function translateAnimationTrack(data: Float32Array | Int16Array, scale: number,
     }
 }
 //#endregion
-
+//#region J3DAnmTextureSRTKey
 //#region TTK1
-interface UVAnimationEntry {
+interface TTK1AnimationEntry {
     materialName: string;
     remapIndex: number;
     texGenIndex: number;
@@ -1411,7 +1380,7 @@ interface UVAnimationEntry {
 }
 
 export interface TTK1 extends AnimationBase {
-    uvAnimationEntries: UVAnimationEntry[];
+    uvAnimationEntries: TTK1AnimationEntry[];
 }
 
 function readTTK1Chunk(buffer: ArrayBufferSlice): TTK1 {
@@ -1450,7 +1419,7 @@ function readTTK1Chunk(buffer: ArrayBufferSlice): TTK1 {
         return translateAnimationTrack(data, scale, count, index, tangent);
     }
 
-    const uvAnimationEntries: UVAnimationEntry[] = [];
+    const uvAnimationEntries: TTK1AnimationEntry[] = [];
     for (let i = 0; i < animationCount; i++) {
         const materialName = materialNameTable[i];
         const remapIndex = view.getUint16(remapTableOffs + i * 0x02);
@@ -1480,22 +1449,26 @@ function readTTK1Chunk(buffer: ArrayBufferSlice): TTK1 {
 }
 
 export class TTK1Animator {
-    constructor(public animationController: AnimationController, private ttk1: TTK1, private animationEntry: UVAnimationEntry) {}
+    constructor(public animationController: AnimationController, private ttk1: TTK1, private animationEntry: TTK1AnimationEntry) {}
 
-    public calcTexMtx(dst: mat4): void {
+    public calcTexMtx(dst: mat4, maya: boolean): void {
         const frame = this.animationController.getTimeInFrames();
         const animFrame = getAnimFrame(this.ttk1, frame);
 
-        const centerS = this.animationEntry.centerS;
-        const centerT = this.animationEntry.centerT;
-        const centerQ = this.animationEntry.centerQ;
         const scaleS = sampleAnimationData(this.animationEntry.scaleS, animFrame);
         const scaleT = sampleAnimationData(this.animationEntry.scaleT, animFrame);
         const rotation = sampleAnimationData(this.animationEntry.rotationQ, animFrame);
         const translationS = sampleAnimationData(this.animationEntry.translationS, animFrame);
         const translationT = sampleAnimationData(this.animationEntry.translationT, animFrame);
 
-        calcTexMtx(dst, scaleS, scaleT, rotation, translationS, translationT, centerS, centerT, centerQ);
+        if (maya) {
+            calcTexMtx_Maya(dst, scaleS, scaleT, rotation, translationS, translationT);
+        } else {
+            const centerS = this.animationEntry.centerS;
+            const centerT = this.animationEntry.centerT;
+            const centerQ = this.animationEntry.centerQ;
+            calcTexMtx(dst, scaleS, scaleT, rotation, translationS, translationT, centerS, centerT, centerQ);
+        }
     }
 }
 
@@ -1507,13 +1480,12 @@ export function bindTTK1Animator(animationController: AnimationController, ttk1:
     return new TTK1Animator(animationController, ttk1, animationEntry);
 }
 //#endregion
-
 //#region BTK
 export class BTK {
     public static parse(buffer: ArrayBufferSlice): BTK {
         const btk = new BTK();
 
-        const j3d = new J3DFileReaderHelper(buffer);
+        const j3d = new JSystemFileReaderHelper(buffer);
         assert(j3d.magic === 'J3D1btk1');
 
         // For some reason, TTK1 chunks have an invalid size chunk with 0x04 extra bytes.
@@ -1525,9 +1497,10 @@ export class BTK {
     public ttk1: TTK1;
 }
 //#endregion
-
+//#endregion
+//#region J3DAnmTevRegKey
 //#region TRK1
-interface PaletteAnimationEntry {
+interface TRK1AnimationEntry {
     materialName: string;
     remapIndex: number;
     colorKind: ColorKind;
@@ -1538,7 +1511,7 @@ interface PaletteAnimationEntry {
 }
 
 export interface TRK1 extends AnimationBase {
-    animationEntries: PaletteAnimationEntry[];
+    animationEntries: TRK1AnimationEntry[];
 }
 
 function readTRK1Chunk(buffer: ArrayBufferSlice): TRK1 {
@@ -1582,7 +1555,7 @@ function readTRK1Chunk(buffer: ArrayBufferSlice): TRK1 {
         return translateAnimationTrack(data, 1 / 0xFF, count, index, tangent);
     }
 
-    const animationEntries: PaletteAnimationEntry[] = [];
+    const animationEntries: TRK1AnimationEntry[] = [];
 
     const registerRTable = buffer.createTypedArray(Int16Array, registerROffs, registerRCount, Endianness.BIG_ENDIAN);
     const registerGTable = buffer.createTypedArray(Int16Array, registerGOffs, registerGCount, Endianness.BIG_ENDIAN);
@@ -1626,9 +1599,9 @@ function readTRK1Chunk(buffer: ArrayBufferSlice): TRK1 {
 }
 
 export class TRK1Animator {
-    constructor(public animationController: AnimationController, private trk1: TRK1, private animationEntry: PaletteAnimationEntry) {}
+    constructor(public animationController: AnimationController, private trk1: TRK1, private animationEntry: TRK1AnimationEntry) {}
 
-    public calcColor(dst: GX_Material.Color): void {
+    public calcColor(dst: Color): void {
         const frame = this.animationController.getTimeInFrames();
         const animFrame = getAnimFrame(this.trk1, frame);
 
@@ -1647,13 +1620,12 @@ export function bindTRK1Animator(animationController: AnimationController, trk1:
     return new TRK1Animator(animationController, trk1, animationEntry);
 }
 //#endregion
-
 //#region BRK
 export class BRK {
     public static parse(buffer: ArrayBufferSlice): BRK {
         const brk = new BRK();
 
-        const j3d = new J3DFileReaderHelper(buffer);
+        const j3d = new JSystemFileReaderHelper(buffer);
         assert(j3d.magic === 'J3D1brk1');
 
         brk.trk1 = readTRK1Chunk(j3d.nextChunk('TRK1'));
@@ -1664,10 +1636,79 @@ export class BRK {
     public trk1: TRK1;
 }
 //#endregion
+//#endregion
+//#region J3DAnmColorKey
+//#region PAK1
+function readPAK1Chunk(buffer: ArrayBufferSlice): TRK1 {
+    const view = buffer.createDataView();
+    const loopMode: LoopMode = view.getUint8(0x08);
+    const duration = view.getUint16(0x0C);
+    const colorAnimationTableCount = view.getUint16(0x0E);
+    const rCount = view.getUint16(0x10);
+    const gCount = view.getUint16(0x12);
+    const bCount = view.getUint16(0x14);
+    const aCount = view.getUint16(0x16);
+    const colorAnimationTableOffs = view.getUint32(0x18);
+    const remapTableOffs = view.getUint32(0x1C);
+    const nameTableOffs = view.getUint32(0x20);
+    const rOffs = view.getUint32(0x24);
+    const gOffs = view.getUint32(0x28);
+    const bOffs = view.getUint32(0x2C);
+    const aOffs = view.getUint32(0x30);
+    const nameTable = readStringTable(buffer, nameTableOffs);
 
+    let animationTableIdx: number;
+
+    function readAnimationTrack(data: Int16Array) {
+        const count = view.getUint16(animationTableIdx + 0x00);
+        const index = view.getUint16(animationTableIdx + 0x02);
+        const tangent: TangentType = view.getUint16(animationTableIdx + 0x04);
+        animationTableIdx += 0x06;
+        return translateAnimationTrack(data, 1 / 0xFF, count, index, tangent);
+    }
+
+    const animationEntries: TRK1AnimationEntry[] = [];
+
+    const registerRTable = buffer.createTypedArray(Int16Array, rOffs, rCount, Endianness.BIG_ENDIAN);
+    const registerGTable = buffer.createTypedArray(Int16Array, gOffs, gCount, Endianness.BIG_ENDIAN);
+    const registerBTable = buffer.createTypedArray(Int16Array, bOffs, bCount, Endianness.BIG_ENDIAN);
+    const registerATable = buffer.createTypedArray(Int16Array, aOffs, aCount, Endianness.BIG_ENDIAN);
+
+    animationTableIdx = colorAnimationTableOffs;
+    for (let i = 0; i < colorAnimationTableCount; i++) {
+        const materialName = nameTable[i];
+        const remapIndex = view.getUint16(remapTableOffs + i * 0x02);
+        const r = readAnimationTrack(registerRTable);
+        const g = readAnimationTrack(registerGTable);
+        const b = readAnimationTrack(registerBTable);
+        const a = readAnimationTrack(registerATable);
+        const colorKind = ColorKind.MAT0;
+        animationEntries.push({ materialName, remapIndex, colorKind, r, g, b, a });
+    }
+
+    return { duration, loopMode, animationEntries };
+}
+//#endregion
+//#region BPK
+export class BPK {
+    public static parse(buffer: ArrayBufferSlice): BPK {
+        const bpk = new BPK();
+
+        const j3d = new JSystemFileReaderHelper(buffer);
+        assert(j3d.magic === 'J3D1bpk1');
+
+        bpk.pak1 = readPAK1Chunk(j3d.nextChunk('PAK1'));
+
+        return bpk;
+    }
+
+    public pak1: TRK1;
+}
+//#endregion
+//#endregion
+//#region J3DAnmTransformKey
 //#region ANK1
 interface JointAnimationEntry {
-    index: number;
     scaleX: AnimationTrack;
     rotationX: AnimationTrack;
     translationX: AnimationTrack;
@@ -1724,7 +1765,6 @@ function readANK1Chunk(buffer: ArrayBufferSlice): ANK1 {
         const rotationZ = readAnimationTrack(rTable, rotationScale);
         const translationZ = readAnimationTrack(tTable, 1);
         jointAnimationEntries.push({
-            index: i,
             scaleX, rotationX, translationX,
             scaleY, rotationY, translationY,
             scaleZ, rotationZ, translationZ,
@@ -1734,42 +1774,65 @@ function readANK1Chunk(buffer: ArrayBufferSlice): ANK1 {
     return { loopMode, duration, jointAnimationEntries };
 }
 
+export function calcJointMatrix(dst: mat4, jointIndex: number, bmd: BMD, ank1Animator: ANK1Animator | null): void {
+    let scaleX: number;
+    let scaleY: number;
+    let scaleZ: number;
+    let rotationX: number;
+    let rotationY: number;
+    let rotationZ: number;
+    let translationX: number;
+    let translationY: number;
+    let translationZ: number;
+
+    let entry: JointAnimationEntry | null = null;
+
+    if (ank1Animator !== null)
+        entry = ank1Animator.ank1.jointAnimationEntries[jointIndex] || null;
+
+    if (entry !== null) {
+        const frame = ank1Animator.animationController.getTimeInFrames();
+        const animFrame = getAnimFrame(ank1Animator.ank1, frame);
+
+        scaleX = sampleAnimationData(entry.scaleX, animFrame);
+        scaleY = sampleAnimationData(entry.scaleY, animFrame);
+        scaleZ = sampleAnimationData(entry.scaleZ, animFrame);
+        rotationX = sampleAnimationData(entry.rotationX, animFrame) * Math.PI;
+        rotationY = sampleAnimationData(entry.rotationY, animFrame) * Math.PI;
+        rotationZ = sampleAnimationData(entry.rotationZ, animFrame) * Math.PI;
+        translationX = sampleAnimationData(entry.translationX, animFrame);
+        translationY = sampleAnimationData(entry.translationY, animFrame);
+        translationZ = sampleAnimationData(entry.translationZ, animFrame);
+    } else {
+        const jnt1 = bmd.jnt1.joints[jointIndex];
+        scaleX = jnt1.scaleX;
+        scaleY = jnt1.scaleY;
+        scaleZ = jnt1.scaleZ;
+        rotationX = jnt1.rotationX;
+        rotationY = jnt1.rotationY;
+        rotationZ = jnt1.rotationZ;
+        translationX = jnt1.translationX;
+        translationY = jnt1.translationY;
+        translationZ = jnt1.translationZ;
+    }
+
+    computeModelMatrixSRT(dst, scaleX, scaleY, scaleZ, rotationX, rotationY, rotationZ, translationX, translationY, translationZ);
+}
+
 export class ANK1Animator { 
     constructor(public animationController: AnimationController, public ank1: ANK1) {}
-
-    public calcJointMatrix(dst: mat4, jointIndex: number): boolean {
-        const entry = this.ank1.jointAnimationEntries[jointIndex];
-        if (!entry)
-            return false;
-
-        const frame = this.animationController.getTimeInFrames();
-        const animFrame = getAnimFrame(this.ank1, frame);
-
-        const scaleX = sampleAnimationData(entry.scaleX, animFrame);
-        const scaleY = sampleAnimationData(entry.scaleY, animFrame);
-        const scaleZ = sampleAnimationData(entry.scaleZ, animFrame);
-        const rotationX = sampleAnimationData(entry.rotationX, animFrame) * 180;
-        const rotationY = sampleAnimationData(entry.rotationY, animFrame) * 180;
-        const rotationZ = sampleAnimationData(entry.rotationZ, animFrame) * 180;
-        const translationX = sampleAnimationData(entry.translationX, animFrame);
-        const translationY = sampleAnimationData(entry.translationY, animFrame);
-        const translationZ = sampleAnimationData(entry.translationZ, animFrame);
-        calcModelMtx(dst, scaleX, scaleY, scaleZ, rotationX, rotationY, rotationZ, translationX, translationY, translationZ);
-        return true;
-    }
 }
 
 export function bindANK1Animator(animationController: AnimationController, ank1: ANK1): ANK1Animator {
     return new ANK1Animator(animationController, ank1);
 }
 //#endregion
-
 //#region BCK
 export class BCK {
     public static parse(buffer: ArrayBufferSlice): BCK {
         const bck = new BCK();
 
-        const j3d = new J3DFileReaderHelper(buffer);
+        const j3d = new JSystemFileReaderHelper(buffer);
         assert(j3d.magic === 'J3D1bck1');
 
         bck.ank1 = readANK1Chunk(j3d.nextChunk('ANK1'));
@@ -1780,12 +1843,104 @@ export class BCK {
     public ank1: ANK1;
 }
 //#endregion
+//#endregion
+//#region J3DAnmTexPattern
+//#region TPT1
+interface TPT1AnimationEntry {
+    materialName: string;
+    remapIndex: number;
+    textureIndices: number[];
+}
 
+export interface TPT1 extends AnimationBase {
+    animationEntries: TPT1AnimationEntry[];
+}
+
+function readTPT1Chunk(buffer: ArrayBufferSlice): TPT1 {
+    const view = buffer.createDataView();
+    const loopMode: LoopMode = view.getUint8(0x08);
+    const duration = view.getUint16(0x0A);
+    const materialAnimationTableCount = view.getUint16(0x0C);
+    const textureIndexTableCount = view.getUint16(0x0E);
+    const materialAnimationTableOffs = view.getUint32(0x10);
+    const textureIndexTableOffs = view.getUint32(0x14);
+    const remapTableOffs = view.getUint32(0x18);
+    const nameTableOffs = view.getUint32(0x1C);
+    const nameTable = readStringTable(buffer, nameTableOffs);
+
+    let animationTableIdx: number;
+
+    const animationEntries: TPT1AnimationEntry[] = [];
+
+    animationTableIdx = materialAnimationTableOffs;
+    for (let i = 0; i < materialAnimationTableCount; i++) {
+        const materialName = nameTable[i];
+        const remapIndex = view.getUint16(remapTableOffs + i * 0x02);
+
+        const textureCount = view.getUint16(animationTableIdx + 0x00);
+        const textureFirstIndex = view.getUint16(animationTableIdx + 0x02);
+
+        const textureIndices: number[] = [];
+        for (let j = 0; j < textureCount; j++) {
+            const textureIndex = view.getUint16(textureIndexTableOffs + (textureFirstIndex + j) * 0x02);
+            textureIndices.push(textureIndex);
+        }
+
+        animationEntries.push({ materialName, remapIndex, textureIndices });
+        animationTableIdx += 0x08;
+    }
+
+    return { duration, loopMode, animationEntries };
+}
+
+export class TPT1Animator { 
+    constructor(public animationController: AnimationController, private tpt1: TPT1, private animationEntry: TPT1AnimationEntry) {}
+
+    public calcTextureIndex(): number {
+        const frame = this.animationController.getTimeInFrames();
+        const animFrame = getAnimFrame(this.tpt1, frame);
+
+        // animFrame can return a partial keyframe, but visibility information is frame-specific.
+        // Resolve this by treating this as a stepped track, floored. e.g. 15.9 is keyframe 15.
+
+        return this.animationEntry.textureIndices[(animFrame | 0)];
+    }
+}
+
+export function bindTPT1Animator(animationController: AnimationController, tpt1: TPT1, materialName: string, texMap: GX.TexMapID): TPT1Animator {
+    // TODO(jstpierre): How does TPT1 determine the TexMap used?
+    if (texMap !== 0)
+        return null;
+
+    const animationEntry = tpt1.animationEntries.find((entry) => entry.materialName === materialName);
+    if (animationEntry === undefined)
+        return null;
+
+    return new TPT1Animator(animationController, tpt1, animationEntry);
+}
+//#endregion
+//#region BTP
+export class BTP {
+    public static parse(buffer: ArrayBufferSlice): BTP {
+        const btp = new BTP();
+
+        const j3d = new JSystemFileReaderHelper(buffer);
+        assert(j3d.magic === 'J3D1btp1');
+
+        btp.tpt1 = readTPT1Chunk(j3d.nextChunk('TPT1'));
+
+        return btp;
+    }
+
+    public tpt1: TPT1;
+}
+//#endregion
+//#endregion
+//#region J3DAnmVisibilityFull
 //#region VAF1
 
-// TODO(jstpierre): Add a more memory efficient version than this?
 export interface ShapeVisibilityEntry {
-    shapeVisibility: boolean[];
+    shapeVisibility: BitMap;
 }
 
 export interface VAF1 extends AnimationBase {
@@ -1805,13 +1960,14 @@ function readVAF1Chunk(buffer: ArrayBufferSlice): VAF1 {
 
     const shapeVisibilityEntries: ShapeVisibilityEntry[] = [];
     for (let i = 0; i < visibilityAnimationTableCount; i++) {
-        const showFirstIndex = view.getUint16(animationTableIdx + 0x00);
-        const showCount = view.getUint16(animationTableIdx + 0x02);
+        const showCount = view.getUint16(animationTableIdx + 0x00);
+        const showFirstIndex = view.getUint16(animationTableIdx + 0x02);
 
-        const shapeVisibility: boolean[] = [];
+        assert(showCount > 0);
+        const shapeVisibility = new BitMap(showCount);
         for (let j = 0; j < showCount; j++) {
             const show = !!view.getUint8(showTableOffs + showFirstIndex + j);
-            shapeVisibility.push(show);
+            shapeVisibility.setBit(j, show);
         }
 
         shapeVisibilityEntries.push({ shapeVisibility });
@@ -1827,17 +1983,19 @@ export class VAF1Animator {
     public calcVisibility(shapeIndex: number): boolean {
         const entry = assertExists(this.vaf1.visibilityAnimationTracks[shapeIndex]);
 
-        // Empty tracks are visible by default.
-        if (entry.shapeVisibility.length === 0)
-            return true;
-
         const frame = this.animationController.getTimeInFrames();
         const animFrame = getAnimFrame(this.vaf1, frame);
 
         // animFrame can return a partial keyframe, but visibility information is frame-specific.
-        // Resolve this by treating this as a stepped track, floored. e.g. 15.9 is keyframe 15.
+        // Resolve this by treating this as a stepped track, rounded. e.g. 15.9 is keyframe 16.
+        const animFrameInt = (animFrame + 0.5) | 0;
 
-        return entry.shapeVisibility[(animFrame | 0)];
+        if (animFrameInt >= entry.shapeVisibility.numBits) {
+            // If we're past the end, use the last frame.
+            return entry.shapeVisibility.getBit(entry.shapeVisibility.numBits - 1);
+        } else {
+            return entry.shapeVisibility.getBit(animFrameInt);
+        }
     }
 }
 
@@ -1845,13 +2003,12 @@ export function bindVAF1Animator(animationController: AnimationController, vaf1:
     return new VAF1Animator(animationController, vaf1);
 }
 //#endregion
-
 //#region BVA
 export class BVA {
     public static parse(buffer: ArrayBufferSlice): BVA {
         const bva = new BVA();
 
-        const j3d = new J3DFileReaderHelper(buffer);
+        const j3d = new JSystemFileReaderHelper(buffer);
         assert(j3d.magic === 'J3D1bva1');
 
         bva.vaf1 = readVAF1Chunk(j3d.nextChunk('VAF1'));
@@ -1861,4 +2018,5 @@ export class BVA {
 
     public vaf1: VAF1;
 }
+//#endregion
 //#endregion

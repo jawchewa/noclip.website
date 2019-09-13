@@ -7,66 +7,80 @@ import * as NSBTA from './nsbta';
 import * as NSBTP from './nsbtp';
 import * as NSBTX from './nsbtx';
 
-import { fetchData } from '../fetch';
-import Progressable from '../Progressable';
+import { DataFetcher, DataFetcherFlags } from '../DataFetcher';
 import ArrayBufferSlice from '../ArrayBufferSlice';
 import { GfxDevice, GfxHostAccessPass, GfxRenderPass } from '../gfx/platform/GfxPlatform';
 import { MDL0Renderer, G3DPass } from './render';
 import { assert } from '../util';
 import { mat4 } from 'gl-matrix';
-import { GfxRenderInstViewRenderer } from '../gfx/render/GfxRenderer';
 import { BasicRenderTarget, depthClearRenderPassDescriptor, transparentBlackFullClearRenderPassDescriptor } from '../gfx/helpers/RenderTargetHelpers';
 import { FakeTextureHolder } from '../TextureHolder';
+import { GfxRenderInstManager } from '../gfx/render/GfxRenderer';
+import { GfxRenderDynamicUniformBuffer } from '../gfx/render/GfxRenderDynamicUniformBuffer';
+import { SceneContext } from '../SceneBase';
 
 export class WorldMapRenderer implements Viewer.SceneGfx {
-    public viewRenderer = new GfxRenderInstViewRenderer();
     public renderTarget = new BasicRenderTarget();
+    public renderInstManager = new GfxRenderInstManager();
+    public uniformBuffer: GfxRenderDynamicUniformBuffer;
     public textureHolder: FakeTextureHolder;
 
-    constructor(device: GfxDevice, public objs: MDL0Renderer[]) {
-        let viewerTextures: Viewer.Texture[] = [];
+    constructor(device: GfxDevice, public objectRenderers: MDL0Renderer[]) {
+        this.uniformBuffer = new GfxRenderDynamicUniformBuffer(device);
 
-        for (let i = 0; i < this.objs.length; i++) {
-            const element = this.objs[i];
-            viewerTextures = viewerTextures.concat(element.viewerTextures);
-            element.addToViewRenderer(device, this.viewRenderer);
+        const viewerTextures: Viewer.Texture[] = [];
+        for (let i = 0; i < this.objectRenderers.length; i++) {
+            const element = this.objectRenderers[i];
+            for (let j = 0; j < element.viewerTextures.length; j++)
+                viewerTextures.push(element.viewerTextures[j]);
         }
-
         this.textureHolder = new FakeTextureHolder(viewerTextures);
     }
 
-    public prepareToRender(hostAccessPass: GfxHostAccessPass, viewerInput: Viewer.ViewerRenderInput): void {
-        for (let i = 0; i < this.objs.length; i++)
-            this.objs[i].prepareToRender(hostAccessPass, viewerInput);
+    public prepareToRender(device: GfxDevice, hostAccessPass: GfxHostAccessPass, viewerInput: Viewer.ViewerRenderInput): void {
+        const template = this.renderInstManager.pushTemplateRenderInst();
+        template.setUniformBuffer(this.uniformBuffer);
+        for (let i = 0; i < this.objectRenderers.length; i++)
+            this.objectRenderers[i].prepareToRender(this.renderInstManager, viewerInput);
+        this.renderInstManager.popTemplateRenderInst();
+
+        this.uniformBuffer.prepareToRender(device, hostAccessPass);
     }
 
     public render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput): GfxRenderPass {
         const hostAccessPass = device.createHostAccessPass();
-        this.prepareToRender(hostAccessPass, viewerInput);
+        this.prepareToRender(device, hostAccessPass, viewerInput);
         device.submitPass(hostAccessPass);
 
-        this.viewRenderer.prepareToRender(device);
-
         this.renderTarget.setParameters(device, viewerInput.viewportWidth, viewerInput.viewportHeight);
-        this.viewRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
 
         // First, render the skybox.
         const skyboxPassRenderer = this.renderTarget.createRenderPass(device, transparentBlackFullClearRenderPassDescriptor);
-        this.viewRenderer.executeOnPass(device, skyboxPassRenderer, G3DPass.SKYBOX);
+        skyboxPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        this.renderInstManager.setVisibleByFilterKeyExact(G3DPass.SKYBOX);
+        this.renderInstManager.drawOnPassRenderer(device, skyboxPassRenderer);
         skyboxPassRenderer.endPass(null);
         device.submitPass(skyboxPassRenderer);
         // Now do main pass.
         const mainPassRenderer = this.renderTarget.createRenderPass(device, depthClearRenderPassDescriptor);
-        this.viewRenderer.executeOnPass(device, mainPassRenderer, G3DPass.MAIN);
+        mainPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        this.renderInstManager.setVisibleByFilterKeyExact(G3DPass.MAIN);
+        this.renderInstManager.drawOnPassRenderer(device, mainPassRenderer);
+
+        this.renderInstManager.resetRenderInsts();
+
         return mainPassRenderer;
     }
 
     public destroy(device: GfxDevice): void {
-        this.viewRenderer.destroy(device);
+        this.renderInstManager.destroy(device);
+        this.renderTarget.destroy(device);
+        this.uniformBuffer.destroy(device);
+
         this.renderTarget.destroy(device);
 
-        for (let i = 0; i < this.objs.length; i++)
-            this.objs[i].destroy(device);
+        for (let i = 0; i < this.objectRenderers.length; i++)
+            this.objectRenderers[i].destroy(device);
     }
 }
 
@@ -74,64 +88,56 @@ class NewSuperMarioBrosDSSceneDesc implements Viewer.SceneDesc {
     constructor(public worldNumber: number, public name: string, public id: string = '' + worldNumber) {
     }
 
-    private fetchBMD(path: string, abortSignal: AbortSignal): Progressable<NSBMD.BMD0> {
-        return fetchData(path, abortSignal).then((buffer: ArrayBufferSlice) => {
-            try {
-                return NSBMD.parse(buffer);
-            } catch (error) {
+    private fetchBMD(path: string, dataFetcher: DataFetcher): Promise<NSBMD.BMD0 | null> {
+        return dataFetcher.fetchData(path, DataFetcherFlags.ALLOW_404).then((buffer: ArrayBufferSlice) => {
+            if (buffer.byteLength === 0)
                 return null;
-            }
+            return NSBMD.parse(buffer);
         });
     }
 
-    private fetchBTX(path: string, abortSignal: AbortSignal): Progressable<NSBTX.BTX0> {
-        return fetchData(path, abortSignal).then((buffer: ArrayBufferSlice) => {
-            try {
-                return NSBTX.parse(buffer);
-            } catch (error) {
+    private fetchBTX(path: string, dataFetcher: DataFetcher): Promise<NSBTX.BTX0 | null> {
+        return dataFetcher.fetchData(path, DataFetcherFlags.ALLOW_404).then((buffer: ArrayBufferSlice) => {
+            if (buffer.byteLength === 0)
                 return null;
-            }
+            return NSBTX.parse(buffer);
         });
     }
 
-    private fetchBTA(path: string, abortSignal: AbortSignal): Progressable<NSBTA.BTA0> {
-        return fetchData(path, abortSignal).then((buffer: ArrayBufferSlice) => {
-            try {
-                return NSBTA.parse(buffer);
-            } catch (error) {
+    private fetchBTA(path: string, dataFetcher: DataFetcher): Promise<NSBTA.BTA0 | null> {
+        return dataFetcher.fetchData(path, DataFetcherFlags.ALLOW_404).then((buffer: ArrayBufferSlice) => {
+            if (buffer.byteLength === 0)
                 return null;
-            }
+            return NSBTA.parse(buffer);
         });
     }
 
-    private fetchBTP(path: string, abortSignal: AbortSignal): Progressable<NSBTP.BTP0> {
-        return fetchData(path, abortSignal).then((buffer: ArrayBufferSlice) => {
-            try {
-                return NSBTP.parse(buffer);
-            } catch (error) {
+    private fetchBTP(path: string, dataFetcher: DataFetcher): Promise<NSBTP.BTP0 | null> {
+        return dataFetcher.fetchData(path, DataFetcherFlags.ALLOW_404).then((buffer: ArrayBufferSlice) => {
+            if (buffer.byteLength === 0)
                 return null;
-            }
+            return NSBTP.parse(buffer);
         });
     }
 
-    private fetchObjectData(path: string, abortSignal: AbortSignal): Progressable<ObjectData> {
-        return Progressable.all<any>([
-            this.fetchBMD(path + `.nsbmd`, abortSignal),
-            this.fetchBTX(path + `.nsbtx`, abortSignal),
-            this.fetchBTA(path + `.nsbta`, abortSignal),
-            this.fetchBTP(path + `.nsbtp`, abortSignal),
-        ]).then(([_bmd, _btx, _bta, _btp]) => {
-            const bmd = _bmd as NSBMD.BMD0;
-            const btx = _btx as NSBTX.BTX0;
-            const bta = _bta as NSBTA.BTA0;
-            const btp = _btp as NSBTP.BTP0;
+    private async fetchObjectData(path: string, dataFetcher: DataFetcher): Promise<ObjectData> {
+        const [_bmd, _btx, _bta, _btp] = await Promise.all<any>([
+            this.fetchBMD(path + `.nsbmd`, dataFetcher),
+            this.fetchBTX(path + `.nsbtx`, dataFetcher),
+            this.fetchBTA(path + `.nsbta`, dataFetcher),
+            this.fetchBTP(path + `.nsbtp`, dataFetcher),
+        ]);
 
-            if (bmd === null)
-                return null;
-            assert(bmd.models.length === 1);
+        const bmd = _bmd as NSBMD.BMD0 | null;
+        const btx = _btx as NSBTX.BTX0 | null;
+        const bta = _bta as NSBTA.BTA0 | null;
+        const btp = _btp as NSBTP.BTP0 | null;
 
-            return new ObjectData(bmd, btx, bta, btp);
-        });
+        if (bmd === null)
+            return null;
+        assert(bmd.models.length === 1);
+
+        return new ObjectData(bmd, btx, bta, btp);
     }
 
     private createRendererFromData(device: GfxDevice, objectData: ObjectData, position: number[] | null = null): MDL0Renderer {
@@ -147,26 +153,27 @@ class NewSuperMarioBrosDSSceneDesc implements Viewer.SceneDesc {
         return renderer;
     }
 
-    public createScene(device: GfxDevice, abortSignal: AbortSignal): Progressable<Viewer.SceneGfx> {
+    public createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+        const dataFetcher = context.dataFetcher;
         const basePath = `nsmbds`;
 
-        return Progressable.all([
-            this.fetchObjectData(`${basePath}/map/w${this.worldNumber}`, abortSignal),
-            this.fetchObjectData(`${basePath}/map/w${this.worldNumber}_tree`, abortSignal),
-            this.fetchObjectData(`${basePath}/map/w1_castle`, abortSignal),
-            this.fetchObjectData(`${basePath}/map/w8_koppaC`, abortSignal),
-            this.fetchObjectData(`${basePath}/map/w1_tower`, abortSignal),
-            this.fetchObjectData(`${basePath}/map/map_point`, abortSignal),
+        return Promise.all([
+            this.fetchObjectData(`${basePath}/map/w${this.worldNumber}`, dataFetcher),
+            this.fetchObjectData(`${basePath}/map/w${this.worldNumber}_tree`, dataFetcher),
+            this.fetchObjectData(`${basePath}/map/w1_castle`, dataFetcher),
+            this.fetchObjectData(`${basePath}/map/w8_koppaC`, dataFetcher),
+            this.fetchObjectData(`${basePath}/map/w1_tower`, dataFetcher),
+            this.fetchObjectData(`${basePath}/map/map_point`, dataFetcher),
         ]).then(([mainObjData, treeObjData, castleObjData, bigCastleObjData, towerObjData, mapPointObjData]) => {
             // Adjust the nodes/bones to emulate the flag animations.
             mat4.fromTranslation(castleObjData.bmd.models[0].nodes[3].jointMatrix, [0, 88, 0]);
             mat4.fromTranslation(castleObjData.bmd.models[0].nodes[4].jointMatrix, [12, 88, 0]);
-            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[5].jointMatrix, [-20, 0, -12]);
-            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[6].jointMatrix, [-20, 44, -12]);
-            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[7].jointMatrix, [-14, 44, -12]);
-            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[8].jointMatrix, [20, 0, -12]);
-            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[9].jointMatrix, [20, 44, -12]);
-            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[10].jointMatrix, [26, 44, -12]);
+            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[5].jointMatrix, [-40, 0, -19]);
+            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[6].jointMatrix, [-40, 84, -19]);
+            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[7].jointMatrix, [-26, 84, -19]);
+            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[8].jointMatrix, [40, 0, -19]);
+            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[9].jointMatrix, [40, 84, -19]);
+            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[10].jointMatrix, [54, 84, -19]);
             mat4.fromTranslation(towerObjData.bmd.models[0].nodes[2].jointMatrix, [0, 88, 0]);
             mat4.fromTranslation(towerObjData.bmd.models[0].nodes[3].jointMatrix, [12, 88, 0]);
 
@@ -267,7 +274,7 @@ const worldMapDescs: IWorldMapObj[][] = [
         { type: WorldMapObjType.TOWER, position: [-2, 0, -2] },
         { type: WorldMapObjType.CASTLE, position: [14, 0, -3] },
         { type: WorldMapObjType.TOWER, position: [50, 0, -2] },
-        { type: WorldMapObjType.BIG_CASTLE, position: [33, 0, 0] },
+        { type: WorldMapObjType.BIG_CASTLE, position: [66, 0, 0] },
     ],
 ];
 

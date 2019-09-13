@@ -1,10 +1,11 @@
 
 import ArrayBufferSlice from "../ArrayBufferSlice";
-import { Version, calcModelMtx, Bone } from "./cmb";
+import { Version, Bone } from "./cmb";
 import { assert, readString, align, assertExists } from "../util";
 import AnimationController from "../AnimationController";
 import { mat4 } from "gl-matrix";
 import { getPointHermite } from "../Spline";
+import { computeModelMatrixSRT, lerpAngle, lerp, MathConstants } from "../MathHelpers";
 
 // CSAB (CTR Skeletal Animation Binary)
 
@@ -67,22 +68,13 @@ export interface CSAB extends AnimationBase {
     boneToAnimationTable: Int16Array;
 }
 
-function parseTrack(version: Version, buffer: ArrayBufferSlice): AnimationTrack {
+function parseTrackOcarina(version: Version, buffer: ArrayBufferSlice): AnimationTrack {
     const view = buffer.createDataView();
 
-    let type: AnimationTrackType;
-    let numKeyframes: number;
-    let unk1: number;
-    let timeEnd: number;
-
-    if (version === Version.Ocarina) {
-        type = view.getUint32(0x00, true);
-        numKeyframes = view.getUint32(0x04, true);
-        unk1 = view.getUint32(0x08, true);
-        timeEnd = view.getUint32(0x0C, true) + 1;
-    } else if (version === Version.Majora || version === Version.LuigisMansion) {
-        throw "xxx";
-    }
+    const type = view.getUint32(0x00, true);
+    const numKeyframes = view.getUint32(0x04, true);
+    const unk1 = view.getUint32(0x08, true);
+    const timeEnd = view.getUint32(0x0C, true) + 1;
 
     let keyframeTableIdx: number = 0x10;
 
@@ -111,12 +103,49 @@ function parseTrack(version: Version, buffer: ArrayBufferSlice): AnimationTrack 
     }
 }
 
+function parseTrackMajora(version: Version, buffer: ArrayBufferSlice): AnimationTrack {
+    const view = buffer.createDataView();
+
+    // TODO(jstpierre): zelda2_snowman.gar/anim/sm_wait.csab CSAB has this as 1???
+    const unk0 = view.getUint8(0x00);
+    assert(unk0 === 0x00 || unk0 === 0x01);
+    const type = view.getUint8(0x01);
+    assert(type === AnimationTrackType.LINEAR);
+    const numKeyframes = view.getUint16(0x02, true);
+
+    if (type === AnimationTrackType.LINEAR) {
+        const frames: AnimationKeyframeLinear[] = [];
+        const scale = view.getFloat32(0x04, true);
+        let bias = view.getFloat32(0x08, true);
+
+        let keyframeTableIdx: number = 0x0C;
+        for (let i = 0; i < numKeyframes; i++) {
+            const time = i;
+            const value = view.getInt16(keyframeTableIdx + 0x00, true) * scale - bias;
+            keyframeTableIdx += 0x02;
+            frames.push({ time, value });
+        }
+        return { type, frames };
+    } else {
+        throw "whoops";
+    }
+}
+
+function parseTrack(version: Version, buffer: ArrayBufferSlice): AnimationTrack {
+    if (version === Version.Ocarina)
+        return parseTrackOcarina(version, buffer);
+    else if (version === Version.Majora)
+        return parseTrackMajora(version, buffer);
+    else
+        throw "xxx";
+}
+
 // "Animation Node"?
 function parseAnod(version: Version, buffer: ArrayBufferSlice): AnimationNode {
     const view = buffer.createDataView();
 
     assert(readString(buffer, 0x00, 0x04, false) === 'anod');
-    const boneIndex = view.getUint32(0x04, true);
+    const boneIndex = view.getUint16(0x04, true);
 
     const translationXOffs = view.getUint16(0x08, true);
     const translationYOffs = view.getUint16(0x0A, true);
@@ -142,7 +171,7 @@ function parseAnod(version: Version, buffer: ArrayBufferSlice): AnimationNode {
     return { boneIndex, translationX, translationY, translationZ, rotationX, rotationY, rotationZ, scaleX, scaleY, scaleZ };
 }
 
-export function parse(version: Version, buffer: ArrayBufferSlice): CSAB {
+function parseOcarina(version: Version, buffer: ArrayBufferSlice): CSAB {
     const view = buffer.createDataView();
 
     assert(readString(buffer, 0x00, 0x04, false) === 'csab');
@@ -190,6 +219,66 @@ export function parse(version: Version, buffer: ArrayBufferSlice): CSAB {
     return { duration, loopMode, boneToAnimationTable, animationNodes };
 }
 
+function parseMajora(version: Version, buffer: ArrayBufferSlice): CSAB {
+    const view = buffer.createDataView();
+
+    assert(readString(buffer, 0x00, 0x04, false) === 'csab');
+    const size = view.getUint32(0x04, true);
+
+    const subversion = view.getUint32(0x08, true);
+    assert(subversion === 0x05);
+    assert(view.getUint32(0x0C, true) === 0x00);
+    assert(view.getUint32(0x10, true) === 0x42200000);
+    assert(view.getUint32(0x14, true) === 0x42200000);
+    assert(view.getUint32(0x18, true) === 0x42200000);
+
+    assert(view.getUint32(0x1C, true) === 0x01); // num animations?
+    assert(view.getUint32(0x20, true) === 0x24); // location?
+
+    assert(view.getUint32(0x24, true) === 0x00);
+    assert(view.getUint32(0x28, true) === 0x00);
+    assert(view.getUint32(0x2C, true) === 0x00);
+    assert(view.getUint32(0x30, true) === 0x00);
+
+    const duration = view.getUint32(0x34, true) + 1;
+    // loop mode?
+    // assert(view.getUint32(0x38, true) === 0x00);
+
+    const loopMode = LoopMode.REPEAT;
+    const anodCount = view.getUint32(0x3C, true);
+    const boneCount = view.getUint32(0x40, true);
+    assert(anodCount <= boneCount);
+
+    // This appears to be an inverse of the bone index in each array, probably for fast binding?
+    const boneToAnimationTable = new Int16Array(boneCount);
+    let boneTableIdx = 0x44;
+    for (let i = 0; i < boneCount; i++) {
+        boneToAnimationTable[i] = view.getInt16(boneTableIdx + 0x00, true);
+        boneTableIdx += 0x02;
+    }
+
+    // TODO(jstpierre): This doesn't seem like a Grezzo thing to do.
+    let anodTableIdx = align(boneTableIdx, 0x04);
+
+    const animationNodes: AnimationNode[] = [];
+    for (let i = 0; i < anodCount; i++) {
+        const offs = view.getUint32(anodTableIdx + 0x00, true);
+        animationNodes.push(parseAnod(version, buffer.slice(0x24 + offs)));
+        anodTableIdx += 0x04;
+    }
+
+    return { duration, loopMode, boneToAnimationTable, animationNodes };
+}
+
+export function parse(version: Version, buffer: ArrayBufferSlice): CSAB {
+    if (version === Version.Ocarina)
+        return parseOcarina(version, buffer);
+    else if (version === Version.Majora)
+        return parseMajora(version, buffer);
+    else
+        throw "xxx";
+}
+
 function getAnimFrame(anim: AnimationBase, frame: number): number {
     // Be careful of floating point precision.
     const lastFrame = anim.duration;
@@ -204,10 +293,6 @@ function getAnimFrame(anim: AnimationBase, frame: number): number {
     } else {
         throw "whoops";
     }
-}
-
-function lerp(k0: AnimationKeyframeLinear, k1: AnimationKeyframeLinear, t: number) {
-    return k0.value + (k1.value - k0.value) * t;
 }
 
 function sampleAnimationTrackLinear(track: AnimationTrackLinear, frame: number): number {
@@ -225,7 +310,25 @@ function sampleAnimationTrackLinear(track: AnimationTrackLinear, frame: number):
     const k1 = frames[idx1];
 
     const t = (frame - k0.time) / (k1.time - k0.time);
-    return lerp(k0, k1, t);
+    return lerp(k0.value, k1.value, t);
+}
+
+function sampleAnimationTrackLinearRotation(track: AnimationTrackLinear, frame: number): number {
+    const frames = track.frames;
+
+    // Find the first frame.
+    const idx1 = frames.findIndex((key) => (frame < key.time));
+    if (idx1 === 0)
+        return frames[0].value;
+    if (idx1 < 0)
+        return frames[frames.length - 1].value;
+    const idx0 = idx1 - 1;
+
+    const k0 = frames[idx0];
+    const k1 = frames[idx1];
+
+    const t = (frame - k0.time) / (k1.time - k0.time);
+    return lerpAngle(k0.value, k1.value, t, MathConstants.TAU);
 }
 
 function hermiteInterpolate(k0: AnimationKeyframeHermite, k1: AnimationKeyframeHermite, t: number, length: number): number {
@@ -271,6 +374,15 @@ function sampleAnimationTrack(track: AnimationTrack, frame: number): number {
         throw "whoops";
 }
 
+function sampleAnimationTrackRotation(track: AnimationTrack, frame: number): number {
+    if (track.type === AnimationTrackType.LINEAR)
+        return sampleAnimationTrackLinearRotation(track, frame);
+    else if (track.type === AnimationTrackType.HERMITE)
+        return sampleAnimationTrackHermite(track, frame);
+    else
+        throw "whoops";
+}
+
 export function calcBoneMatrix(dst: mat4, animationController: AnimationController | null, csab: CSAB | null, bone: Bone): void {
     let node: AnimationNode | null = null;
     if (csab !== null) {
@@ -296,13 +408,13 @@ export function calcBoneMatrix(dst: mat4, animationController: AnimationControll
         if (node.scaleX !== null) scaleX = sampleAnimationTrack(node.scaleX, animFrame);
         if (node.scaleY !== null) scaleY = sampleAnimationTrack(node.scaleY, animFrame);
         if (node.scaleZ !== null) scaleZ = sampleAnimationTrack(node.scaleZ, animFrame);
-        if (node.rotationX !== null) rotationX = sampleAnimationTrack(node.rotationX, animFrame);
-        if (node.rotationY !== null) rotationY = sampleAnimationTrack(node.rotationY, animFrame);
-        if (node.rotationZ !== null) rotationZ = sampleAnimationTrack(node.rotationZ, animFrame);   
+        if (node.rotationX !== null) rotationX = sampleAnimationTrackRotation(node.rotationX, animFrame);
+        if (node.rotationY !== null) rotationY = sampleAnimationTrackRotation(node.rotationY, animFrame);
+        if (node.rotationZ !== null) rotationZ = sampleAnimationTrackRotation(node.rotationZ, animFrame);
         if (node.translationX !== null) translationX = sampleAnimationTrack(node.translationX, animFrame);
         if (node.translationY !== null) translationY = sampleAnimationTrack(node.translationY, animFrame);
         if (node.translationZ !== null) translationZ = sampleAnimationTrack(node.translationZ, animFrame);
     }
 
-    calcModelMtx(dst, scaleX, scaleY, scaleZ, rotationX, rotationY, rotationZ, translationX, translationY, translationZ);
+    computeModelMatrixSRT(dst, scaleX, scaleY, scaleZ, rotationX, rotationY, rotationZ, translationX, translationY, translationZ);
 }

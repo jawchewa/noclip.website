@@ -4,7 +4,7 @@
 import * as Pako from 'pako';
 
 import ArrayBufferSlice from '../ArrayBufferSlice';
-import { assert, hexzero, readString } from "../util";
+import { assert, hexzero, readString, assertExists } from "../util";
 
 import { PAK, FileResource, CompressionMethod } from "./pak";
 
@@ -13,9 +13,14 @@ import * as MREA from './mrea';
 import * as STRG from './strg';
 import * as TXTR from './txtr';
 import * as CMDL from './cmdl';
+import * as ANCS from './ancs';
+import * as CHAR from './char';
+import { InputStream } from './stream';
 
-type ParseFunc<T> = (resourceSystem: ResourceSystem, assetID: string, buffer: ArrayBufferSlice) => T;
+type ParseFunc<T> = (stream: InputStream, resourceSystem: ResourceSystem, assetID: string) => T;
 type Resource = any;
+
+export const invalidAssetID: string = "\xFF\xFF\xFF\xFF";
 
 const FourCCLoaders: { [n: string]: ParseFunc<Resource> } = {
     'MLVL': MLVL.parse,
@@ -23,6 +28,8 @@ const FourCCLoaders: { [n: string]: ParseFunc<Resource> } = {
     'STRG': STRG.parse,
     'TXTR': TXTR.parse,
     'CMDL': CMDL.parse,
+    'ANCS': ANCS.parse,
+    'CHAR': CHAR.parse,
 };
 
 interface NameDataAsset {
@@ -112,7 +119,7 @@ export class ResourceSystem {
     public findResourceNameByID(assetID: string): string {
         const assetIDHex = hexName(assetID);
         assert(assetIDHex.length === 8 || assetIDHex.length === 16);
-        if (this.nameData) {
+        if (this.nameData !== null) {
             const nameDataAsset = this.nameData.Assets[assetIDHex];
             if (nameDataAsset)
                 return nameDataAsset.Filename;
@@ -131,7 +138,7 @@ export class ResourceSystem {
         return null;
     }
 
-    public loadAssetByID(assetID: string, fourCC: string): Resource {
+    public loadAssetByID<T extends Resource>(assetID: string, fourCC: string): T | null {
         if (assetID === '\xFF\xFF\xFF\xFF' || assetID === '\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF')
             return null;
 
@@ -139,14 +146,16 @@ export class ResourceSystem {
         if (cached !== undefined)
             return cached;
 
-        const loaderFunc = FourCCLoaders[fourCC];
-        if (!loaderFunc)
-            return null;
+        const loaderFunc = assertExists(FourCCLoaders[fourCC]);
 
         const resource = this.findResourceByID(assetID);
+        if (!resource)
+            return null;
+
         assert(resource.fourCC === fourCC);
         const buffer = this.loadResourceBuffer(resource);
-        const inst = loaderFunc(this, assetID, buffer);
+        const stream = new InputStream(buffer, assetID.length);
+        const inst = loaderFunc(stream, this, assetID);
         this._cache.set(assetID, inst);
         return inst;
     }

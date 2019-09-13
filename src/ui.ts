@@ -3,25 +3,42 @@
 
 import * as Viewer from './viewer';
 import { assertExists, assert } from './util';
-import { CameraControllerClass, OrbitCameraController, FPSCameraController } from './Camera';
+import { CameraControllerClass, OrbitCameraController, FPSCameraController, OrthoCameraController } from './Camera';
 import { Color, colorToCSS } from './Color';
 import { TextureHolder } from './TextureHolder';
 import { GITHUB_REVISION_URL, GITHUB_URL, GIT_SHORT_REVISION } from './BuildVersion';
 import { SaveManager, GlobalSaveManager, SaveStateLocation } from "./SaveManager";
 import { RenderStatistics } from './RenderStatistics';
 import InputManager from './InputManager';
+import { GlobalGrabManager } from './GrabManager';
 
 // @ts-ignore
 import logoURL from './logo.png';
+import BitMap from './BitMap';
 
 export const HIGHLIGHT_COLOR = 'rgb(210, 30, 30)';
 export const COOL_BLUE_COLOR = 'rgb(20, 105, 215)';
+export const PANEL_BG_COLOR = '#411';
 
 export function createDOMFromString(s: string): DocumentFragment {
     return document.createRange().createContextualFragment(s);
 }
 
-function setChildren(parent: Element, children: Element[]): void {
+const OPEN_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 2 92 92" height="20" fill="white"><path d="M84.3765045,45.2316481 L77.2336539,75.2316205 L77.2336539,75.2316205 C77.1263996,75.6820886 76.7239081,76 76.2608477,76 L17.8061496,76 C17.2538649,76 16.8061496,75.5522847 16.8061496,75 C16.8061496,74.9118841 16.817796,74.8241548 16.8407862,74.739091 L24.7487983,45.4794461 C24.9845522,44.607157 25.7758952,44.0012839 26.6794815,44.0012642 L83.4036764,44.0000276 L83.4036764,44.0000276 C83.9559612,44.0000156 84.4036862,44.4477211 84.4036982,45.0000058 C84.4036999,45.0780163 84.3945733,45.155759 84.3765045,45.2316481 L84.3765045,45.2316481 Z M15,24 L26.8277004,24 L26.8277004,24 C27.0616369,24 27.2881698,24.0820162 27.4678848,24.2317787 L31.799078,27.8411064 L31.799078,27.8411064 C32.697653,28.5899189 33.8303175,29 35,29 L75,29 C75.5522847,29 76,29.4477153 76,30 L76,38 L76,38 C76,38.5522847 75.5522847,39 75,39 L25.3280454,39 L25.3280454,39 C23.0690391,39 21.0906235,40.5146929 20.5012284,42.6954549 L14.7844016,63.8477139 L14.7844016,63.8477139 C14.7267632,64.0609761 14.5071549,64.1871341 14.2938927,64.1294957 C14.1194254,64.0823423 13.9982484,63.9240598 13.9982563,63.7433327 L13.9999561,25 L14,25 C14.0000242,24.4477324 14.4477324,24.0000439 15,24.0000439 L15,24 Z"/></svg>`;
+const SEARCH_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 21 26.25" height="20" fill="white"><path d="M8.6953,14.3916 C5.5543,14.3916 3.0003,11.8356 3.0003,8.6956 C3.0003,5.5546 5.5543,2.9996 8.6953,2.9996 C11.8363,2.9996 14.3913,5.5546 14.3913,8.6956 C14.3913,11.8356 11.8363,14.3916 8.6953,14.3916 L8.6953,14.3916 Z M15.8423,13.7216 L15.6073,13.9566 C16.7213,12.4956 17.3913,10.6756 17.3913,8.6956 C17.3913,3.8936 13.4983,-0.0004 8.6953,-0.0004 C3.8933,-0.0004 0.0003,3.8936 0.0003,8.6956 C0.0003,13.4976 3.8933,17.3916 8.6953,17.3916 C10.6753,17.3916 12.4953,16.7216 13.9573,15.6076 L13.7213,15.8426 L18.3343,20.4546 L20.4553,18.3336 L15.8423,13.7216 Z"/></svg>`;
+const SAVE_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-8 -8 116 116" height="20" fill="white"><path fill="none" d="M35.763,37.954l30.977-0.021c2.118-0.001,4.296-2.033,4.296-4.15l-0.017-24.37L31.642,9.442l0.016,24.368   C31.658,35.928,33.645,37.955,35.763,37.954z M56.121,13.159l8.078-0.004c1.334-0.003,2.41,1.076,2.413,2.407l0.011,16.227   c-0.001,1.331-1.078,2.412-2.409,2.412l-8.082,0.005c-1.329,0.003-2.408-1.077-2.41-2.408l-0.01-16.23   C53.71,14.24,54.788,13.159,56.121,13.159z"/><path fill="none" d="M76.351,49.009H23.647c-2.457,0-4.449,2.079-4.449,4.644v34.044h61.605V53.652   C80.802,51.088,78.81,49.009,76.351,49.009z"/><path d="M56.132,34.206l8.082-0.005c1.331,0,2.408-1.081,2.409-2.412l-0.011-16.227c-0.003-1.331-1.08-2.411-2.413-2.407   l-8.078,0.004c-1.333,0-2.411,1.081-2.41,2.409l0.01,16.23C53.724,33.129,54.803,34.208,56.132,34.206z"/><path d="M92.756,22.267c-0.002-1.555-0.376-2.831-1.378-3.83c-0.645-0.644-7.701-7.692-11.327-11.318   c-1.279-1.271-3.68-2.121-5.468-2.12c-1.789,0.001-60.258,0.04-60.258,0.04C10.387,5.044,7.198,8.236,7.2,12.172l0.051,75.703   c0.003,3.939,3.197,7.126,7.134,7.125l71.29-0.048c3.937-0.001,7.127-3.197,7.126-7.131C92.8,87.82,92.756,23.228,92.756,22.267z    M71.019,9.414l0.017,24.37c0,2.117-2.178,4.148-4.296,4.15l-30.977,0.021c-2.117,0.001-4.104-2.026-4.104-4.144L31.642,9.442   L71.019,9.414z M80.802,87.697H19.198V53.652c0-2.564,1.992-4.644,4.449-4.644h52.704c2.459,0,4.451,2.079,4.451,4.644V87.697z"/></svg>`;
+const TEXTURES_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" height="20" fill="white"><path d="M143.5,143.5v300h300v-300H143.5z M274.8,237.2c10.3,0,18.7,8.4,18.7,18.9c0,10.3-8.4,18.7-18.7,18.7   c-10.3,0-18.7-8.4-18.7-18.7C256,245.6,264.4,237.2,274.8,237.2z M406,406H181v-56.2l56.2-56.1l37.5,37.3l75-74.8l56.2,56.1V406z"/><polygon points="387.2,68.6 68.5,68.6 68.5,368.5 106,368.5 106,106 387.2,106"/></svg>`;
+const FRUSTUM_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" height="20" fill="white"><polygon points="48.2573,19.8589 33.8981,15.0724 5,67.8384 48.2573,90.3684" /><polygon points="51.5652,19.8738 51.5652,90.3734 95,67.8392 65.9366,15.2701" /><polygon points="61.3189,13.2756 49.9911,9.6265 38.5411,13.1331 49.9213,16.9268" /></svg>`;
+const STATISTICS_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="5 0 55 60" height="16" fill="white"><g><polygon points="6.9,11.5 6.9,56 55.4,56 55.4,53 9.9,53 9.9,11.5"/><path d="M52.7,15.8c-2.7,0-4.9,2.2-4.9,4.9c0,1,0.3,1.8,0.8,2.6l-5,6.8c-0.4-0.1-0.9-0.2-1.3-0.2c-1.5,0-2.9,0.7-3.8,1.8l-5.6-2.8   c0-0.2,0.1-0.5,0.1-0.8c0-2.7-2.2-4.9-4.9-4.9s-4.9,2.2-4.9,4.9c0,1.1,0.3,2,0.9,2.8l-3.9,5.1c-0.5-0.2-1.1-0.3-1.7-0.3   c-2.7,0-4.9,2.2-4.9,4.9s2.2,4.9,4.9,4.9s4.9-2.2,4.9-4.9c0-1-0.3-2-0.8-2.7l4-5.2c0.5,0.2,1.1,0.3,1.6,0.3c1.4,0,2.6-0.6,3.5-1.5   l5.8,2.9c0,0.1,0,0.2,0,0.3c0,2.7,2.2,4.9,4.9,4.9c2.7,0,4.9-2.2,4.9-4.9c0-1.2-0.4-2.2-1.1-3.1l4.8-6.5c0.6,0.2,1.2,0.4,1.9,0.4   c2.7,0,4.9-2.2,4.9-4.9S55.4,15.8,52.7,15.8z"/></g></svg>`;
+const ABOUT_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" height="16" fill="white"><path d="M50,1.1C23,1.1,1.1,23,1.1,50S23,98.9,50,98.9C77,98.9,98.9,77,98.9,50S77,1.1,50,1.1z M55.3,77.7c0,1.7-1.4,3.1-3.1,3.1  h-7.9c-1.7,0-3.1-1.4-3.1-3.1v-5.1c0-1.7,1.4-3.1,3.1-3.1h7.9c1.7,0,3.1,1.4,3.1,3.1V77.7z M67.8,47.3c-2.1,2.9-4.7,5.2-7.9,6.9  c-1.8,1.2-3,2.4-3.6,3.8c-0.4,0.9-0.7,2.1-0.9,3.5c-0.1,1.1-1.1,1.9-2.2,1.9h-9.7c-1.3,0-2.3-1.1-2.2-2.3c0.2-2.7,0.9-4.8,2-6.4  c1.4-1.9,3.9-4.2,7.5-6.7c1.9-1.2,3.3-2.6,4.4-4.3c1.1-1.7,1.6-3.7,1.6-6c0-2.3-0.6-4.2-1.9-5.6c-1.3-1.4-3-2.1-5.3-2.1  c-1.9,0-3.4,0.6-4.7,1.7c-0.8,0.7-1.3,1.6-1.6,2.8c-0.4,1.4-1.7,2.3-3.2,2.3l-9-0.2c-1.1,0-2-1-1.9-2.1c0.3-4.8,2.2-8.4,5.5-11  c3.8-2.9,8.7-4.4,14.9-4.4c6.6,0,11.8,1.7,15.6,5c3.8,3.3,5.7,7.8,5.7,13.5C70.9,41.2,69.8,44.4,67.8,47.3z"/></svg>`;
+
+// Custom icons used by game-specific panels.
+export const LAYER_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" height="20" fill="white"><g transform="translate(0,-1036.3622)"><path d="m 8,1039.2486 -0.21875,0.125 -4.90625,2.4375 5.125,2.5625 5.125,-2.5625 L 8,1039.2486 z m -3,4.5625 -2.125,0.9688 5.125,2.5625 5.125,-2.5625 -2.09375,-0.9688 -3.03125,1.5 -1,-0.5 -0.90625,-0.4375 L 5,1043.8111 z m 0,3 -2.125,0.9688 5.125,2.5625 5.125,-2.5625 -2.09375,-0.9688 -3.03125,1.5 -1,-0.5 -0.90625,-0.4375 L 5,1046.8111 z"/></g></svg>`;
+export const TIME_OF_DAY_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" height="20" fill="white"><path d="M50,93.4C74,93.4,93.4,74,93.4,50C93.4,26,74,6.6,50,6.6C26,6.6,6.6,26,6.6,50C6.6,74,26,93.4,50,93.4z M37.6,22.8  c-0.6,2.4-0.9,5-0.9,7.6c0,18.2,14.7,32.9,32.9,32.9c2.6,0,5.1-0.3,7.6-0.9c-4.7,10.3-15.1,17.4-27.1,17.4  c-16.5,0-29.9-13.4-29.9-29.9C20.3,37.9,27.4,27.5,37.6,22.8z"/></svg>`;
+export const RENDER_HACKS_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 110 105" height="20" fill="white"><path d="M95,5v60H65c0-16.6-13.4-30-30-30V5H95z"/><path d="M65,65c0,16.6-13.4,30-30,30C18.4,95,5,81.6,5,65c0-16.6,13.4-30,30-30v30H65z"/></svg>`;
+export const SAND_CLOCK_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" height="20" fill="white"><g><path d="M79.3,83.3h-6.2H24.9h-6.2c-1.7,0-3,1.3-3,3s1.3,3,3,3h60.6c1.7,0,3-1.3,3-3S81,83.3,79.3,83.3z"/><path d="M18.7,14.7h6.2h48.2h6.2c1.7,0,3-1.3,3-3s-1.3-3-3-3H18.7c-1.7,0-3,1.3-3,3S17,14.7,18.7,14.7z"/><path d="M73.1,66c0-0.9-0.4-1.8-1.1-2.4L52.8,48.5L72,33.4c0.7-0.6,1.1-1.4,1.1-2.4V20.7H24.9V31c0,0.9,0.4,1.8,1.1,2.4l19.1,15.1   L26,63.6c-0.7,0.6-1.1,1.4-1.1,2.4v11.3h48.2V66z"/></g></svg>';
+
+export function setChildren(parent: Element, children: Element[]): void {
     // We want to swap children around without removing them, since removing them will cause
     // a relayout and possibly break scroll positions.
 
@@ -32,7 +49,7 @@ function setChildren(parent: Element, children: Element[]): void {
 
     // Remove any children that we don't want.
     for (let i = 0; i < parent.childElementCount;) {
-        const child = parent.children.item(i);
+        const child = parent.children.item(i)!;
         if (children.includes(child))
             i++;
         else
@@ -48,12 +65,16 @@ function setChildren(parent: Element, children: Element[]): void {
             parent.insertBefore(children[i], parent.children.item(i));
 }
 
+function setElementVisible(elem: HTMLElement, v: boolean, normalDisplay = 'block') {
+    elem.style.display = v ? normalDisplay : 'none';
+}
+
 function setElementHighlighted(elem: HTMLElement, highlighted: boolean, normalTextColor: string = '') {
     if (highlighted) {
         elem.style.backgroundColor = HIGHLIGHT_COLOR;
         elem.style.color = 'black';
     } else {
-        elem.style.backgroundColor = '';
+        elem.style.backgroundColor = PANEL_BG_COLOR;
         elem.style.color = normalTextColor;
     }
 }
@@ -71,6 +92,12 @@ export interface Widget {
     elem: HTMLElement;
 }
 
+declare global {
+    interface CSSStyleDeclaration {
+        caretColor: string;
+    }
+}
+
 function svgStringToCSSBackgroundImage(svgString: string) {
     return `url(data:image/svg+xml,${encodeURI(svgString)})`;
 }
@@ -86,7 +113,7 @@ class TextField implements Widget {
         this.textarea.style.font = '16px monospace';
         this.textarea.style.border = 'none';
         this.textarea.style.width = '100%';
-        (this.textarea.style as any).caretColor = 'white';
+        this.textarea.style.caretColor = 'white';
 
         this.elem = this.textarea;
     }
@@ -110,7 +137,7 @@ class TextField implements Widget {
 
 export class TextEntry implements Widget {
     public elem: HTMLElement;
-    public ontext: (string: string) => void | null = null;
+    public ontext: ((string: string) => void) | null = null;
 
     protected toplevel: HTMLElement;
     public textfield: TextField;
@@ -270,10 +297,12 @@ export abstract class ScrollSelect implements Widget {
                 outer.appendChild(selector);
                 const textSpan = document.createElement('span');
                 textSpan.classList.add('text');
-                if (item.html)
+                if (item.html !== undefined)
                     textSpan.innerHTML = item.html;
-                else
+                else if (item.name !== undefined)
                     textSpan.textContent = item.name;
+                else
+                    throw "whoops";
                 selector.appendChild(textSpan);
 
                 const index = i;
@@ -282,7 +311,7 @@ export abstract class ScrollSelect implements Widget {
                 };
                 outer.onmousedown = () => {
                     if (document.activeElement === outer)
-                        outer.onfocus(null);
+                        outer.onfocus!(null as unknown as FocusEvent);
                     else
                         outer.focus();
                     this.isDragging = true;
@@ -420,7 +449,7 @@ export abstract class ScrollSelect implements Widget {
     protected abstract itemFocused(index: number, first: boolean): void;
 }
 
-function ensureFlairIndex(flairs: Flair[], index: number): Flair {
+export function ensureFlairIndex(flairs: Flair[], index: number): Flair {
     const flairIndex = flairs.findIndex((f) => f.index === index);
     if (flairIndex >= 0) {
         flairs[flairIndex] = Object.assign({}, flairs[flairIndex]);
@@ -532,13 +561,13 @@ export class MultiSelect extends ScrollSelect {
 `);
         this.toplevel.insertBefore(allNone, this.toplevel.firstChild);
 
-        const allButton: HTMLElement = this.toplevel.querySelector('.AllButton');
+        const allButton = this.toplevel.querySelector('.AllButton') as HTMLElement;
         allButton.onclick = () => {
             for (let i = 0; i < this.getNumItems(); i++)
                 this.setItemIsOn(i, true);
             this.syncInternalFlairs();
         };
-        const noneButton: HTMLElement = this.toplevel.querySelector('.NoneButton');
+        const noneButton = this.toplevel.querySelector('.NoneButton') as HTMLElement;
         noneButton.onclick = () => {
             for (let i = 0; i < this.getNumItems(); i++)
                 this.setItemIsOn(i, false);
@@ -605,7 +634,7 @@ export class Checkbox implements Widget {
         this.emblem.style.height = '10px';
         this.emblem.style.justifySelf = 'center';
         this.emblem.style.margin = '4px';
-        this.emblem.style.borderRadius = '16px';
+        this.emblem.style.borderRadius = '4px';
         this.emblem.style.border = '2px solid white';
         this.toplevel.appendChild(this.emblem);
 
@@ -633,7 +662,8 @@ export class Checkbox implements Widget {
 
     private _toggle(): void {
         this.setChecked(!this.checked);
-        this.onchanged();
+        if (this.onchanged !== null)
+            this.onchanged();
     }
 
     public setLabel(text: string): void {
@@ -649,6 +679,7 @@ export class Panel implements Widget {
     public autoClosed: boolean = false;
     public customHeaderBackgroundColor: string = '';
     protected header: HTMLElement;
+    protected headerContainer: HTMLElement;
     protected svgIcon: SVGSVGElement;
 
     private toplevel: HTMLElement;
@@ -685,11 +716,13 @@ export class Panel implements Widget {
         this.extraRack.style.transition = '.15s ease-out .10s';
         this.toplevel.appendChild(this.extraRack);
 
+        this.headerContainer = document.createElement('div');
+        this.mainPanel.appendChild(this.headerContainer);
+
         this.header = document.createElement('h1');
         this.header.style.lineHeight = '28px';
         this.header.style.width = '400px';
         this.header.style.margin = '0';
-        this.header.style.color = HIGHLIGHT_COLOR;
         this.header.style.fontSize = '100%';
         this.header.style.textAlign = 'center';
         this.header.style.cursor = 'pointer';
@@ -708,7 +741,7 @@ export class Panel implements Widget {
 
             this.toggleExpanded();
         };
-        this.mainPanel.appendChild(this.header);
+        this.headerContainer.appendChild(this.header);
 
         this.contents = document.createElement('div');
         this.contents.style.width = '400px';
@@ -748,7 +781,7 @@ export class Panel implements Widget {
     }
 
     public setTitle(icon: string, title: string) {
-        this.svgIcon = createDOMFromString(icon).querySelector('svg');
+        this.svgIcon = createDOMFromString(icon).querySelector('svg')!;
         this.svgIcon.style.gridColumn = '1';
         this.header.textContent = title;
         this.header.appendChild(this.svgIcon);
@@ -764,7 +797,7 @@ export class Panel implements Widget {
             this.header.style.color = 'white';
         } else {
             this.svgIcon.style.fill = this.expanded ? 'black' : '';
-            setElementHighlighted(this.header, this.expanded, HIGHLIGHT_COLOR);
+            setElementHighlighted(this.header, !!this.expanded, HIGHLIGHT_COLOR);
         }
     }
 
@@ -805,8 +838,113 @@ export class Panel implements Widget {
     }
 }
 
-const OPEN_ICON = `<svg viewBox="0 2 92 92" height="20" fill="white"><path d="M84.3765045,45.2316481 L77.2336539,75.2316205 L77.2336539,75.2316205 C77.1263996,75.6820886 76.7239081,76 76.2608477,76 L17.8061496,76 C17.2538649,76 16.8061496,75.5522847 16.8061496,75 C16.8061496,74.9118841 16.817796,74.8241548 16.8407862,74.739091 L24.7487983,45.4794461 C24.9845522,44.607157 25.7758952,44.0012839 26.6794815,44.0012642 L83.4036764,44.0000276 L83.4036764,44.0000276 C83.9559612,44.0000156 84.4036862,44.4477211 84.4036982,45.0000058 C84.4036999,45.0780163 84.3945733,45.155759 84.3765045,45.2316481 L84.3765045,45.2316481 Z M15,24 L26.8277004,24 L26.8277004,24 C27.0616369,24 27.2881698,24.0820162 27.4678848,24.2317787 L31.799078,27.8411064 L31.799078,27.8411064 C32.697653,28.5899189 33.8303175,29 35,29 L75,29 C75.5522847,29 76,29.4477153 76,30 L76,38 L76,38 C76,38.5522847 75.5522847,39 75,39 L25.3280454,39 L25.3280454,39 C23.0690391,39 21.0906235,40.5146929 20.5012284,42.6954549 L14.7844016,63.8477139 L14.7844016,63.8477139 C14.7267632,64.0609761 14.5071549,64.1871341 14.2938927,64.1294957 C14.1194254,64.0823423 13.9982484,63.9240598 13.9982563,63.7433327 L13.9999561,25 L14,25 C14.0000242,24.4477324 14.4477324,24.0000439 15,24.0000439 L15,24 Z"/></svg>`;
-const SEARCH_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 21 26.25" height="20" fill="white"><path d="M8.6953,14.3916 C5.5543,14.3916 3.0003,11.8356 3.0003,8.6956 C3.0003,5.5546 5.5543,2.9996 8.6953,2.9996 C11.8363,2.9996 14.3913,5.5546 14.3913,8.6956 C14.3913,11.8356 11.8363,14.3916 8.6953,14.3916 L8.6953,14.3916 Z M15.8423,13.7216 L15.6073,13.9566 C16.7213,12.4956 17.3913,10.6756 17.3913,8.6956 C17.3913,3.8936 13.4983,-0.0004 8.6953,-0.0004 C3.8933,-0.0004 0.0003,3.8936 0.0003,8.6956 C0.0003,13.4976 3.8933,17.3916 8.6953,17.3916 C10.6753,17.3916 12.4953,16.7216 13.9573,15.6076 L13.7213,15.8426 L18.3343,20.4546 L20.4553,18.3336 L15.8423,13.7216 Z"/></svg>`;
+export class FloatingPanel implements Widget {
+    public elem: HTMLElement;
+
+    public customHeaderBackgroundColor: string = '';
+    protected header: HTMLElement;
+    protected headerContainer: HTMLElement;
+    protected svgIcon: SVGSVGElement;
+
+    private toplevel: HTMLElement;
+    public mainPanel: HTMLElement;
+    public contents: HTMLElement;
+
+    constructor() {
+        this.toplevel = document.createElement('div');
+        this.toplevel.style.color = 'white';
+        this.toplevel.style.font = '16px monospace';
+        this.toplevel.style.overflow = 'hidden';
+        this.toplevel.style.display = 'grid';
+        this.toplevel.style.gridAutoFlow = 'column';
+        this.toplevel.style.gridGap = '20px';
+        this.toplevel.style.alignItems = 'start';
+        this.toplevel.style.outline = 'none';
+        this.toplevel.style.minWidth = '300px';
+        this.toplevel.style.position = 'absolute';
+        this.toplevel.style.left = '20px';
+        this.toplevel.style.top = '20px';
+        this.toplevel.tabIndex = -1;
+
+        this.mainPanel = document.createElement('div');
+        this.mainPanel.style.overflow = 'hidden';
+        this.mainPanel.style.transition = '.25s ease-out';
+        this.mainPanel.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
+        this.toplevel.appendChild(this.mainPanel);
+
+        this.headerContainer = document.createElement('div');
+        this.mainPanel.appendChild(this.headerContainer);
+
+        this.header = document.createElement('h1');
+        this.header.style.lineHeight = '28px';
+        this.header.style.margin = '0';
+        this.header.style.fontSize = '100%';
+        this.header.style.textAlign = 'center';
+        this.header.style.cursor = 'pointer';
+        this.header.style.userSelect = 'none';
+        this.header.style.webkitUserSelect = 'none';
+        this.header.style.display = 'grid';
+        this.header.style.gridTemplateColumns = '28px 1fr';
+        this.header.style.alignItems = 'center';
+        this.header.style.justifyItems = 'center';
+        this.header.style.gridAutoFlow = 'column';
+        this.header.addEventListener('mousedown', (e) => {
+            GlobalGrabManager.takeGrab(this, e, { takePointerLock: false });
+        });
+
+        this.headerContainer.appendChild(this.header);
+
+        this.contents = document.createElement('div');
+        this.contents.style.maxHeight = '50vh';
+        this.contents.style.overflow = 'auto';
+        this.mainPanel.appendChild(this.contents);
+
+        this.setWidth(400);
+
+        this.elem = this.toplevel;
+    }
+
+    public setWidth(v: number): void {
+        this.header.style.width = `${v}px`;
+        this.contents.style.width = `${v}px`;
+    }
+
+    public destroy(): void {
+        this.toplevel.parentElement.removeChild(this.toplevel);
+    }
+
+    public onMotion(dx: number, dy: number): void {
+        this.toplevel.style.left = (parseFloat(this.toplevel.style.left) + dx) + 'px';
+        this.toplevel.style.top = (parseFloat(this.toplevel.style.top) + dy) + 'px';
+    }
+
+    public onGrabReleased(): void {
+    }
+
+    public setVisible(v: boolean) {
+        this.toplevel.style.display = v ? 'grid' : 'none';
+    }
+
+    public setTitle(icon: string, title: string) {
+        this.svgIcon = createDOMFromString(icon).querySelector('svg')!;
+        this.svgIcon.style.gridColumn = '1';
+        this.header.textContent = title;
+        this.header.appendChild(this.svgIcon);
+        this.toplevel.dataset.title = title;
+        this.syncHeaderStyle();
+    }
+
+    protected syncHeaderStyle() {
+        if (this.customHeaderBackgroundColor) {
+            this.svgIcon.style.fill = '';
+            this.header.style.backgroundColor = this.customHeaderBackgroundColor;
+            this.header.style.color = 'white';
+        } else {
+            this.svgIcon.style.fill = 'black';
+            setElementHighlighted(this.header, true, HIGHLIGHT_COLOR);
+        }
+    }
+}
 
 // https://stackoverflow.com/questions/3446170/escape-string-for-use-in-javascript-regex
 function escapeRegExp(S: string): string {
@@ -857,14 +995,14 @@ class SceneSelect extends Panel {
         this.contents.appendChild(this.searchEntry.elem);
 
         this.sceneGroupList = new SingleSelect();
-        this.sceneGroupList.setHeight('300px');
+        this.sceneGroupList.setHeight('400px');
         this.contents.appendChild(this.sceneGroupList.elem);
 
         this.sceneDescList = new SingleSelect();
         this.sceneDescList.setHighlightFlair = false;
         this.sceneDescList.elem.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
         this.sceneDescList.elem.style.width = '500px';
-        this.sceneDescList.setHeight('372px');
+        this.sceneDescList.setHeight('472px');
         this.extraRack.appendChild(this.sceneDescList.elem);
 
         this.sceneGroupList.onselectionchange = (i: number) => {
@@ -878,11 +1016,11 @@ class SceneSelect extends Panel {
 
     protected onKeyDown(e: KeyboardEvent): void {
         if (e.code === 'ArrowUp' || e.code === 'ArrowDown') {
-            this.sceneGroupList.elem.onkeydown(e);
+            this.sceneGroupList.elem.onkeydown!(e);
         } else {
             const textarea = this.searchEntry.textfield.textarea;
             textarea.focus();
-            textarea.onkeydown(e);
+            textarea.onkeydown!(e);
         }
 
         if (e.defaultPrevented)
@@ -930,7 +1068,7 @@ class SceneSelect extends Panel {
                 let visible = false;
                 let explicitlyInvisible = false;
 
-                explicitlyInvisible = item.sceneDescs.length <= 0;
+                explicitlyInvisible = item.sceneDescs.length <= 0 || item.hidden;
                 if (!explicitlyInvisible) {
                     // If header matches, then we are explicitly visible.
                     if (!visible == lastGroupHeaderVisible)
@@ -990,7 +1128,7 @@ class SceneSelect extends Panel {
         this.syncSceneDescs();
     }
 
-    public setLoadProgress(pct: number) {
+    public setProgress(pct: number): void {
         this.loadProgress = pct;
         this.syncFlairs();
         this.syncHeaderStyle();
@@ -1000,20 +1138,21 @@ class SceneSelect extends Panel {
         this.onscenedescselected(this.selectedSceneGroup, this.sceneDescs[i] as Viewer.SceneDesc);
     }
 
-    private getLoadingGradient() {
+    private getLoadingGradient(rightColor: string) {
         const pct = `${Math.round(this.loadProgress * 100)}%`;
-        return `linear-gradient(to right, ${HIGHLIGHT_COLOR} ${pct}, transparent ${pct})`;
+        return `linear-gradient(to right, ${HIGHLIGHT_COLOR} ${pct}, ${rightColor} ${pct})`;
     }
 
     protected syncHeaderStyle() {
         super.syncHeaderStyle();
 
-        setElementHighlighted(this.header, this.expanded);
+        setElementHighlighted(this.header, !!this.expanded);
+        this.header.style.backgroundColor = 'transparent';
 
         if (this.expanded)
-            this.header.style.background = HIGHLIGHT_COLOR;
+            this.headerContainer.style.background = HIGHLIGHT_COLOR;
         else
-            this.header.style.background = this.getLoadingGradient();
+            this.headerContainer.style.background = this.getLoadingGradient(PANEL_BG_COLOR);
     }
 
     private syncFlairs() {
@@ -1029,7 +1168,7 @@ class SceneSelect extends Panel {
         const selectedDescIndex = this.sceneDescs.indexOf(this.currentSceneDesc);
         if (selectedDescIndex >= 0) {
             const flair = ensureFlairIndex(sceneDescFlairs, selectedDescIndex);
-            flair.background = this.getLoadingGradient();
+            flair.background = this.getLoadingGradient('transparent');
             flair.color = this.loadProgress > 0.5 ? 'black' : undefined;
             flair.fontWeight = 'bold';
             const pct = `${Math.round(this.loadProgress * 100)}%`;
@@ -1063,8 +1202,6 @@ class SceneSelect extends Panel {
         this.syncVisibility();
     }
 }
-
-const SAVE_ICON = `<svg viewBox="-8 -8 116 116" height="20" fill="white"><path fill="none" d="M35.763,37.954l30.977-0.021c2.118-0.001,4.296-2.033,4.296-4.15l-0.017-24.37L31.642,9.442l0.016,24.368   C31.658,35.928,33.645,37.955,35.763,37.954z M56.121,13.159l8.078-0.004c1.334-0.003,2.41,1.076,2.413,2.407l0.011,16.227   c-0.001,1.331-1.078,2.412-2.409,2.412l-8.082,0.005c-1.329,0.003-2.408-1.077-2.41-2.408l-0.01-16.23   C53.71,14.24,54.788,13.159,56.121,13.159z"/><path fill="none" d="M76.351,49.009H23.647c-2.457,0-4.449,2.079-4.449,4.644v34.044h61.605V53.652   C80.802,51.088,78.81,49.009,76.351,49.009z"/><path d="M56.132,34.206l8.082-0.005c1.331,0,2.408-1.081,2.409-2.412l-0.011-16.227c-0.003-1.331-1.08-2.411-2.413-2.407   l-8.078,0.004c-1.333,0-2.411,1.081-2.41,2.409l0.01,16.23C53.724,33.129,54.803,34.208,56.132,34.206z"/><path d="M92.756,22.267c-0.002-1.555-0.376-2.831-1.378-3.83c-0.645-0.644-7.701-7.692-11.327-11.318   c-1.279-1.271-3.68-2.121-5.468-2.12c-1.789,0.001-60.258,0.04-60.258,0.04C10.387,5.044,7.198,8.236,7.2,12.172l0.051,75.703   c0.003,3.939,3.197,7.126,7.134,7.125l71.29-0.048c3.937-0.001,7.127-3.197,7.126-7.131C92.8,87.82,92.756,23.228,92.756,22.267z    M71.019,9.414l0.017,24.37c0,2.117-2.178,4.148-4.296,4.15l-30.977,0.021c-2.117,0.001-4.104-2.026-4.104-4.144L31.642,9.442   L71.019,9.414z M80.802,87.697H19.198V53.652c0-2.564,1.992-4.644,4.449-4.644h52.704c2.459,0,4.451,2.079,4.451,4.644V87.697z"/></svg>`;
 
 function makeHashSafe(s: string): string {
     // The set of characters that we encode is basically determined by Twitter's URL parsing.
@@ -1264,13 +1401,11 @@ function cloneCanvas(dst: HTMLCanvasElement, src: HTMLCanvasElement): void {
     dst.width = src.width;
     dst.height = src.height;
     dst.title = src.title;
-    const ctx = dst.getContext('2d');
+    const ctx = dst.getContext('2d')!;
     ctx.drawImage(src, 0, 0);
 }
 
 const CHECKERBOARD_IMAGE = 'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAGElEQVQYlWNgYGCQwoKxgqGgcJA5h3yFAAs8BRWVSwooAAAAAElFTkSuQmCC")';
-
-const TEXTURES_ICON = `<svg viewBox="0 0 512 512" height="20" fill="white"><path d="M143.5,143.5v300h300v-300H143.5z M274.8,237.2c10.3,0,18.7,8.4,18.7,18.9c0,10.3-8.4,18.7-18.7,18.7   c-10.3,0-18.7-8.4-18.7-18.7C256,245.6,264.4,237.2,274.8,237.2z M406,406H181v-56.2l56.2-56.1l37.5,37.3l75-74.8l56.2,56.1V406z"/><polygon points="387.2,68.6 68.5,68.6 68.5,368.5 106,368.5 106,106 387.2,106"/></svg>`;
 
 export class TextureViewer extends Panel {
     private scrollList: SingleSelect;
@@ -1306,7 +1441,7 @@ export class TextureViewer extends Panel {
             this.surfaceView.style.backgroundColor = 'black';
             this.surfaceView.style.backgroundImage = '';
         };
-        this.surfaceView.onmouseout(null);
+        this.surfaceView.onmouseout(null as unknown as MouseEvent);
 
         this.contents.appendChild(this.surfaceView);
 
@@ -1317,6 +1452,14 @@ export class TextureViewer extends Panel {
         this.fullSurfaceView.style.backgroundColor = 'rgba(0, 0, 0, 0.2)';
         this.fullSurfaceView.style.padding = '20px';
         this.extraRack.appendChild(this.fullSurfaceView);
+    }
+
+    public async getViewerTextureList(): Promise<Viewer.Texture[]> {
+        const promises: Promise<void>[] = [];
+        for (let i = 0; i < this.textureList.length; i++)
+            promises.push(this.maybeActivateTexture(this.textureList[i]));
+        await Promise.all(promises);
+        return this.textureList;
     }
 
     private showInSurfaceView(surface: HTMLCanvasElement) {
@@ -1341,8 +1484,24 @@ export class TextureViewer extends Panel {
         }
     }
 
-    private selectTexture(i: number) {
+    private async maybeActivateTexture(texture: Viewer.Texture): Promise<void> {
+        if (texture.surfaces.length === 0 && texture.activate !== undefined) {
+            await texture.activate();
+        } else {
+            // We're good.
+        }
+    }
+
+    private selectTexture(i: number): void {
         const texture: Viewer.Texture = this.textureList[i];
+
+        if (texture.surfaces.length === 0 && texture.activate !== undefined) {
+            texture.activate().then(() => {
+                this.selectTexture(i);
+            });
+            return;
+        }
+
         this.scrollList.setHighlighted(i);
 
         const properties = new Map<string, string>();
@@ -1357,7 +1516,7 @@ export class TextureViewer extends Panel {
 
         this.properties.innerHTML = `<div style="display: grid; grid-template-columns: 1fr 1fr"></div>`;
 
-        const div = this.properties.firstElementChild;
+        const div = this.properties.firstElementChild!;
         properties.forEach((value, name) => {
             const nameSpan = document.createElement('span');
             nameSpan.textContent = name;
@@ -1368,11 +1527,19 @@ export class TextureViewer extends Panel {
             div.appendChild(valueSpan);
         });
 
-        this.showInSurfaceView(texture.surfaces[0]);
+        if (texture.surfaces.length > 0)
+            this.showInSurfaceView(texture.surfaces[0]);
+
         this.showInFullSurfaceView(texture.surfaces);
     }
 
+    public setThingList(things: { viewerTexture: Viewer.Texture }[]) {
+        this.setTextureList(things.map((thing) => thing.viewerTexture));
+    }
+
     public setTextureList(textures: Viewer.Texture[]) {
+        textures = textures.filter((tex) => tex.surfaces.length > 0 || tex.activate !== undefined);
+
         this.setVisible(textures.length > 0);
         if (textures.length === 0)
             return;
@@ -1390,23 +1557,18 @@ export class TextureViewer extends Panel {
     }
 }
 
-const FRUSTUM_ICON = `<svg viewBox="0 0 100 100" height="20" fill="white"><polygon points="48.2573,19.8589 33.8981,15.0724 5,67.8384 48.2573,90.3684" /><polygon points="51.5652,19.8738 51.5652,90.3734 95,67.8392 65.9366,15.2701" /><polygon points="61.3189,13.2756 49.9911,9.6265 38.5411,13.1331 49.9213,16.9268" /></svg>`;
+export class Slider implements Widget {
+    private toplevel: HTMLElement;
+    private sliderInput: HTMLInputElement;
 
-class ViewerSettings extends Panel {
-    private fovSlider: HTMLInputElement;
-    private camSpeedSlider: HTMLInputElement;
-    private cameraControllerWASD: HTMLElement;
-    private cameraControllerOrbit: HTMLElement;
-    private invertYCheckbox: Checkbox;
-    private invertXCheckbox: Checkbox;
+    public elem: HTMLElement;
+    public onvalue: ((value: number) => void) | null = null;
 
-    constructor(private viewer: Viewer.Viewer) {
-        super();
+    constructor() {
+        this.toplevel = document.createElement('div');
 
-        this.setTitle(FRUSTUM_ICON, 'Viewer Settings');
-
-        // TODO(jstpierre): make css not leak
-        this.contents.innerHTML = `
+        // DOM lacks a coherent way of adjusting pseudostyles, so this is what we end up with...
+        this.toplevel.innerHTML = `
 <style>
 .Slider {
     -webkit-appearance: none;
@@ -1442,6 +1604,69 @@ class ViewerSettings extends Panel {
     cursor: pointer;
     background: #aaa;
 }
+</style>
+<div style="display: grid; grid-template-columns: 1fr 1fr; align-items: center">
+<div style="font-weight: bold" class="Label"></div>
+<input class="Slider" type="range">
+</div>
+`;
+
+        this.sliderInput = this.toplevel.querySelector('.Slider');
+        this.sliderInput.oninput = this.onInput.bind(this);
+
+        this.elem = this.toplevel;
+    }
+
+    private onInput(): void {
+        if (this.onvalue !== null)
+            this.onvalue(this.getValue());
+    }
+
+    public setRange(min: number, max: number, step: number = (max - min) / 100) {
+        this.sliderInput.min = '' + min;
+        this.sliderInput.max = '' + max;
+        this.sliderInput.step = '' + step;
+    }
+
+    public setLabel(label: string): void {
+        this.toplevel.querySelector('.Label').textContent = label;
+    }
+
+    public getValue(): number {
+        return +this.sliderInput.value;
+    }
+
+    public setValue(v: number): void {
+        this.sliderInput.value = '' + v;
+    }
+
+    public getT(): number {
+        return (+this.sliderInput.value - +this.sliderInput.min) / (+this.sliderInput.max - +this.sliderInput.min);
+    }
+
+    public setT(t: number): void {
+        const v = (t * (+this.sliderInput.max - +this.sliderInput.min)) + +this.sliderInput.min;
+        this.setValue(v);
+    }
+}
+
+class ViewerSettings extends Panel {
+    private fovSlider: Slider;
+    private camSpeedSlider: Slider;
+    private cameraControllerWASD: HTMLElement;
+    private cameraControllerOrbit: HTMLElement;
+    private cameraControllerOrtho: HTMLElement;
+    private invertYCheckbox: Checkbox;
+    private invertXCheckbox: Checkbox;
+
+    constructor(private viewer: Viewer.Viewer) {
+        super();
+
+        this.setTitle(FRUSTUM_ICON, 'Viewer Settings');
+
+        // TODO(jstpierre): make css not leak
+        this.contents.innerHTML = `
+<style>
 .SettingsHeader, .SettingsButton {
     font-weight: bold;
 }
@@ -1453,40 +1678,46 @@ class ViewerSettings extends Panel {
 }
 </style>
 
-<div style="display: grid; grid-template-columns: 1fr 1fr; align-items: center;">
-<div class="SettingsHeader">Field of View</div>
-<input class="Slider FoVSlider" type="range" min="1" max="100">
-</div>
-
-<div style="display: grid; grid-template-columns: 1fr 1fr; align-items: center;">
-<div class="SettingsHeader">Camera Speed</div>
-<input class="Slider CamSpeedSlider" type="range" min="0" max="200">
-</div>
-
-<div style="display: grid; grid-template-columns: 2fr 1fr 1fr; align-items: center;">
+<div style="display: grid; grid-template-columns: 3fr 1fr 1fr 1fr; align-items: center;">
 <div class="SettingsHeader">Camera Controller</div>
-<div class="SettingsButton CameraControllerWASD">WASD</div><div class="SettingsButton CameraControllerOrbit">Orbit</div>
+<div class="SettingsButton CameraControllerWASD">WASD</div><div class="SettingsButton CameraControllerOrbit">Orbit</div><div class="SettingsButton CameraControllerOrtho">Ortho</div>
+</div>
+
+<div class="SliderContainer">
 </div>
 `;
         this.contents.style.lineHeight = '36px';
 
-        this.fovSlider = this.contents.querySelector('.FoVSlider');
-        this.fovSlider.oninput = this.onFovSliderChange.bind(this);
-        this.fovSlider.value = '25';
+        const sliderContainer = this.contents.querySelector('.SliderContainer');
+        this.fovSlider = new Slider();
+        this.fovSlider.setLabel("Field of View");
+        this.fovSlider.setRange(1, 100);
+        this.fovSlider.setValue(25);
+        this.fovSlider.onvalue = this.onFovSliderChange.bind(this);
+        sliderContainer.appendChild(this.fovSlider.elem);
 
-        this.camSpeedSlider = this.contents.querySelector('.CamSpeedSlider');
-        this.camSpeedSlider.oninput = this.updateCameraSpeed.bind(this);
+        this.camSpeedSlider = new Slider();
+        this.camSpeedSlider.setLabel("Camera Speed");
+        this.camSpeedSlider.setRange(0, 200);
+        this.camSpeedSlider.onvalue = this.updateCameraSpeed.bind(this);
+        sliderContainer.appendChild(this.camSpeedSlider.elem);
+
         this.viewer.addKeyMoveSpeedListener(this.onCameraController.bind(this));
         this.viewer.inputManager.addScrollListener(this.onScrollWheel.bind(this));
 
-        this.cameraControllerWASD = this.contents.querySelector('.CameraControllerWASD');
+        this.cameraControllerWASD = this.contents.querySelector('.CameraControllerWASD') as HTMLInputElement;
         this.cameraControllerWASD.onclick = () => {
             this.setCameraControllerClass(FPSCameraController);
         };
 
-        this.cameraControllerOrbit = this.contents.querySelector('.CameraControllerOrbit');
+        this.cameraControllerOrbit = this.contents.querySelector('.CameraControllerOrbit') as HTMLInputElement;
         this.cameraControllerOrbit.onclick = () => {
             this.setCameraControllerClass(OrbitCameraController);
+        };
+
+        this.cameraControllerOrtho = this.contents.querySelector('.CameraControllerOrtho') as HTMLInputElement;
+        this.cameraControllerOrtho.onclick = () => {
+            this.setCameraControllerClass(OrthoCameraController);
         };
 
         this.invertYCheckbox = new Checkbox('Invert Y Axis?');
@@ -1500,22 +1731,18 @@ class ViewerSettings extends Panel {
         GlobalSaveManager.addSettingListener('InvertX', this.invertXChanged.bind(this));
     }
 
-    private _getSliderT(slider: HTMLInputElement) {
-        return (+slider.value - +slider.min) / (+slider.max - +slider.min);
-    }
-
     private onFovSliderChange(e: UIEvent): void {
-        const slider = (<HTMLInputElement> e.target);
-        const value = this._getSliderT(slider);
+        const value = this.fovSlider.getT();
         this.viewer.fovY = value * (Math.PI * 0.995);
     }
 
     private onCameraController(): void {
-        this.camSpeedSlider.value = "" + this.viewer.cameraController.getKeyMoveSpeed();
+        this.camSpeedSlider.setValue(this.viewer.cameraController!.getKeyMoveSpeed());
     }
 
     private onScrollWheel(): void {
-        this.camSpeedSlider.value = "" + (Number(this.camSpeedSlider.value) + Math.sign(this.viewer.inputManager.dz)*4);
+        const v = this.camSpeedSlider.getValue() + Math.sign(this.viewer.inputManager.dz)*4;
+        this.camSpeedSlider.setValue(v);
         this.updateCameraSpeed();
     }
 
@@ -1526,12 +1753,17 @@ class ViewerSettings extends Panel {
     }
 
     private updateCameraSpeed(): void {
-        this.viewer.cameraController.setKeyMoveSpeed(Number(this.camSpeedSlider.value));
+        if (this.viewer.cameraController !== null)
+            this.viewer.cameraController.setKeyMoveSpeed(this.camSpeedSlider.getValue());
     }
 
     public cameraControllerSelected(cameraControllerClass: CameraControllerClass) {
         setElementHighlighted(this.cameraControllerWASD, cameraControllerClass === FPSCameraController);
         setElementHighlighted(this.cameraControllerOrbit, cameraControllerClass === OrbitCameraController);
+        setElementHighlighted(this.cameraControllerOrtho, cameraControllerClass === OrthoCameraController);
+
+        setElementVisible(this.fovSlider.elem, cameraControllerClass === FPSCameraController);
+        setElementVisible(this.camSpeedSlider.elem, cameraControllerClass === FPSCameraController);
     }
 
     private invertYChanged(saveManager: SaveManager, key: string): void {
@@ -1552,7 +1784,7 @@ class LineGraph {
 
     constructor(public minY: number = 0, public maxY: number = 160) {
         this.canvas = document.createElement('canvas');
-        this.ctx = this.canvas.getContext('2d');
+        this.ctx = this.canvas.getContext('2d')!;
     }
 
     public beginDraw(width: number, height: number): void {
@@ -1601,8 +1833,6 @@ class LineGraph {
     }
 }
 
-const STATISTICS_ICON = `
-<svg viewBox="5 0 55 60" height="16" fill="white"><g><polygon points="6.9,11.5 6.9,56 55.4,56 55.4,53 9.9,53 9.9,11.5"/><path d="M52.7,15.8c-2.7,0-4.9,2.2-4.9,4.9c0,1,0.3,1.8,0.8,2.6l-5,6.8c-0.4-0.1-0.9-0.2-1.3-0.2c-1.5,0-2.9,0.7-3.8,1.8l-5.6-2.8   c0-0.2,0.1-0.5,0.1-0.8c0-2.7-2.2-4.9-4.9-4.9s-4.9,2.2-4.9,4.9c0,1.1,0.3,2,0.9,2.8l-3.9,5.1c-0.5-0.2-1.1-0.3-1.7-0.3   c-2.7,0-4.9,2.2-4.9,4.9s2.2,4.9,4.9,4.9s4.9-2.2,4.9-4.9c0-1-0.3-2-0.8-2.7l4-5.2c0.5,0.2,1.1,0.3,1.6,0.3c1.4,0,2.6-0.6,3.5-1.5   l5.8,2.9c0,0.1,0,0.2,0,0.3c0,2.7,2.2,4.9,4.9,4.9c2.7,0,4.9-2.2,4.9-4.9c0-1.2-0.4-2.2-1.1-3.1l4.8-6.5c0.6,0.2,1.2,0.4,1.9,0.4   c2.7,0,4.9-2.2,4.9-4.9S55.4,15.8,52.7,15.8z"/></g></svg>`;
 
 class StatisticsPanel extends Panel {
     public history: RenderStatistics[] = [];
@@ -1652,10 +1882,9 @@ class StatisticsPanel extends Panel {
     }
 }
 
-const ABOUT_ICON = `
-<svg viewBox="0 0 100 100" height="16" fill="white"><path d="M50,1.1C23,1.1,1.1,23,1.1,50S23,98.9,50,98.9C77,98.9,98.9,77,98.9,50S77,1.1,50,1.1z M55.3,77.7c0,1.7-1.4,3.1-3.1,3.1  h-7.9c-1.7,0-3.1-1.4-3.1-3.1v-5.1c0-1.7,1.4-3.1,3.1-3.1h7.9c1.7,0,3.1,1.4,3.1,3.1V77.7z M67.8,47.3c-2.1,2.9-4.7,5.2-7.9,6.9  c-1.8,1.2-3,2.4-3.6,3.8c-0.4,0.9-0.7,2.1-0.9,3.5c-0.1,1.1-1.1,1.9-2.2,1.9h-9.7c-1.3,0-2.3-1.1-2.2-2.3c0.2-2.7,0.9-4.8,2-6.4  c1.4-1.9,3.9-4.2,7.5-6.7c1.9-1.2,3.3-2.6,4.4-4.3c1.1-1.7,1.6-3.7,1.6-6c0-2.3-0.6-4.2-1.9-5.6c-1.3-1.4-3-2.1-5.3-2.1  c-1.9,0-3.4,0.6-4.7,1.7c-0.8,0.7-1.3,1.6-1.6,2.8c-0.4,1.4-1.7,2.3-3.2,2.3l-9-0.2c-1.1,0-2-1-1.9-2.1c0.3-4.8,2.2-8.4,5.5-11  c3.8-2.9,8.7-4.4,14.9-4.4c6.6,0,11.8,1.7,15.6,5c3.8,3.3,5.7,7.8,5.7,13.5C70.9,41.2,69.8,44.4,67.8,47.3z"/></svg>`;
-
 class About extends Panel {
+    public onfaq: (() => void) | null = null;
+
     constructor() {
         super();
         this.setTitle(ABOUT_ICON, 'About');
@@ -1673,11 +1902,14 @@ class About extends Panel {
 #About li span {
     color: #aaa;
 }
-#About h2 {
+#About h1 {
     margin: 0px;
     font-size: 2em;
 }
-#About h2 span, #About h2 img {
+#About h2 {
+    font-size: 12.8pt;
+}
+#About h1 span, #About h1 img {
     vertical-align: middle;
     line-height: 64px;
 }
@@ -1687,7 +1919,10 @@ class About extends Panel {
 }
 </style>
 
-<h2> <img src="${logoURL}"> <span> noclip.website </span> </h2>
+<h1> <img src="${logoURL}"> <span> noclip.website </span> </h1>
+<h2> A digital museum of video game levels </h2>
+
+<a href="#" class="FAQLink"> What is this? / FAQ </a>
 
 <p> <strong>CLICK AND DRAG</strong> to look around and use <strong>WASD</strong> to move the camera </p>
 <p> Hold <strong>SHIFT</strong> to go faster, and use <strong>MOUSE WHEEL</strong> to fine tune the speed
@@ -1699,15 +1934,191 @@ class About extends Panel {
 
 <p><strong>OPEN SOURCE</strong> at <a href="${GITHUB_URL}">GitHub</a></p>
 
-<p>Feature requests and bugs welcome!</p>
+<p class="BuildVersion"><a href="${GITHUB_REVISION_URL}">build ${GIT_SHORT_REVISION}</a></p>
+</div>
+`;
+        const faqLink: HTMLAnchorElement = this.contents.querySelector('.FAQLink');
+        faqLink.onclick = () => {
+            if (this.onfaq !== null)
+                this.onfaq();
+        };
+    }
+}
 
-<p>
-<strong>BASED ON WORK</strong> by
+class FAQPanel implements Widget {
+    private toplevel: HTMLElement;
+    private panel: HTMLElement;
+
+    public elem: HTMLElement;
+
+    constructor() {
+        this.toplevel = document.createElement('div');
+        this.toplevel.classList.add('FAQPanel');
+        this.toplevel.style.position = 'absolute';
+        this.toplevel.style.left = '0';
+        this.toplevel.style.top = '0';
+        this.toplevel.style.right = '0';
+        this.toplevel.style.bottom = '0';
+        this.toplevel.style.background = 'rgba(0, 0, 0, 0.8)';
+        this.toplevel.onclick = () => {
+            this.elem.style.display = 'none';
+        };
+
+        const styleFrag = createDOMFromString(`
+<style>
+.FAQPanel a:link, .FAQPanel a:visited { color: #ddd; }
+.FAQPanel a:hover { color: #fff; }
+</style>
+`);
+        this.toplevel.appendChild(styleFrag);
+
+        this.panel = document.createElement('div');
+        this.panel.style.boxSizing = 'border-box';
+        this.panel.style.width = '50vw';
+        this.panel.style.margin = '5vh auto';
+        this.panel.style.height = '90vh';
+        this.panel.style.backgroundColor = 'black';
+        this.panel.style.padding = '2em';
+        this.panel.style.font = '11pt monospace';
+        this.panel.style.overflow = 'auto';
+        this.panel.style.color = '#ddd';
+        this.panel.style.textAlign = 'justify';
+        this.panel.onclick = (e) => {
+            e.stopPropagation();
+        };
+
+        const qa = document.createElement('div');
+        this.panel.appendChild(qa);
+
+        const faq = `
+## What is noclip.website?
+
+<p>noclip.website is a celebration of video game level design and art. It's a chance to
+explore and deepen your appreciation for some of your favorite games.</p>
+
+## Why did you make this?
+
+<p>I've always had an appreciation for the incredible worlds that game developers make.
+Sometimes staring closely at levels might help you understand the challenges the designers
+were facing, and what problems and techniques they used to solve them. You can learn a lot
+about a game by looking in the places they <em>don't</em> show in the game itself. It's
+also a ton of fun to test your memory, seeing if you can remember how a level is laid
+out, or where two rooms might connect to each other.</p>
+
+## It doesn't work!
+
+<p>Oops, sorry about that. Please let me know through either the <a href="https://discord.gg/bkJmKKv">official noclip.website Discord</a>
+or <a href="https://twitter.com/JasperRLZ/">Twitter</a>. Try to let me know what
+OS/browser/GPU you were using, and what game you tried to view, and I'll investigate.</p>
+
+## Can I request a game?
+
+<p>Maybe. Check around to see if anybody has looked at the game files before. If there's
+existing community documentation, that helps a lot. And if you're around to help answer
+questions or provide map names, I'm even more inclined.</p>
+
+<p>Even having documentation, games can take months of my time to add. So I have to be
+very careful with which games I choose to spend my time with.</p>
+
+<p>If you have some programming skills and want to try to add a game yourself, I fully
+welcome that. Join the Discord and I will be happy to help you get set up with a
+development environment and walk you through the code.</p>
+
+## Why do some levels look broken?
+
+<p>In order to put a game on the website, I first need to take apart the game, extract
+the data, and then figure out how to put it back together. Some of these games, especially
+the newer ones, are really complex with their levels and their models, and that often means
+it takes more work to make it look correct. The line between "game engine" and "game data"
+is only getting blurrier and blurrier.</p>
+
+<p>My dream is that the site contains fully accurate versions of each game, and I try
+to get closer to that goal when I can, but the effort and time involved to make an accurate
+recreation can sometimes be far too much, or would push me more into recreating large
+parts of the original game's engine, which I'm less interested in doing myself.</p>
+
+## How do I export models from the site?
+
+<p>You can't. From the technical side, there is no one consistent file format that has
+all of the features that an accurate model would require. From a personal perspective,
+I'm not ready to take on the support burden of writing an export tool.</p>
+
+<p>That said, if you would like to use my work as a base to build your own tools, the website
+is open-source and source code can be found at <a href="https://github.com/magcius/noclip.website">GitHub</a>.</p>
+
+<p>If you are looking for art for your own projects, there are some fantastic artists
+out there in the community that are always looking for work. Hire them instead of
+using art assets from other games.</p>
+
+## This is cool! Any way I can help you out!
+
+<p>Absolutely. Join <a href="https://discord.gg/bkJmKKv">the official Discord</a> and ask around if you would like to help out.
+The easiest things to help out with are providing savestates and naming maps, and can
+be done even if you do not know how to code. There's also some work that would be
+appreciated to help me improve accuracy, like running games in certain modes to help
+me compare the two.</p>
+
+<p>If you have a more tech-y background, there's always coding work to be done. All
+the source code to the site is available at <a href="https://github.com/magcius/noclip.website">GitHub</a>,
+whether you want to browse around, use it for your own purposes, or help contribute.</p>
+
+## Why does Skyward Sword have a level called Despacito? Is that its official name?
+
+<p>Nah. The internal names of a lot of the Zelda games is often just a letter-number code,
+something like 'F203_05'. Most of the maps have no real in-game name as far as I can
+tell, so I often spend a lot of time hunting down longplays on YouTube or playing the
+game myself to try and come up with a name for it. I had done this for most of
+Skyward Sword, but got a bit stumped on some of the maps, and put "Despacito" as an
+inside joke.</p>
+
+<p>If you come up with a better name for these maps, feel free to tell me, either on
+the <a href="https://discord.gg/bkJmKKv">official noclip.website Discord</a> or through
+<a href="https://twitter.com/JasperRLZ/">Twitter</a>.</p>
+
+## Are you afraid of being taken down?
+
+<p>Less than you might think. Companies take down fan projects when they're competing
+with their in-house projects. I don't see noclip.website as competing with any game
+out there &mdash; it's more of a museum, not a game. The worlds on display are incredible
+and I hope they encourage you to go out and buy a copy of the game itself.</p>
+
+<p>That said, I have enormous respect for the developers and dev teams and if I received
+a take-down request, I would honor it. It is their work on display, after all.</p>
+
+<p>Developers are only able to make these fantastic worlds if we collectively support
+them. noclip would not exist without their hard work and dedication. To ensure that they
+remain healthy, please try to buy games instead of pirating them. I also put in extra effort
+to ensure that all assets available on this site cannot be used to pirate the game itself.</p>
+
+## Do you accept donations?
+
+<p>No. Use the money to buy some games instead.</p>
+
+## Any affiliation to noclip, the documentary people?
+
+<p>I chatted with them once, but the name is a coincidence. The name comes from an old Quake
+command that would let you fly through the levels here, just like in the game.</p>
+
+## Have you seen the YouTube show Boundary Break?
+
+<p>Of course! I love that show. I'm ecstatic to see that exploring video game levels from
+different angles has captured the imaginations of such a wide audience. And I hope that this
+site encourages that same curiosity that's visible all throughout Boundary Break, trekking
+through these levels on your own adventures!</p>
+
+## Who made this site?
+
+<p>In my opinion? The artists and game developers. They made everything you actually see here
+on display.</p>
+
+<p>But in terms of, you know, developing the site itself, that would be me, <a href="https://twitter.com/JasperRLZ/">Jasper</a>,
+but I could not have done it alone. I've been assisted by so many others throughout:
 <a href="https://twitter.com/beholdnec">N.E.C.</a>,
 <a href="https://twitter.com/JuPaHe64">JuPaHe64</a>,
 <a href="https://twitter.com/Jawchewa">Jawchewa</a>,
 <a href="https://twitter.com/Starschulz">Starschulz</a>,
 <a href="https://twitter.com/kittensandals">SpaceCats</a>,
+<a href="https://twitter.com/arukidev">Aruki</a>,
 <a href="https://twitter.com/TanukiMatthew">TanukiMatthew</a>,
 <a href="https://twitter.com/QuadeZaban">Quade Zaban</a>,
 <a href="https://twitter.com/Murugalstudio">Murugo</a>,
@@ -1720,13 +2131,10 @@ class About extends Panel {
 <a href="https://github.com/vlad001">vlad001</a>,
 <a href="https://twitter.com/Jewelots_">Jewel</a>,
 <a href="https://twitter.com/instant_grat">Instant Grat</a>,
-<a href="https://twitter.com/pupperuki">Aruki</a>
-</p>
+along with countless others from the modding communities, game reverse
+engineering and research communities, and emulation communities.</p>
 
-<p><strong>MODELS</strong> © Nintendo, SEGA, Retro Studios, FROM Software,
-Konami, Neversoft, Double Fine Productions, HAL Laboratories</p>
-
-<p><strong>ICONS</strong> from <a href="https://thenounproject.com/">The Noun Project</a>,
+<p>All icons you see are from <a href="https://thenounproject.com/">The Noun Project</a>,
 used under Creative Commons CC-BY:</p>
 <ul>
 <li> Truncated Pyramid <span>by</span> Bohdan Burmich
@@ -1741,10 +2149,39 @@ used under Creative Commons CC-BY:</p>
 <li> Save <span>by</span> Prime Icons
 <li> Overlap <span>by</span> Zach Bogart
 </ul>
-
-<p class="BuildVersion"><a href="${GITHUB_REVISION_URL}">build ${GIT_SHORT_REVISION}</a></p>
-</div>
 `;
+
+        const qas = faq.split('##').slice(1).map((qa) => {
+            const firstNewline = qa.indexOf('\n');
+            const question = qa.slice(0, firstNewline).trim();
+            const answer = qa.slice(firstNewline).trim();
+
+            return { question, answer };
+        });
+
+        for (let i = 0; i < qas.length; i++) {
+            const block = document.createElement('div');
+
+            const title = qas[i].question;
+
+            const q = document.createElement('p');
+            q.style.color = '#ccc';
+            q.style.fontWeight = 'bold';
+            q.style.marginTop = '0';
+            q.style.fontSize = '12pt';
+            q.textContent = title;
+            block.appendChild(q);
+            const a = document.createElement('p');
+            a.style.marginBottom = '1.6em';
+            a.innerHTML = qas[i].answer;
+            block.appendChild(a);
+
+            qa.appendChild(block);
+        }
+
+        this.toplevel.appendChild(this.panel);
+
+        this.elem = this.toplevel;
     }
 }
 
@@ -1754,25 +2191,26 @@ export interface Layer {
     setVisible(v: boolean): void;
 }
 
-const LAYER_ICON = `<svg viewBox="0 0 16 16" height="20" fill="white"><g transform="translate(0,-1036.3622)"><path d="m 8,1039.2486 -0.21875,0.125 -4.90625,2.4375 5.125,2.5625 5.125,-2.5625 L 8,1039.2486 z m -3,4.5625 -2.125,0.9688 5.125,2.5625 5.125,-2.5625 -2.09375,-0.9688 -3.03125,1.5 -1,-0.5 -0.90625,-0.4375 L 5,1043.8111 z m 0,3 -2.125,0.9688 5.125,2.5625 5.125,-2.5625 -2.09375,-0.9688 -3.03125,1.5 -1,-0.5 -0.90625,-0.4375 L 5,1046.8111 z"/></g></svg>`;
-
 export class LayerPanel extends Panel {
     private multiSelect: MultiSelect;
-    private layers: Layer[];
+    private layers: Layer[] = [];
+    public onlayertoggled: (() => void) | null = null;
 
-    constructor(layers: Layer[] = null) {
+    constructor(layers: Layer[] | null = null) {
         super();
         this.customHeaderBackgroundColor = COOL_BLUE_COLOR;
         this.setTitle(LAYER_ICON, 'Layers');
         this.multiSelect = new MultiSelect();
         this.multiSelect.onitemchanged = this._onItemChanged.bind(this);
         this.contents.appendChild(this.multiSelect.elem);
-        if (layers)
+        if (layers !== null)
             this.setLayers(layers);
     }
 
     private _onItemChanged(index: number, visible: boolean): void {
         this.layers[index].setVisible(visible);
+        if (this.onlayertoggled !== null)
+            this.onlayertoggled();
     }
 
     public syncLayerVisibility(): void {
@@ -1788,10 +2226,226 @@ export class LayerPanel extends Panel {
     }
 }
 
+declare global {
+    interface CSSStyleDeclaration {
+        imageRendering: string;
+    }
+}
+
+class TimeScrubber implements Widget {
+    private pixelsPerSecond: number = 16;
+    private toplevel: HTMLElement;
+    private track: HTMLCanvasElement;
+    private marker: HTMLElement;
+
+    public elem: HTMLElement;
+    public ontimescrub: ((adj: number) => void) | null = null;
+
+    constructor() {
+        this.toplevel = document.createElement('div');
+        this.toplevel.style.display = 'block';
+        this.toplevel.style.height = '2em';
+        this.toplevel.style.cursor = 'grab';
+        this.toplevel.style.position = 'relative';
+        this.toplevel.addEventListener('mousedown', (e) => {
+            GlobalGrabManager.takeGrab(this, e, { takePointerLock: true });
+        });
+
+        this.track = document.createElement('canvas');
+        this.track.style.position = 'absolute';
+        this.track.style.left = '0';
+        this.track.style.top = '0';
+        this.track.style.right = '0';
+        this.track.style.bottom = '0';
+        this.track.style.imageRendering = 'crisp-edges';
+        this.toplevel.appendChild(this.track);
+
+        this.marker = document.createElement('div');
+        this.marker.style.position = 'absolute';
+        this.marker.style.left = '50%';
+        this.marker.style.top = '0';
+        this.marker.style.bottom = '0';
+        this.marker.style.marginLeft = '-5px';
+        this.marker.style.backgroundColor = 'rgba(255, 255, 255, 0.6)';
+        this.marker.style.width = '10px';
+        this.marker.style.clipPath = `polygon(0% 0%, 50% 15%, 50% 85%, 0% 100%, 100% 100%, 50% 85%, 50% 15%, 100% 0%)`;
+        this.toplevel.append(this.marker);
+
+        this.elem = this.toplevel;
+    }
+
+    public onMotion(dx: number, dy: number): void {
+        const timeAdjustSeconds = -dx / this.pixelsPerSecond;
+        const timeAdjust = timeAdjustSeconds * 1000;
+
+        if (this.ontimescrub !== null)
+            this.ontimescrub(timeAdjust);
+    }
+
+    public onGrabReleased(): void {
+        // No need to do much.
+    }
+
+    public isScrubbing(): boolean {
+        return GlobalGrabManager.hasGrabListener(this);
+    }
+
+    public update(sceneTime: number, timeScale: number): void {
+        this.drawTrack(sceneTime);
+    }
+
+    protected drawTrack(sceneTime: number): void {
+        const w = this.toplevel.offsetWidth;
+        const h = this.toplevel.offsetHeight;
+        this.track.width = w;
+        this.track.height = h;
+
+        const ctx = this.track.getContext('2d');
+
+        // sceneTime is in milliseconds.
+        const sceneTimeSeconds = sceneTime / 1000;
+
+        const rad = (w / this.pixelsPerSecond) / 2;
+        // Iterate over all the seconds in this track.
+        const windowTimeLeft = Math.max(sceneTimeSeconds - rad, 0);
+        const windowTimeRight = sceneTimeSeconds + rad;
+
+        for (let t = (windowTimeLeft | 0); t < ((windowTimeRight + 1) | 0); t++) {
+            // Draw notch at time t.
+            const notchX = w/2 + (t - sceneTimeSeconds) * this.pixelsPerSecond;
+
+            if ((t % 5) === 0) {
+                const notchH = 6;
+                ctx.beginPath();
+                ctx.moveTo(notchX, 0);
+                ctx.lineTo(notchX, notchH);
+                ctx.moveTo(notchX, h-notchH);
+                ctx.lineTo(notchX, h);
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = HIGHLIGHT_COLOR;
+                ctx.stroke();
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                const label = '' + (t % 1000);
+                ctx.font = '10pt monospace';
+                ctx.fillStyle = '#aaa';
+                ctx.fillText(label, notchX, h/2);
+            } else {
+                const notchH = 2;
+                ctx.beginPath();
+                ctx.moveTo(notchX, 0);
+                ctx.lineTo(notchX, notchH);
+                ctx.moveTo(notchX, h-notchH);
+                ctx.lineTo(notchX, h);
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = 'rgb(210, 30, 30, 0.8)';
+                ctx.stroke();
+            }
+        }
+    }
+}
+
+export class TimePanel extends Panel {
+    private scrubber: TimeScrubber;
+    private rewindButton: HTMLElement;
+    private pausePlayButton: HTMLElement;
+    private isPlaying: boolean = true;
+    private normalSceneTimeScale = 1;
+
+    public ontimescrub: ((adj: number) => void) | null = null;
+    public onrewind: (() => void) | null = null;
+
+    constructor() {
+        super();
+        this.setTitle(SAND_CLOCK_ICON, 'Time');
+
+        this.scrubber = new TimeScrubber();
+        this.scrubber.ontimescrub = (adj: number) => {
+            if (this.ontimescrub !== null)
+                this.ontimescrub(adj);
+        };
+        this.contents.appendChild(this.scrubber.elem);
+
+        const h = document.createElement('div');
+        h.style.display = 'grid';
+        h.style.gridAutoFlow = 'column';
+        h.style.gridGap = '8px';
+
+        this.rewindButton = document.createElement('div');
+        this.rewindButton.style.textAlign = 'center';
+        this.rewindButton.style.lineHeight = '1.5em';
+        this.rewindButton.style.userSelect = 'none';
+        this.rewindButton.style.cursor = 'pointer';
+        this.rewindButton.style.fontWeight = 'bold';
+        this.rewindButton.style.backgroundColor = COOL_BLUE_COLOR;
+        this.rewindButton.textContent = 'Rewind';
+        this.rewindButton.onclick = () => {
+            if (this.onrewind !== null)
+                this.onrewind();
+        };
+        h.appendChild(this.rewindButton);
+
+        this.pausePlayButton = document.createElement('div');
+        this.pausePlayButton.style.textAlign = 'center';
+        this.pausePlayButton.style.lineHeight = '1.5em';
+        this.pausePlayButton.style.userSelect = 'none';
+        this.pausePlayButton.style.cursor = 'pointer';
+        this.pausePlayButton.style.fontWeight = 'bold';
+        this.pausePlayButton.style.backgroundColor = COOL_BLUE_COLOR;
+        this.pausePlayButton.onclick = () => {
+            this.togglePausePlay();
+        };
+        h.appendChild(this.pausePlayButton);
+
+        this.sync();
+
+        this.contents.appendChild(h);
+    }
+
+    private sync(): void {
+        if (this.isPlaying) {
+            this.pausePlayButton.textContent = 'Pause';
+        } else {
+            this.pausePlayButton.textContent = 'Play';
+        }
+    }
+
+    public getTimeScale(): number {
+        if (this.scrubber.isScrubbing())
+            return 0;
+
+        if (!this.isPlaying)
+            return 0;
+
+        return this.normalSceneTimeScale;
+    }
+
+    public togglePausePlay(): void {
+        this.isPlaying = !this.isPlaying;
+        this.sync();
+    }
+
+    public update(sceneTime: number, timeScale: number): void {
+        // Expensive, so prevent it if we can help it...
+        if (!this.expanded)
+            return;
+
+        this.scrubber.update(sceneTime, timeScale);
+    }
+}
+
 export class UI {
     public elem: HTMLElement;
 
     private toplevel: HTMLElement;
+
+    public dragHighlight: HTMLElement;
+    public sceneUIContainer: HTMLElement;
+
+    private floatingPanelContainer: HTMLElement;
+    private floatingPanels: FloatingPanel[] = [];
+
+    private panelToplevel: HTMLElement;
     private panelContainer: HTMLElement;
 
     public sceneSelect: SceneSelect;
@@ -1799,47 +2453,85 @@ export class UI {
     public textureViewer: TextureViewer;
     public viewerSettings: ViewerSettings;
     public statisticsPanel: StatisticsPanel;
+    public timePanel: TimePanel;
     public panels: Panel[];
     private about: About;
+    private faqPanel: FAQPanel;
 
     constructor(public viewer: Viewer.Viewer) {
         this.toplevel = document.createElement('div');
-        this.toplevel.style.position = 'absolute';
-        this.toplevel.style.left = '0';
-        this.toplevel.style.top = '0';
-        this.toplevel.style.bottom = '0';
-        this.toplevel.style.padding = '2em';
-        this.toplevel.style.transition = '.2s background-color';
-        this.toplevel.onmouseover = () => {
-            this.toplevel.style.backgroundColor = 'rgba(0, 0, 0, 0.2)';
-            this.toplevel.style.overflow = 'auto';
+
+        this.sceneUIContainer = document.createElement('div');
+        this.sceneUIContainer.style.pointerEvents = 'none';
+        this.toplevel.appendChild(this.sceneUIContainer);
+
+        this.panelToplevel = document.createElement('div');
+        this.panelToplevel.style.position = 'absolute';
+        this.panelToplevel.style.left = '0';
+        this.panelToplevel.style.top = '0';
+        this.panelToplevel.style.bottom = '0';
+        this.panelToplevel.style.padding = '2em';
+        this.panelToplevel.style.transition = '.2s background-color';
+        this.panelToplevel.onmouseover = () => {
+            this.panelToplevel.style.backgroundColor = 'rgba(0, 0, 0, 0.2)';
+            this.panelToplevel.style.overflow = 'auto';
             this.setPanelsAutoClosed(false);
         };
-        this.toplevel.onmouseout = () => {
-            this.toplevel.style.backgroundColor = 'rgba(0, 0, 0, 0)';
-            this.toplevel.style.overflow = 'hidden';
+        this.panelToplevel.onmouseout = () => {
+            this.panelToplevel.style.backgroundColor = 'rgba(0, 0, 0, 0)';
+            this.panelToplevel.style.overflow = 'hidden';
         };
 
         this.panelContainer = document.createElement('div');
         this.panelContainer.style.display = 'grid';
         this.panelContainer.style.gridTemplateColumns = '1fr';
         this.panelContainer.style.gridGap = '20px';
-        this.toplevel.appendChild(this.panelContainer);
+        this.panelToplevel.appendChild(this.panelContainer);
+
+        this.toplevel.appendChild(this.panelToplevel);
+
+        this.dragHighlight = document.createElement('div');
+        this.toplevel.appendChild(this.dragHighlight);
+        this.dragHighlight.style.position = 'absolute';
+        this.dragHighlight.style.left = '0';
+        this.dragHighlight.style.right = '0';
+        this.dragHighlight.style.top = '0';
+        this.dragHighlight.style.bottom = '0';
+        this.dragHighlight.style.backgroundColor = 'rgba(255, 255, 255, 0.5)';
+        this.dragHighlight.style.boxShadow = '0 0 40px 5px white inset';
+        this.dragHighlight.style.display = 'none';
+        this.dragHighlight.style.pointerEvents = 'none';
+
+        this.floatingPanelContainer = document.createElement('div');
+        this.toplevel.appendChild(this.floatingPanelContainer);
 
         this.sceneSelect = new SceneSelect(viewer);
         this.saveStatesPanel = new SaveStatesPanel(viewer.inputManager);
         this.textureViewer = new TextureViewer();
         this.viewerSettings = new ViewerSettings(viewer);
         this.statisticsPanel = new StatisticsPanel(viewer);
+        this.timePanel = new TimePanel();
         this.about = new About();
 
-        this.setScenePanels([]);
+        this.about.onfaq = () => {
+            this._onFAQ();
+        };
+
+        this.faqPanel = new FAQPanel();
+        this.faqPanel.elem.style.display = 'none';
+        this.toplevel.appendChild(this.faqPanel.elem);
+
+        this.setScenePanels(null);
 
         this.elem = this.toplevel;
     }
 
+    private _onFAQ(): void {
+        this.faqPanel.elem.style.display = 'block';
+    }
+
     public sceneChanged() {
-        const cameraControllerClass = this.viewer.cameraController.constructor as CameraControllerClass;
+        const cameraControllerClass = this.viewer.cameraController!.constructor as CameraControllerClass;
         this.viewerSettings.cameraControllerSelected(cameraControllerClass);
 
         // Textures
@@ -1857,8 +2549,19 @@ export class UI {
         setChildren(this.panelContainer, panels.map((panel) => panel.elem));
     }
 
-    public setScenePanels(panels: Panel[]): void {
-        this.setPanels([this.sceneSelect, ...panels, this.textureViewer, this.saveStatesPanel, this.viewerSettings, this.statisticsPanel, this.about]);
+    public destroyScene(): void {
+        setChildren(this.sceneUIContainer, []);
+
+        for (let i = 0; i < this.floatingPanels.length; i++)
+            this.floatingPanels[i].destroy();
+        this.floatingPanels = [];
+    }
+
+    public setScenePanels(scenePanels: Panel[] | null): void {
+        if (scenePanels !== null)
+            this.setPanels([this.sceneSelect, ...scenePanels, this.textureViewer, this.timePanel, this.saveStatesPanel, this.viewerSettings, this.statisticsPanel, this.about]);
+        else
+            this.setPanels([this.sceneSelect, this.about]);
     }
 
     public setPanelsAutoClosed(v: boolean): void {
@@ -1877,5 +2580,72 @@ export class UI {
         this.elem.style.pointerEvents = isDragging ? 'none' : '';
         if (isDragging && this.shouldPanelsAutoClose())
             this.setPanelsAutoClosed(true);
+    }
+
+    public makeFloatingPanel(title: string = 'Floating Panel', icon: string = RENDER_HACKS_ICON): FloatingPanel {
+        const panel = new FloatingPanel();
+        panel.setWidth(600);
+        panel.setTitle(icon, title);
+        this.floatingPanelContainer.appendChild(panel.elem);
+        this.floatingPanels.push(panel);
+        return panel;
+    }
+
+    private debugFloater: FloatingPanel | null = null;
+    private getDebugFloater(): FloatingPanel {
+        if (this.debugFloater === null)
+            this.debugFloater = this.makeFloatingPanel('Debug');
+        return this.debugFloater;
+    }
+
+    public bindSlider(obj: { [k: string]: number }, paramName: string, min = 0, max = 1, labelName: string = paramName, panel: FloatingPanel): void {
+        let value = obj[paramName];
+        assert(typeof value === "number");
+
+        const slider = new Slider();
+        slider.onvalue = (newValue: number) => {
+            obj[paramName] = newValue;
+            window.debugObj = obj;
+            update();
+        };
+        update();
+
+        function update() {
+            value = obj[paramName];
+            slider.setLabel(`${labelName} = ${value.toFixed(2)}`);
+            min = Math.min(value, min);
+            max = Math.max(value, max);
+            slider.setRange(min, max);
+            slider.setValue(value);
+        }
+
+        setInterval(() => {
+            if (obj[paramName] !== value)
+                update();
+        }, 100);
+
+        panel.contents.appendChild(slider.elem);
+    }
+
+    private bindSlidersRecurse(obj: { [k: string]: any }, parentName: string, panel: FloatingPanel): void {
+        for (const keyName in obj) {
+            const v = obj[keyName];
+            if (typeof v === "number")
+                this.bindSlider(obj, keyName, 0, 1, `${parentName}.${keyName}`, panel);
+            if (v instanceof Float32Array)
+                this.bindSlidersRecurse(v, `${parentName}.${keyName}`, panel);
+        }
+    }
+
+    public bindSliders(obj: { [k: string]: any }, panel: FloatingPanel | null = null): void {
+        if (panel === null)
+            panel = this.getDebugFloater();
+
+        while (panel.contents.firstChild)
+            panel.contents.removeChild(panel.contents.firstChild);
+
+        this.bindSlidersRecurse(obj, '', panel);
+
+        window.debugObj = obj;
     }
 }

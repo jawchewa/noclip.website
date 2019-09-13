@@ -3,12 +3,14 @@
 
 import * as GX from './gx_enum';
 
-import { DeviceProgram, DeviceProgramReflection } from '../Program';
-import { colorCopy, colorFromRGBA8, colorToRGBA8, colorFromRGBA } from '../Color';
+import { DeviceProgram } from '../Program';
+import { colorCopy, colorFromRGBA, colorNew, TransparentBlack, colorNewCopy } from '../Color';
 import { GfxFormat } from '../gfx/platform/GfxPlatformFormat';
 import { GfxCompareMode, GfxFrontFaceMode, GfxBlendMode, GfxBlendFactor, GfxCullMode, GfxMegaStateDescriptor } from '../gfx/platform/GfxPlatform';
 import { vec3, vec4, mat4 } from 'gl-matrix';
 import { Camera } from '../Camera';
+import { assert } from '../util';
+import { reverseDepthForCompareMode } from '../gfx/helpers/ReversedDepthHelpers';
 
 // TODO(jstpierre): Move somewhere better...
 export const EFB_WIDTH = 640;
@@ -35,50 +37,31 @@ export interface GXMaterial {
     // Raster / blend state.
     alphaTest: AlphaTest;
     ropInfo: RopInfo;
-}
 
-export class Color {
-    constructor(
-        public r: number = 0,
-        public g: number = 0,
-        public b: number = 0,
-        public a: number = 0,
-    )
-    {}
-
-    public set(r: number, g: number, b: number, a: number): void {
-        this.r = r;
-        this.g = g;
-        this.b = b;
-        this.a = a;
-    }
-
-    public copy(c: Color, a: number = c.a): void {
-        return colorCopy(this, c, a);
-    }
-
-    public copy32(c: number): void {
-        return colorFromRGBA8(this, c);
-    }
-
-    public get32(): number {
-        return colorToRGBA8(this);
-    }
+    // Optimization and other state.
+    usePnMtxIdx?: boolean;
+    useTexMtxIdx?: boolean[];
+    hasPostTexMtxBlock?: boolean;
+    hasLightsBlock?: boolean;
 }
 
 export class Light {
     public Position = vec3.create();
-    public Direction = vec3.fromValues(0, 0, -1);
+    public Direction = vec3.create();
     public DistAtten = vec3.create();
     public CosAtten = vec3.create();
-    public Color = new Color();
+    public Color = colorNewCopy(TransparentBlack);
+
+    constructor() {
+        this.reset();
+    }
 
     public reset(): void {
-        colorFromRGBA(this.Color, 0, 0, 0, 1);
         vec3.set(this.Position, 0, 0, 0);
         vec3.set(this.Direction, 0, 0, -1);
-        vec3.set(this.DistAtten, 0, 0, 0);
-        vec3.set(this.CosAtten, 0, 0, 0);
+        vec3.set(this.DistAtten, 1, 0, 0);
+        vec3.set(this.CosAtten, 1, 0, 0);
+        colorFromRGBA(this.Color, 0, 0, 0, 1);
     }
 
     public copy(o: Light): void {
@@ -232,19 +215,22 @@ interface VertexAttributeGenDef {
 }
 
 const vtxAttributeGenDefs: VertexAttributeGenDef[] = [
-    { attrib: GX.VertexAttribute.POS,        name: "Position",   format: GfxFormat.F32_RGB },
-    { attrib: GX.VertexAttribute.PNMTXIDX,   name: "PosMtxIdx",  format: GfxFormat.U8_R },
-    { attrib: GX.VertexAttribute.NRM,        name: "Normal",     format: GfxFormat.F32_RGB },
-    { attrib: GX.VertexAttribute.CLR0,       name: "Color0",     format: GfxFormat.F32_RGBA },
-    { attrib: GX.VertexAttribute.CLR1,       name: "Color1",     format: GfxFormat.F32_RGBA },
-    { attrib: GX.VertexAttribute.TEX0,       name: "Tex0",       format: GfxFormat.F32_RG },
-    { attrib: GX.VertexAttribute.TEX1,       name: "Tex1",       format: GfxFormat.F32_RG },
-    { attrib: GX.VertexAttribute.TEX2,       name: "Tex2",       format: GfxFormat.F32_RG },
-    { attrib: GX.VertexAttribute.TEX3,       name: "Tex3",       format: GfxFormat.F32_RG },
-    { attrib: GX.VertexAttribute.TEX4,       name: "Tex4",       format: GfxFormat.F32_RG },
-    { attrib: GX.VertexAttribute.TEX5,       name: "Tex5",       format: GfxFormat.F32_RG },
-    { attrib: GX.VertexAttribute.TEX6,       name: "Tex6",       format: GfxFormat.F32_RG },
-    { attrib: GX.VertexAttribute.TEX7,       name: "Tex7",       format: GfxFormat.F32_RG },
+    { attrib: GX.VertexAttribute.POS,        name: "Position",      format: GfxFormat.F32_RGB },
+    { attrib: GX.VertexAttribute.PNMTXIDX,   name: "PnMtxIdx",      format: GfxFormat.U8_R },
+    // These are packed separately since we would run out of attribute space otherwise.
+    { attrib: GX.VertexAttribute.TEX0MTXIDX, name: "TexMtx0123Idx", format: GfxFormat.U8_RGBA },
+    { attrib: GX.VertexAttribute.TEX4MTXIDX, name: "TexMtx4567Idx", format: GfxFormat.U8_RGBA },
+    { attrib: GX.VertexAttribute.NRM,        name: "Normal",        format: GfxFormat.F32_RGB },
+    { attrib: GX.VertexAttribute.CLR0,       name: "Color0",        format: GfxFormat.F32_RGBA },
+    { attrib: GX.VertexAttribute.CLR1,       name: "Color1",        format: GfxFormat.F32_RGBA },
+    { attrib: GX.VertexAttribute.TEX0,       name: "Tex0",          format: GfxFormat.F32_RG },
+    { attrib: GX.VertexAttribute.TEX1,       name: "Tex1",          format: GfxFormat.F32_RG },
+    { attrib: GX.VertexAttribute.TEX2,       name: "Tex2",          format: GfxFormat.F32_RG },
+    { attrib: GX.VertexAttribute.TEX3,       name: "Tex3",          format: GfxFormat.F32_RG },
+    { attrib: GX.VertexAttribute.TEX4,       name: "Tex4",          format: GfxFormat.F32_RG },
+    { attrib: GX.VertexAttribute.TEX5,       name: "Tex5",          format: GfxFormat.F32_RG },
+    { attrib: GX.VertexAttribute.TEX6,       name: "Tex6",          format: GfxFormat.F32_RG },
+    { attrib: GX.VertexAttribute.TEX7,       name: "Tex7",          format: GfxFormat.F32_RG },
 ];
 
 export function getVertexAttribLocation(vtxAttrib: GX.VertexAttribute): number {
@@ -252,7 +238,7 @@ export function getVertexAttribLocation(vtxAttrib: GX.VertexAttribute): number {
 }
 
 export function getVertexAttribGenDef(vtxAttrib: GX.VertexAttribute): VertexAttributeGenDef {
-    return vtxAttributeGenDefs.find((genDef) => genDef.attrib === vtxAttrib);
+    return vtxAttributeGenDefs.find((genDef) => genDef.attrib === vtxAttrib)!;
 }
 
 export interface LightingFudgeParams {
@@ -269,6 +255,8 @@ export interface GXMaterialHacks {
     lightingFudge?: LightingFudgeGenerator;
     disableTextures?: boolean;
     disableVertexColors?: boolean;
+    disableLighting?: boolean;
+    useTextureCoords?: boolean;
 }
 
 function colorChannelsEqual(a: ColorChannelControl, b: ColorChannelControl): boolean {
@@ -281,12 +269,80 @@ function colorChannelsEqual(a: ColorChannelControl, b: ColorChannelControl): boo
     return true;
 }
 
+export function materialHasPostTexMtxBlock(material: { hasPostTexMtxBlock?: boolean }): boolean {
+    return material.hasPostTexMtxBlock !== undefined ? material.hasPostTexMtxBlock : true;
+}
+
+export function materialHasLightsBlock(material: { hasLightsBlock?: boolean }): boolean {
+    return material.hasLightsBlock !== undefined ? material.hasLightsBlock : true;
+}
+
+function generateBindingsDefinition(material: { hasPostTexMtxBlock?: boolean, hasLightsBlock?: boolean }): string {
+    return `
+// Expected to be constant across the entire scene.
+layout(row_major, std140) uniform ub_SceneParams {
+    Mat4x4 u_Projection;
+    vec4 u_Misc0;
+};
+
+#define u_SceneTextureLODBias u_Misc0[0]
+
+struct Light {
+    vec4 Color;
+    vec4 Position;
+    vec4 Direction;
+    vec4 DistAtten;
+    vec4 CosAtten;
+};
+
+// Expected to change with each material.
+layout(row_major, std140) uniform ub_MaterialParams {
+    vec4 u_ColorMatReg[2];
+    vec4 u_ColorAmbReg[2];
+    vec4 u_KonstColor[4];
+    vec4 u_Color[4];
+    Mat4x3 u_TexMtx[10];
+    // SizeX, SizeY, 0, Bias
+    vec4 u_TextureParams[8];
+    Mat4x2 u_IndTexMtx[3];
+
+    // Optional parameters.
+${materialHasPostTexMtxBlock(material) ? `
+    Mat4x3 u_PostTexMtx[20];
+` : ``}
+${materialHasLightsBlock(material) ? `
+    Light u_LightParams[8];
+` : ``}
+};
+
+// Expected to change with each shape packet.
+layout(row_major, std140) uniform ub_PacketParams {
+    Mat4x3 u_PosMtx[10];
+};
+
+uniform sampler2D u_Texture[8];
+`;
+}
+
+export function getMaterialParamsBlockSize(material: GXMaterial): number {
+    const hasPostTexMtxBlock = material.hasPostTexMtxBlock !== undefined ? material.hasPostTexMtxBlock : true;
+    const hasLightsBlock = material.hasLightsBlock !== undefined ? material.hasLightsBlock : true;
+
+    let size = 4*2 + 4*2 + 4*4 + 4*4 + 4*3*10 + 4*2*3 + 4*8;
+    if (hasPostTexMtxBlock)
+        size += 4*3*20;
+    if (hasLightsBlock)
+        size += 4*5*8;
+
+    return size;
+}
+
 export class GX_Program extends DeviceProgram {
     public static ub_SceneParams = 0;
     public static ub_MaterialParams = 1;
     public static ub_PacketParams = 2;
 
-    constructor(private material: GXMaterial, private hacks: GXMaterialHacks = null) {
+    constructor(private material: GXMaterial, private hacks: GXMaterialHacks | null = null) {
         super();
         this.name = material.name;
         this.generateShaders();
@@ -301,6 +357,9 @@ export class GX_Program extends DeviceProgram {
 
     // Color Channels
     private generateMaterialSource(chan: ColorChannelControl, i: number) {
+        if (this.hacks !== null && this.hacks.disableVertexColors && chan.matColorSource === GX.ColorSrc.VTX)
+            return `vec4(1.0, 1.0, 1.0, 1.0)`;
+
         switch (chan.matColorSource) {
             case GX.ColorSrc.VTX: return `a_Color${i}`;
             case GX.ColorSrc.REG: return `u_ColorMatReg[${i}]`;
@@ -308,6 +367,9 @@ export class GX_Program extends DeviceProgram {
     }
 
     private generateAmbientSource(chan: ColorChannelControl, i: number) {
+        if (this.hacks !== null && this.hacks.disableVertexColors && chan.ambColorSource === GX.ColorSrc.VTX)
+            return `vec4(1.0, 1.0, 1.0, 1.0)`;
+
         switch (chan.ambColorSource) {
             case GX.ColorSrc.VTX: return `a_Color${i}`;
             case GX.ColorSrc.REG: return `u_ColorAmbReg[${i}]`;
@@ -325,12 +387,13 @@ export class GX_Program extends DeviceProgram {
     }
 
     private generateLightAttnFn(chan: ColorChannelControl, lightName: string) {
-        const cosAttn = `ApplyCubic(${lightName}.CosAtten.xyz, dot(t_LightDeltaDir, ${lightName}.Direction.xyz))`;
+        const attn = `max(0.0, dot(t_LightDeltaDir, ${lightName}.Direction.xyz))`;
+        const cosAttn = `max(0.0, ApplyCubic(${lightName}.CosAtten.xyz, ${attn}))`;
 
         switch (chan.attenuationFunction) {
         case GX.AttenuationFunction.NONE: return `1.0`;
-        case GX.AttenuationFunction.SPOT: return `max(${cosAttn} / max(dot(${lightName}.DistAtten.xyz, vec3(1.0, t_LightDeltaDist2, t_LightDeltaDist)), 0.0), 0.0)`;
-        case GX.AttenuationFunction.SPEC: return `1.0`; // TODO(jtspierre): Specular
+        case GX.AttenuationFunction.SPOT: return `${cosAttn} / dot(${lightName}.DistAtten.xyz, vec3(1.0, t_LightDeltaDist, t_LightDeltaDist2))`;
+        case GX.AttenuationFunction.SPEC: return `${cosAttn} / ApplyCubic(${lightName}.DistAtten.xyz, ${attn})`;
         }
     }
 
@@ -338,8 +401,12 @@ export class GX_Program extends DeviceProgram {
         const matSource = this.generateMaterialSource(chan, i);
         const ambSource = this.generateAmbientSource(chan, i);
 
+        let lightingEnabled = chan.lightingEnabled;
+        if (this.hacks !== null && this.hacks.disableLighting)
+            lightingEnabled = false;
+
         // HACK.
-        if (chan.lightingEnabled && this.hacks && this.hacks.lightingFudge) {
+        if (lightingEnabled && this.hacks !== null && this.hacks.lightingFudge) {
             const vtx = `a_Color${i}`;
             const amb = `u_ColorAmbReg[${i}]`;
             const mat = `u_ColorMatReg[${i}]`;
@@ -348,9 +415,12 @@ export class GX_Program extends DeviceProgram {
         }
 
         let generateLightAccum = ``;
-        if (chan.lightingEnabled) {
+        if (lightingEnabled) {
             generateLightAccum = `
     t_LightAccum = ${ambSource};`;
+
+            if (chan.litMask !== 0)
+                assert(materialHasLightsBlock(this.material));
 
             for (let j = 0; j < 8; j++) {
                 if (!(chan.litMask & (1 << j)))
@@ -376,10 +446,6 @@ export class GX_Program extends DeviceProgram {
     }
 
     private generateLightChannel(lightChannel: LightChannelControl, outputName: string, i: number) {
-        // If we have disabled vertex colors, then they are pure white.
-        if (this.hacks !== null && this.hacks.disableVertexColors)
-            return `    ${outputName} = vec4(1.0, 1.0, 1.0, 1.0);`;
-
         if (colorChannelsEqual(lightChannel.colorChannel, lightChannel.alphaChannel)) {
             return `
     ${this.generateColorChannel(lightChannel.colorChannel, outputName, i)}`;
@@ -399,7 +465,41 @@ export class GX_Program extends DeviceProgram {
         }).join('\n');
     }
 
+    // Output is a vec3, src is a vec4.
+    private generateMulPntMatrixStatic(pnt: GX.TexGenMatrix, src: string): string {
+        if (pnt === GX.TexGenMatrix.IDENTITY) {
+            return `${src}.xyz`;
+        } else if (pnt >= GX.TexGenMatrix.TEXMTX0) {
+            const texMtxIdx = (pnt - GX.TexGenMatrix.TEXMTX0) / 3;
+            return `Mul(u_TexMtx[${texMtxIdx}], ${src})`;
+        } else if (pnt >= GX.TexGenMatrix.PNMTX0) {
+            const pnMtxIdx = (pnt - GX.TexGenMatrix.PNMTX0) / 3;
+            return `Mul(u_PosMtx[${pnMtxIdx}], ${src})`;
+        } else {
+            throw "whoops";
+        }
+    }
+
+    // Output is a vec3, src is a vec4.
+    private generateMulPntMatrixDynamic(attrStr: string, src: string): string {
+        return `Mul(GetPosTexMatrix(${attrStr}), ${src})`;
+    }
+
+    private generateTexMtxIdxAttr(index: GX.TexCoordID): string {
+        if (index === GX.TexCoordID.TEXCOORD0) return `a_TexMtx0123Idx.x`;
+        if (index === GX.TexCoordID.TEXCOORD1) return `a_TexMtx0123Idx.y`;
+        if (index === GX.TexCoordID.TEXCOORD2) return `a_TexMtx0123Idx.z`;
+        if (index === GX.TexCoordID.TEXCOORD3) return `a_TexMtx0123Idx.w`;
+        if (index === GX.TexCoordID.TEXCOORD4) return `a_TexMtx4567Idx.x`;
+        if (index === GX.TexCoordID.TEXCOORD5) return `a_TexMtx4567Idx.y`;
+        if (index === GX.TexCoordID.TEXCOORD6) return `a_TexMtx4567Idx.z`;
+        if (index === GX.TexCoordID.TEXCOORD7) return `a_TexMtx4567Idx.w`;
+        throw "whoops";
+    }
+
     // TexGen
+
+    // Output is a vec4.
     private generateTexGenSource(src: GX.TexGenSrc) {
         switch (src) {
         case GX.TexGenSrc.POS:       return `vec4(a_Position, 1.0)`;
@@ -427,60 +527,71 @@ export class GX_Program extends DeviceProgram {
         }
     }
 
-    private generateTexGenMatrix(src: string, texCoordGen: TexGen) {
-        const matrix = texCoordGen.matrix;
-        if (matrix === GX.TexGenMatrix.IDENTITY) {
+    // Output is a vec3, src is a vec4.
+    private generatePostTexGenMatrixMult(texCoordGen: TexGen, src: string): string {
+        if (texCoordGen.postMatrix === GX.PostTexGenMatrix.PTIDENTITY) {
             return `${src}.xyz`;
-        } else if (matrix >= GX.TexGenMatrix.TEXMTX0) {
-            const texMtxIdx = (matrix - GX.TexGenMatrix.TEXMTX0) / 3;
-            return `Mul(u_TexMtx[${texMtxIdx}], ${src})`;
-        } else if (matrix >= GX.TexGenMatrix.PNMTX0) {
-            const pnMtxIdx = (matrix - GX.TexGenMatrix.PNMTX0) / 3;
-            return `Mul(u_PosMtx[${pnMtxIdx}], ${src})`;
+        } else if (texCoordGen.postMatrix >= GX.PostTexGenMatrix.PTTEXMTX0) {
+            const texMtxIdx = (texCoordGen.postMatrix - GX.PostTexGenMatrix.PTTEXMTX0) / 3;
+            return `Mul(u_PostTexMtx[${texMtxIdx}], ${src})`;
         } else {
             throw "whoops";
         }
     }
 
-    private generateTexGenType(texCoordGen: TexGen) {
-        const src = this.generateTexGenSource(texCoordGen.source);
+    // Output is a vec3, src is a vec3.
+    private generateTexGenMatrixMult(texCoordGen: TexGen, src: string) {
+        // Dynamic TexMtxIdx is off by default.
+        let useTexMtxIdx = false;
+        if (this.material.useTexMtxIdx !== undefined && !!this.material.useTexMtxIdx[texCoordGen.index])
+            useTexMtxIdx = true;
+        if (useTexMtxIdx) {
+            const attrStr = this.generateTexMtxIdxAttr(texCoordGen.index);
+            return this.generateMulPntMatrixDynamic(attrStr, src);
+        } else {
+            return this.generateMulPntMatrixStatic(texCoordGen.matrix, src);
+        }
+    }
+
+    // Output is a vec3, src is a vec4.
+    private generateTexGenType(texCoordGen: TexGen, src: string) {
         switch (texCoordGen.type) {
         case GX.TexGenType.SRTG:
-            // Expected to be used with colors, I suspect...
             return `vec3(${src}.xy, 1.0)`;
         case GX.TexGenType.MTX2x4:
-            if (texCoordGen.matrix === GX.TexGenMatrix.IDENTITY)
-                return `${src}.xyz`;
-            return `vec3(${this.generateTexGenMatrix(src, texCoordGen)}.xy, 1.0)`;
+            return `vec3(${this.generateTexGenMatrixMult(texCoordGen, src)}.xy, 1.0)`;
         case GX.TexGenType.MTX3x4:
-            return `${this.generateTexGenMatrix(src, texCoordGen)}`;
+            return `${this.generateTexGenMatrixMult(texCoordGen, src)}`;
         default:
             throw new Error("whoops");
         }
     }
 
+    // Output is a vec3.
     private generateTexGenNrm(texCoordGen: TexGen) {
-        const type = this.generateTexGenType(texCoordGen);
+        const src = this.generateTexGenSource(texCoordGen.source);
+        const type = this.generateTexGenType(texCoordGen, src);
         if (texCoordGen.normalize)
             return `normalize(${type})`;
         else
             return type;
     }
 
+    // Output is a vec3.
     private generateTexGenPost(texCoordGen: TexGen) {
-        const tex = this.generateTexGenNrm(texCoordGen);
+        const src = this.generateTexGenNrm(texCoordGen);
+
         if (texCoordGen.postMatrix === GX.PostTexGenMatrix.PTIDENTITY) {
-            return tex;
+            return src;
         } else {
-            const matrixIdx = (texCoordGen.postMatrix - GX.PostTexGenMatrix.PTTEXMTX0) / 3;
-            return `Mul(u_PostTexMtx[${matrixIdx}], vec4(${tex}, 1.0))`;
+            return this.generatePostTexGenMatrixMult(texCoordGen, `vec4(${src}, 1.0)`);
         }
     }
 
     private generateTexGen(texCoordGen: TexGen) {
         const i = texCoordGen.index;
         return `
-    // TexGen ${i}  Type: ${texCoordGen.type} Source: ${texCoordGen.source} Matrix: ${texCoordGen.matrix}
+    // TexGen ${i} Type: ${texCoordGen.type} Source: ${texCoordGen.source} Matrix: ${texCoordGen.matrix}
     v_TexCoord${i} = ${this.generateTexGenPost(texCoordGen)};`;
     }
 
@@ -520,6 +631,9 @@ export class GX_Program extends DeviceProgram {
     }
 
     private generateTextureSample(index: number, coord: string): string {
+        if (this.hacks !== null && this.hacks.useTextureCoords)
+            return `vec4(${coord}.xy, 1.0, 1.0)`;
+
         return `texture(u_Texture[${index}], ${coord}, TextureLODBias(${index}))`;
     }
 
@@ -527,7 +641,7 @@ export class GX_Program extends DeviceProgram {
         const i = stage.index;
         return `
     // Indirect ${i}
-    vec3 t_IndTexCoord${i} = ${this.generateTextureSample(stage.texture, this.generateIndTexStageScale(stage))}.abg;`;
+    vec3 t_IndTexCoord${i} = 255.0 * ${this.generateTextureSample(stage.texture, this.generateIndTexStageScale(stage))}.abg;`;
     }
 
     private generateIndTexStages(stages: IndTexStage[]): string {
@@ -662,8 +776,8 @@ export class GX_Program extends DeviceProgram {
         case GX.CombineColorInput.A2:    return `t_Color2.aaa`;
         case GX.CombineColorInput.TEXC:  return `${this.generateTexAccess(stage)}.${this.generateColorSwizzle(stage.texSwapTable, colorIn)}`;
         case GX.CombineColorInput.TEXA:  return `${this.generateTexAccess(stage)}.${this.generateColorSwizzle(stage.texSwapTable, colorIn)}`;
-        case GX.CombineColorInput.RASC:  return `${this.generateRas(stage)}.${this.generateColorSwizzle(stage.rasSwapTable, colorIn)}`;
-        case GX.CombineColorInput.RASA:  return `${this.generateRas(stage)}.${this.generateColorSwizzle(stage.rasSwapTable, colorIn)}`;
+        case GX.CombineColorInput.RASC:  return `TevSaturate(${this.generateRas(stage)}.${this.generateColorSwizzle(stage.rasSwapTable, colorIn)})`;
+        case GX.CombineColorInput.RASA:  return `TevSaturate(${this.generateRas(stage)}.${this.generateColorSwizzle(stage.rasSwapTable, colorIn)})`;
         case GX.CombineColorInput.ONE:   return `vec3(1)`;
         case GX.CombineColorInput.HALF:  return `vec3(1.0/2.0)`;
         case GX.CombineColorInput.KONST: return `${this.generateKonstColorSel(stage.konstColorSel)}`;
@@ -679,7 +793,7 @@ export class GX_Program extends DeviceProgram {
         case GX.CombineAlphaInput.A1:    return `t_Color1.a`;
         case GX.CombineAlphaInput.A2:    return `t_Color2.a`;
         case GX.CombineAlphaInput.TEXA:  return `${this.generateTexAccess(stage)}.${this.generateComponentSwizzle(stage.texSwapTable, GX.TevColorChan.A)}`;
-        case GX.CombineAlphaInput.RASA:  return `${this.generateRas(stage)}.${this.generateComponentSwizzle(stage.rasSwapTable, GX.TevColorChan.A)}`;
+        case GX.CombineAlphaInput.RASA:  return `TevSaturate(${this.generateRas(stage)}.${this.generateComponentSwizzle(stage.rasSwapTable, GX.TevColorChan.A)})`;
         case GX.CombineAlphaInput.KONST: return `${this.generateKonstAlphaSel(stage.konstAlphaSel)}`;
         case GX.CombineAlphaInput.ZERO:  return `0.0`;
         }
@@ -807,7 +921,7 @@ export class GX_Program extends DeviceProgram {
     }
 
     private generateTevTexCoordIndTexCoord(stage: TevStage): string {
-        const baseCoord = `(t_IndTexCoord${stage.indTexStage} * 255.0)`;
+        const baseCoord = `(t_IndTexCoord${stage.indTexStage})`;
         switch (stage.indTexFormat) {
         case GX.IndTexFormat._8: return baseCoord;
         default:
@@ -822,13 +936,15 @@ export class GX_Program extends DeviceProgram {
         case GX.IndTexMtxID._0:  return `Mul(u_IndTexMtx[0], vec4(${indTevCoord}, 0.0))`;
         case GX.IndTexMtxID._1:  return `Mul(u_IndTexMtx[1], vec4(${indTevCoord}, 0.0))`;
         case GX.IndTexMtxID._2:  return `Mul(u_IndTexMtx[2], vec4(${indTevCoord}, 0.0))`;
+        // TODO(jstpierre): These other options. BossBakkunPlanet.arc uses them.
         default:
-        case GX.IndTexMtxID.OFF: throw new Error("whoops");
+            console.warn(`Unimplemented indTexMatrix mode: ${stage.indTexMatrix}`);
+            return `${indTevCoord}.xy`;
         }
     }
 
     private generateTevTexCoordIndirectTranslation(stage: TevStage): string {
-        return `(${this.generateTevTexCoordIndirectMtx(stage)} / TextureSize(${stage.texCoordId}))`;
+        return `(${this.generateTevTexCoordIndirectMtx(stage)} * TextureScale(${stage.texMap}))`;
     }
 
     private generateTevTexCoordIndirect(stage: TevStage): string {
@@ -922,6 +1038,7 @@ export class GX_Program extends DeviceProgram {
     private generateAttributeStorageType(fmt: GfxFormat): string {
         switch (fmt) {
         case GfxFormat.U8_R:     return 'uint';
+        case GfxFormat.U8_RGBA:  return 'uvec4';
         case GfxFormat.F32_RG:   return 'vec2';
         case GfxFormat.F32_RGB:  return 'vec3';
         case GfxFormat.F32_RGBA: return 'vec4';
@@ -935,52 +1052,34 @@ export class GX_Program extends DeviceProgram {
         }).join('\n');
     }
 
-    public static BindingsDefinition = `
-// Expected to be constant across the entire scene.
-layout(row_major, std140) uniform ub_SceneParams {
-    Mat4x4 u_Projection;
-    vec4 u_Misc0;
-};
+    private generateMulPos(): string {
+        // Default to using pnmtxidx.
+        const usePnMtxIdx = this.material.usePnMtxIdx !== undefined ? this.material.usePnMtxIdx : true;
+        const src = `vec4(a_Position, 1.0)`;
+        if (usePnMtxIdx)
+            return this.generateMulPntMatrixDynamic(`a_PnMtxIdx`, src);
+        else
+            return this.generateMulPntMatrixStatic(GX.TexGenMatrix.PNMTX0, src);
+    }
 
-#define u_SceneTextureLODBias u_Misc0[0]
-
-struct Light {
-    vec4 Color;
-    vec4 Position;
-    vec4 Direction;
-    vec4 DistAtten;
-    vec4 CosAtten;
-};
-
-// Expected to change with each material.
-layout(row_major, std140) uniform ub_MaterialParams {
-    vec4 u_ColorMatReg[2];
-    vec4 u_ColorAmbReg[2];
-    vec4 u_KonstColor[4];
-    vec4 u_Color[4];
-    Mat4x3 u_TexMtx[10];
-    Mat4x3 u_PostTexMtx[20];
-    Mat4x2 u_IndTexMtx[3];
-    // SizeX, SizeY, 0, Bias
-    vec4 u_TextureParams[8];
-    Light u_LightParams[8];
-};
-
-// Expected to change with each shape packet.
-layout(row_major, std140) uniform ub_PacketParams {
-    Mat4x3 u_PosMtx[10];
-};
-
-uniform sampler2D u_Texture[8];
-`;
-
-    public static programReflection: DeviceProgramReflection = DeviceProgram.parseReflectionDefinitions(GX_Program.BindingsDefinition);
+    private generateMulNrm(): string {
+        // Default to using pnmtxidx.
+        const usePnMtxIdx = this.material.usePnMtxIdx !== undefined ? this.material.usePnMtxIdx : true;
+        const src = `vec4(a_Normal, 0.0)`;
+        // TODO(jstpierre): Move to a normal matrix calculated on the CPU
+        if (usePnMtxIdx)
+            return this.generateMulPntMatrixDynamic(`a_PnMtxIdx`, src);
+        else
+            return this.generateMulPntMatrixStatic(GX.TexGenMatrix.PNMTX0, src);
+    }
 
     private generateShaders() {
+        const bindingsDefinition = generateBindingsDefinition(this.material);
+
         this.both = `
 // ${this.material.name}
 precision mediump float;
-${GX_Program.BindingsDefinition}
+${bindingsDefinition}
 
 varying vec3 v_Position;
 varying vec4 v_Color0;
@@ -998,13 +1097,13 @@ varying vec3 v_TexCoord7;
         this.vert = `
 ${this.generateVertAttributeDefs()}
 
-Mat4x4 GetPosTexMatrix(uint t_MtxIdx) {
+Mat4x3 GetPosTexMatrix(uint t_MtxIdx) {
     if (t_MtxIdx == ${GX.TexGenMatrix.IDENTITY}u)
-        return _Mat4x4(1.0);
+        return _Mat4x3(1.0);
     else if (t_MtxIdx >= ${GX.TexGenMatrix.TEXMTX0}u)
-        return _Mat4x4(u_TexMtx[(t_MtxIdx - ${GX.TexGenMatrix.TEXMTX0}u) / 3u]);
+        return u_TexMtx[(t_MtxIdx - ${GX.TexGenMatrix.TEXMTX0}u) / 3u];
     else
-        return _Mat4x4(u_PosMtx[t_MtxIdx / 3u]);
+        return u_PosMtx[t_MtxIdx / 3u];
 }
 
 float ApplyCubic(vec3 t_Coeff, float t_Value) {
@@ -1012,12 +1111,9 @@ float ApplyCubic(vec3 t_Coeff, float t_Value) {
 }
 
 void main() {
-    Mat4x4 t_PosMtx = GetPosTexMatrix(a_PosMtxIdx);
-    vec4 t_Position = Mul(t_PosMtx, vec4(a_Position, 1.0));
-    v_Position = t_Position.xyz;
-    // TODO(jstpierre): Move this calculation to the CPU? Is it worth it?
-    Mat4x3 t_NrmMtx = _Mat4x3(t_PosMtx);
-    vec3 t_Normal = Mul(t_NrmMtx, vec4(a_Normal, 0.0));
+    vec3 t_Position = ${this.generateMulPos()};
+    v_Position = t_Position;
+    vec3 t_Normal = ${this.generateMulNrm()};
 
     vec4 t_LightAccum;
     vec3 t_LightDelta, t_LightDeltaDir;
@@ -1025,7 +1121,7 @@ void main() {
     vec4 t_ColorChanTemp;
 ${this.generateLightChannels()}
 ${this.generateTexGens(this.material.texGens)}
-    gl_Position = Mul(u_Projection, t_Position);
+    gl_Position = Mul(u_Projection, vec4(t_Position, 1.0));
 }
 `;
 
@@ -1037,13 +1133,13 @@ ${this.generateTexGens(this.material.texGens)}
 ${this.generateTexCoordGetters()}
 
 float TextureLODBias(int index) { return u_SceneTextureLODBias + u_TextureParams[index].w; }
-vec2 TextureSize(int index) { return u_TextureParams[index].xy; }
+vec2 TextureScale(int index) { return u_TextureParams[index].xy; }
 
 vec3 TevBias(vec3 a, float b) { return a + vec3(b); }
 float TevBias(float a, float b) { return a + b; }
 vec3 TevSaturate(vec3 a) { return clamp(a, vec3(0), vec3(1)); }
 float TevSaturate(float a) { return clamp(a, 0.0, 1.0); }
-float TevOverflow(float a) { return fract((a*255.0)/256.0)*256.0/255.0; }
+float TevOverflow(float a) { return float(int(a * 255.0) & 255) / 255.0; }
 vec4 TevOverflow(vec4 a) { return vec4(TevOverflow(a.r), TevOverflow(a.g), TevOverflow(a.b), TevOverflow(a.a)); }
 float TevPack16(vec2 a) { return dot(a, vec2(1.0, 256.0)); }
 float TevPack24(vec3 a) { return dot(a, vec3(1.0, 256.0, 256.0 * 256.0)); }
@@ -1154,10 +1250,10 @@ function translateCompareType(compareType: GX.CompareType): GfxCompareMode {
     }
 }
 
-export function translateGfxMegaState(megaState: GfxMegaStateDescriptor, material: GXMaterial) {
+export function translateGfxMegaState(megaState: Partial<GfxMegaStateDescriptor>, material: GXMaterial) {
     megaState.cullMode = translateCullMode(material.cullMode);
     megaState.depthWrite = material.ropInfo.depthWrite;
-    megaState.depthCompare = material.ropInfo.depthTest ? translateCompareType(material.ropInfo.depthFunc) : GfxCompareMode.ALWAYS;
+    megaState.depthCompare = material.ropInfo.depthTest ? reverseDepthForCompareMode(translateCompareType(material.ropInfo.depthFunc)) : GfxCompareMode.ALWAYS;
     megaState.frontFace = GfxFrontFaceMode.CW;
 
     if (material.ropInfo.blendMode.type === GX.BlendMode.NONE) {

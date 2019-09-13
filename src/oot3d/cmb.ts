@@ -2,10 +2,11 @@
 import { assert, readString } from '../util';
 import ArrayBufferSlice from '../ArrayBufferSlice';
 import { mat4, vec4 } from 'gl-matrix';
-import { TextureFormat, decodeTexture, computeTextureByteSize } from './pica_texture';
+import { TextureFormat, decodeTexture, computeTextureByteSize, getTextureFormatFromGLFormat } from './pica_texture';
 import { GfxCullMode, GfxBlendMode, GfxBlendFactor, GfxMegaStateDescriptor, GfxCompareMode, GfxColorWriteMask, GfxChannelBlendState } from '../gfx/platform/GfxPlatform';
 import { makeMegaState } from '../gfx/helpers/GfxMegaStateDescriptorHelpers';
 import { Color, colorNewFromRGBA8, colorNew } from '../Color';
+import { reverseDepthForCompareMode } from '../gfx/helpers/ReversedDepthHelpers';
 
 export interface VatrChunk {
     dataBuffer: ArrayBufferSlice;
@@ -50,32 +51,6 @@ export interface Bone {
     translationZ: number;
 }
 
-export function calcModelMtx(dst: mat4, scaleX: number, scaleY: number, scaleZ: number, rotationX: number, rotationY: number, rotationZ: number, translationX: number, translationY: number, translationZ: number): void {
-    const sinX = Math.sin(rotationX), cosX = Math.cos(rotationX);
-    const sinY = Math.sin(rotationY), cosY = Math.cos(rotationY);
-    const sinZ = Math.sin(rotationZ), cosZ = Math.cos(rotationZ);
-
-    dst[0] =  scaleX * (cosY * cosZ);
-    dst[1] =  scaleX * (sinZ * cosY);
-    dst[2] =  scaleX * (-sinY);
-    dst[3] =  0.0;
-
-    dst[4] =  scaleY * (sinX * cosZ * sinY - cosX * sinZ);
-    dst[5] =  scaleY * (sinX * sinZ * sinY + cosX * cosZ);
-    dst[6] =  scaleY * (sinX * cosY);
-    dst[7] =  0.0;
-
-    dst[8] =  scaleZ * (cosX * cosZ * sinY + sinX * sinZ);
-    dst[9] =  scaleZ * (cosX * sinZ * sinY - sinX * cosZ);
-    dst[10] = scaleZ * (cosY * cosX);
-    dst[11] = 0.0;
-
-    dst[12] = translationX;
-    dst[13] = translationY;
-    dst[14] = translationZ;
-    dst[15] = 1.0;
-}
-
 function readSklChunk(cmb: CMB, buffer: ArrayBufferSlice): void {
     const view = buffer.createDataView();
 
@@ -114,7 +89,7 @@ export enum TextureFilter {
     LINEAR = 0x2601,
     NEAREST_MIPMAP_NEAREST = 0x2700,
     LINEAR_MIPMAP_NEAREST = 0x2701,
-    NEAREST_MIPMIP_LINEAR = 0x2702,
+    NEAREST_MIPMAP_LINEAR = 0x2702,
     LINEAR_MIPMAP_LINEAR = 0x2703,
 }
 
@@ -225,18 +200,18 @@ export interface Material {
 }
 
 export function calcTexMtx(dst: mat4, scaleS: number, scaleT: number, rotation: number, translationS: number, translationT: number): void {
-    const sinR = Math.sin(rotation);
-    const cosR = Math.cos(rotation);
+    const theta = rotation * Math.PI;
+    const sinR = Math.sin(theta);
+    const cosR = Math.cos(theta);
 
     mat4.identity(dst);
 
     dst[0]  = scaleS *  cosR;
-    dst[4]  = scaleT * -sinR;
-    dst[12] = translationS;
-
-    dst[1]  = scaleS *  sinR;
+    dst[1]  = scaleT * -sinR;
+    dst[4]  = scaleS *  sinR;
     dst[5]  = scaleT *  cosR;
-    dst[13] = translationT;
+    dst[12] = scaleS * ((-0.5 * cosR) - (0.5 * sinR - 0.5) - translationS);
+    dst[13] = scaleT * ((-0.5 * cosR) + (0.5 * sinR - 0.5) + translationT) + 1;
 }
 
 function translateCullModeFlags(cullModeFlags: number): GfxCullMode {
@@ -308,7 +283,7 @@ function readMatsChunk(cmb: CMB, buffer: ArrayBufferSlice) {
             const translationT = view.getFloat32(matricesOffs + 0x10, true);
             const rotation = view.getFloat32(matricesOffs + 0x14, true);
             const texMtx = mat4.create();
-            calcTexMtx(texMtx, scaleS, scaleT, translationS, translationT, rotation);
+            calcTexMtx(texMtx, scaleS, scaleT, rotation, translationS, translationT);
             textureMatrices.push(texMtx);
             matricesOffs += 0x18;
         }
@@ -448,7 +423,7 @@ function readMatsChunk(cmb: CMB, buffer: ArrayBufferSlice) {
                     alphaBlendState,
                 },
             ],
-            depthCompare: depthTestFunction,
+            depthCompare: reverseDepthForCompareMode(depthTestFunction),
             depthWrite: depthWriteEnabled,
             cullMode,
         });
@@ -477,7 +452,6 @@ export interface Texture {
     height: number;
     format: TextureFormat;
     levels: TextureLevel[];
-    totalTextureSize: number;
 }
 
 export function parseTexChunk(buffer: ArrayBufferSlice, texData: ArrayBufferSlice | null, cmbName: string = ''): Texture[] {
@@ -494,7 +468,7 @@ export function parseTexChunk(buffer: ArrayBufferSlice, texData: ArrayBufferSlic
         const unk06 = view.getUint16(offs + 0x06, true);
         const width = view.getUint16(offs + 0x08, true);
         const height = view.getUint16(offs + 0x0A, true);
-        const format = view.getUint32(offs + 0x0C, true);
+        const glFormat = view.getUint32(offs + 0x0C, true);
         let dataOffs = view.getUint32(offs + 0x10, true);
         const dataEnd = dataOffs + size;
         const texName = readString(buffer, offs + 0x14, 0x10);
@@ -503,6 +477,8 @@ export function parseTexChunk(buffer: ArrayBufferSlice, texData: ArrayBufferSlic
         offs += 0x24;
 
         const levels: TextureLevel[] = [];
+
+        const format = getTextureFormatFromGLFormat(glFormat);
 
         if (texData !== null) {
             let mipWidth = width, mipHeight = height;
@@ -515,7 +491,7 @@ export function parseTexChunk(buffer: ArrayBufferSlice, texData: ArrayBufferSlic
             }
         }
 
-        textures.push({ name, format, width, height, levels, totalTextureSize: size });
+        textures.push({ name, format, width, height, levels });
     }
 
     return textures;

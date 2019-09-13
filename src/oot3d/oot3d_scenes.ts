@@ -4,63 +4,72 @@ import * as CMAB from './cmab';
 import * as CSAB from './csab';
 import * as ZAR from './zar';
 import * as ZSI from './zsi';
+import * as LzS from '../compression/LzS';
 
 import * as Viewer from '../viewer';
 import * as UI from '../ui';
 
 import ArrayBufferSlice from '../ArrayBufferSlice';
-import Progressable from '../Progressable';
-import { RoomRenderer, CtrTextureHolder, CmbRenderer, CmbData } from './render';
+import { RoomRenderer, CtrTextureHolder, CmbInstance, CmbData, fillSceneParamsDataOnTemplate } from './render';
 import { SceneGroup } from '../viewer';
-import { assert, assertExists, hexzero } from '../util';
-import { fetchData } from '../fetch';
-import { GfxDevice, GfxHostAccessPass, GfxRenderPass } from '../gfx/platform/GfxPlatform';
-import { RENDER_HACKS_ICON } from '../bk/scenes';
+import { assert, assertExists, hexzero, readString } from '../util';
+import { DataFetcher, DataFetcherFlags } from '../DataFetcher';
+import { GfxDevice, GfxHostAccessPass, GfxRenderPass, GfxBindingLayoutDescriptor } from '../gfx/platform/GfxPlatform';
 import { mat4 } from 'gl-matrix';
 import AnimationController from '../AnimationController';
 import { TransparentBlack, colorNew, White } from '../Color';
 import { BasicRenderTarget, standardFullClearRenderPassDescriptor, depthClearRenderPassDescriptor } from '../gfx/helpers/RenderTargetHelpers';
-import { GfxRenderInstViewRenderer } from '../gfx/render/GfxRenderer';
+import { executeOnPass } from '../gfx/render/GfxRenderer';
+import { SceneContext } from '../SceneBase';
+import { GfxRenderHelper } from '../gfx/render/GfxRenderGraph';
+
+const bindingLayouts: GfxBindingLayoutDescriptor[] = [{ numSamplers: 3, numUniformBuffers: 3 }];
 
 const enum OoT3DPass { MAIN = 0x01, SKYBOX = 0x02 };
-class OoT3DRenderer implements Viewer.SceneGfx {
-    public viewRenderer = new GfxRenderInstViewRenderer();
+export class OoT3DRenderer implements Viewer.SceneGfx {
     public renderTarget = new BasicRenderTarget();
     public roomRenderers: RoomRenderer[] = [];
+    private renderHelper: GfxRenderHelper;
 
     constructor(device: GfxDevice, public textureHolder: CtrTextureHolder, public zsi: ZSI.ZSIScene, public modelCache: ModelCache) {
-        for (let i = 0; i < this.roomRenderers.length; i++)
-            this.roomRenderers[i].addToViewRenderer(device, this.viewRenderer);
+        this.renderHelper = new GfxRenderHelper(device);
     }
 
-    protected prepareToRender(hostAccessPass: GfxHostAccessPass, viewerInput: Viewer.ViewerRenderInput): void {
+    protected prepareToRender(device: GfxDevice, hostAccessPass: GfxHostAccessPass, viewerInput: Viewer.ViewerRenderInput): void {
+        const template = this.renderHelper.pushTemplateRenderInst();
+        template.setBindingLayouts(bindingLayouts);
+        fillSceneParamsDataOnTemplate(template, viewerInput.camera);
+
         for (let i = 0; i < this.roomRenderers.length; i++)
-            this.roomRenderers[i].prepareToRender(hostAccessPass, viewerInput);
+            this.roomRenderers[i].prepareToRender(device, this.renderHelper.renderInstManager, hostAccessPass, viewerInput);
+
+        this.renderHelper.renderInstManager.popTemplateRenderInst();
+        this.renderHelper.prepareToRender(device, hostAccessPass);
     }
 
     public render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput): GfxRenderPass {
         const hostAccessPass = device.createHostAccessPass();
-        this.prepareToRender(hostAccessPass, viewerInput);
+        this.prepareToRender(device, hostAccessPass, viewerInput);
         device.submitPass(hostAccessPass);
 
-        this.viewRenderer.prepareToRender(device);
-
         this.renderTarget.setParameters(device, viewerInput.viewportWidth, viewerInput.viewportHeight);
-        this.viewRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
 
         // First, render the skybox.
         const skyboxPassRenderer = this.renderTarget.createRenderPass(device, standardFullClearRenderPassDescriptor);
-        this.viewRenderer.executeOnPass(device, skyboxPassRenderer, OoT3DPass.SKYBOX);
+        skyboxPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        executeOnPass(this.renderHelper.renderInstManager, device, skyboxPassRenderer, OoT3DPass.SKYBOX);
         skyboxPassRenderer.endPass(null);
         device.submitPass(skyboxPassRenderer);
         // Now do main pass.
         const mainPassRenderer = this.renderTarget.createRenderPass(device, depthClearRenderPassDescriptor);
-        this.viewRenderer.executeOnPass(device, mainPassRenderer, OoT3DPass.MAIN);
+        mainPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        executeOnPass(this.renderHelper.renderInstManager, device, mainPassRenderer, OoT3DPass.MAIN);
+        this.renderHelper.renderInstManager.resetRenderInsts();
         return mainPassRenderer;
     }
 
     public destroy(device: GfxDevice): void {
-        this.viewRenderer.destroy(device);
+        this.renderHelper.destroy(device);
         this.renderTarget.destroy(device);
 
         this.textureHolder.destroy(device);
@@ -72,7 +81,7 @@ class OoT3DRenderer implements Viewer.SceneGfx {
     public createPanels(): UI.Panel[] {
         const renderHacksPanel = new UI.Panel();
         renderHacksPanel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR;
-        renderHacksPanel.setTitle(RENDER_HACKS_ICON, 'Render Hacks');
+        renderHacksPanel.setTitle(UI.RENDER_HACKS_ICON, 'Render Hacks');
         
         const enableVertexColorsCheckbox = new UI.Checkbox('Enable Vertex Colors', true);
         enableVertexColorsCheckbox.onchanged = () => {
@@ -144,33 +153,41 @@ class OoT3DRenderer implements Viewer.SceneGfx {
     }
 }
 
-const pathBase = `oot3d`;
+export function maybeDecompress(buffer: ArrayBufferSlice): ArrayBufferSlice {
+    if (readString(buffer, 0x00, 0x04) === 'LzS\x01')
+        return LzS.decompress(buffer.createDataView());
+    else
+        return buffer;
+}
 
-class ModelCache {
-    private fileProgressableCache = new Map<string, Progressable<ArrayBufferSlice>>();
+export class ModelCache {
+    private filePromiseCache = new Map<string, Promise<ArrayBufferSlice>>();
     private fileDataCache = new Map<string, ArrayBufferSlice>();
-    private archiveProgressableCache = new Map<string, Progressable<ZAR.ZAR>>();
+    private archivePromiseCache = new Map<string, Promise<ZAR.ZAR>>();
     private archiveCache = new Map<string, ZAR.ZAR>();
     private modelCache = new Map<string, CmbData>();
 
-    public waitForLoad(): Progressable<any> {
-        const v: Progressable<any>[] = [... this.fileProgressableCache.values(), ... this.archiveProgressableCache.values()];
-        return Progressable.all(v);
+    constructor(private dataFetcher: DataFetcher) {
     }
 
-    private fetchFile(path: string, abortSignal: AbortSignal): Progressable<ArrayBufferSlice> {
-        assert(!this.fileProgressableCache.has(path));
-        const p = fetchData(path, abortSignal);
-        this.fileProgressableCache.set(path, p);
+    public waitForLoad(): Promise<any> {
+        const v: Promise<any>[] = [... this.filePromiseCache.values(), ... this.archivePromiseCache.values()];
+        return Promise.all(v);
+    }
+
+    private fetchFile(path: string): Promise<ArrayBufferSlice> {
+        assert(!this.filePromiseCache.has(path));
+        const p = this.dataFetcher.fetchData(path);
+        this.filePromiseCache.set(path, p);
         return p;
     }
 
-    public fetchFileData(path: string, abortSignal: AbortSignal): Progressable<ArrayBufferSlice> {
-        const p = this.fileProgressableCache.get(path);
+    public fetchFileData(path: string): Promise<ArrayBufferSlice> {
+        const p = this.filePromiseCache.get(path);
         if (p !== undefined) {
             return p.then(() => this.getFileData(path));
         } else {
-            return this.fetchFile(path, abortSignal).then((data) => {
+            return this.fetchFile(path).then((data) => {
                 this.fileDataCache.set(path, data);
                 return data;
             });
@@ -185,17 +202,17 @@ class ModelCache {
         return assertExists(this.archiveCache.get(archivePath));
     }
 
-    public fetchArchive(archivePath: string, abortSignal: AbortSignal): Progressable<ZAR.ZAR> {
-        let p = this.archiveProgressableCache.get(archivePath);
+    public fetchArchive(archivePath: string): Promise<ZAR.ZAR> {
+        let p = this.archivePromiseCache.get(archivePath);
         if (p === undefined) {
-            p = this.fetchFileData(archivePath, abortSignal).then((data) => {
+            p = this.fetchFileData(archivePath).then((data) => {
                 return data;
             }).then((data) => {
-                const arc = ZAR.parse(data);
+                const arc = ZAR.parse(maybeDecompress(data));
                 this.archiveCache.set(archivePath, arc);
                 return arc;
             });
-            this.archiveProgressableCache.set(archivePath, p);
+            this.archivePromiseCache.set(archivePath, p);
         }
 
         return p;
@@ -221,146 +238,444 @@ class ModelCache {
     }
 }
 
-const enum ActorId {
+enum ActorId {
+    Player                 = 0x0000,
     En_Test                = 0x0002,
+    En_GirlA               = 0x0004,
+    En_Part                = 0x0007,
+    En_Light               = 0x0008,
     En_Door                = 0x0009,
     En_Box                 = 0x000A,
+    Bg_Dy_Yoseizo          = 0x000B,
+    Bg_Hidan_Firewall      = 0x000C,
+    En_Poh                 = 0x000D,
     En_Okuta               = 0x000E,
     Bg_Ydan_Sp             = 0x000F,
+    En_Bom                 = 0x0010,
     En_Wallmas             = 0x0011,
     En_Dodongo             = 0x0012,
     En_Firefly             = 0x0013,
+    En_Horse               = 0x0014,
     En_Item00              = 0x0015,
+    En_Arrow               = 0x0016,
+    En_Elf                 = 0x0018,
     En_Niw                 = 0x0019,
     En_Tite                = 0x001B,
-    Boss_Goma              = 0x0028,
+    En_Reeba               = 0x001C,
+    En_Peehat              = 0x001D,
+    En_Butte               = 0x001E,
+    En_Insect              = 0x0020,
+    En_Fish                = 0x0021,
+    En_Holl                = 0x0023,
+    En_Scene_Change        = 0x0024,
     En_Zf                  = 0x0025,
     En_Hata                = 0x0026,
     Boss_Dodongo           = 0x0027,
+    Boss_Goma              = 0x0028,
+    En_Zl1                 = 0x0029,
+    En_Viewer              = 0x002A,
+    En_Goma                = 0x002B,
+    Bg_Pushbox             = 0x002C,
+    En_Bubble              = 0x002D,
+    Door_Shutter           = 0x002E,
     En_Dodojr              = 0x002F,
+    En_Bdfire              = 0x0030,
+    En_Boom                = 0x0032,
+    En_Torch2              = 0x0033,
+    En_Bili                = 0x0034,
+    En_Tp                  = 0x0035,
     En_St                  = 0x0037,
+    En_Bw                  = 0x0038,
     En_A_Obj               = 0x0039,
+    En_Eiyer               = 0x003A,
     En_River_Sound         = 0x003B,
     En_Horse_Normal        = 0x003C,
     En_Ossan               = 0x003D,
+    Bg_Treemouth           = 0x003E,
     Bg_Dodoago             = 0x003F,
+    Bg_Hidan_Dalm          = 0x0040,
+    Bg_Hidan_Hrock         = 0x0041,
+    En_Horse_Ganon         = 0x0042,
+    Bg_Hidan_Rock          = 0x0043,
+    Bg_Hidan_Rsekizou      = 0x0044,
+    Bg_Hidan_Sekizou       = 0x0045,
+    Bg_Hidan_Sima          = 0x0046,
+    Bg_Hidan_Syoku         = 0x0047,
+    En_Xc                  = 0x0048,
+    Bg_Hidan_Curtain       = 0x0049,
+    Bg_Spot00_Hanebasi     = 0x004A,
+    En_Mb                  = 0x004B,
     En_Bombf               = 0x004C,
+    En_Zl2                 = 0x004D,
+    Bg_Hidan_Fslift        = 0x004E,
+    En_OE2                 = 0x004F,
     Bg_Ydan_Hasi           = 0x0050,
     Bg_Ydan_Maruta         = 0x0051,
+    Boss_Ganondrof         = 0x0052,
     En_Am                  = 0x0054,
     En_Dekubaba            = 0x0055,
+    En_M_Fire1             = 0x0056,
+    En_M_Thunder           = 0x0057,
     Bg_Ddan_Jd             = 0x0058,
     Bg_Breakwall           = 0x0059,
+    En_Jj                  = 0x005A,
+    En_Horse_Zelda         = 0x005B,
     Bg_Ddan_Kd             = 0x005C,
     Door_Warp1             = 0x005D,
     Obj_Syokudai           = 0x005E,
+    Item_B_Heart           = 0x005F,
     En_Dekunuts            = 0x0060,
+    Bg_Menkuri_Kaiten      = 0x0061,
+    Bg_Menkuri_Eye         = 0x0062,
+    En_Vali                = 0x0063,
     Bg_Mizu_Movebg         = 0x0064,
+    Bg_Mizu_Water          = 0x0065,
+    Arms_Hook              = 0x0066,
+    En_fHG                 = 0x0067,
     Bg_Mori_Hineri         = 0x0068,
     En_Bb                  = 0x0069,
     Bg_Toki_Hikari         = 0x006A,
+    En_Yukabyun            = 0x006B,
+    Bg_Toki_Swd            = 0x006C,
+    En_Fhg_Fire            = 0x006D,
     Bg_Mjin                = 0x006E,
+    Bg_Hidan_Kousi         = 0x006F,
+    Door_Toki              = 0x0070,
+    Bg_Hidan_Hamstep       = 0x0071,
+    En_Bird                = 0x0072,
     En_Wood02              = 0x0077,
+    En_Lightbox            = 0x007C,
+    En_Pu_box              = 0x007D,
     En_Trap                = 0x0080,
+    En_Arow_Trap           = 0x0081,
+    En_Vase                = 0x0082,
     En_Ta                  = 0x0084,
+    En_Tk                  = 0x0085,
     Bg_Mori_Bigst          = 0x0086,
     Bg_Mori_Elevator       = 0x0087,
     Bg_Mori_Kaitenkabe     = 0x0088,
     Bg_Mori_Rakkatenjo     = 0x0089,
     En_Vm                  = 0x008A,
     Demo_Effect            = 0x008B,
+    Demo_Kankyo            = 0x008C,
+    Bg_Hidan_Fwbig         = 0x008D,
     En_Floormas            = 0x008E,
     En_Heishi1             = 0x008F,
     En_Rd                  = 0x0090,
+    En_Po_Sisters          = 0x0091,
+    Bg_Heavy_Block         = 0x0092,
+    Bg_Po_Event            = 0x0093,
+    Obj_Mure               = 0x0094,
     En_Sw                  = 0x0095,
+    Boss_Fd                = 0x0096,
+    Object_Kankyo          = 0x0097,
     En_Du                  = 0x0098,
+    En_Fd                  = 0x0099,
+    En_Horse_Link_Child    = 0x009A,
     Door_Ana               = 0x009B,
     Bg_Spot02_Objects      = 0x009C,
     Bg_Haka                = 0x009D,
+    Magic_Wind             = 0x009E,
+    Magic_Fire             = 0x009F,
+    En_Ru1                 = 0x00A1,
+    Boss_Fd2               = 0x00A2,
+    En_Fd_Fire             = 0x00A3,
+    En_Dh                  = 0x00A4,
+    En_Dha                 = 0x00A5,
+    En_Rl                  = 0x00A6,
+    En_Encount1            = 0x00A7,
     Demo_Du                = 0x00A8,
     Demo_Im                = 0x00A9,
+    Demo_Tre_Lgt           = 0x00AA,
+    En_Fw                  = 0x00AB,
+    Bg_Vb_Sima             = 0x00AC,
+    En_Vb_Ball             = 0x00AD,
+    Bg_Haka_Megane         = 0x00AE,
+    Bg_Haka_MeganeBG       = 0x00AF,
+    Bg_Haka_Ship           = 0x00B0,
+    Bg_Haka_Sgami          = 0x00B1,
     En_Heishi2             = 0x00B3,
+    En_Encount2            = 0x00B4,
+    En_Fire_Rock           = 0x00B5,
     En_Brob                = 0x00B6,
+    Mir_Ray                = 0x00B7,
+    Bg_Spot09_Obj          = 0x00B8,
+    Bg_Spot18_Obj          = 0x00B9,
+    Boss_Va                = 0x00BA,
+    Bg_Haka_Tubo           = 0x00BB,
+    Bg_Haka_Trap           = 0x00BC,
+    Bg_Haka_Huta           = 0x00BD,
+    Bg_Haka_Zou            = 0x00BE,
+    Bg_Spot17_Funen        = 0x00BF,
+    En_Syateki_Itm         = 0x00C0,
+    En_Syateki_Man         = 0x00C1,
     En_Tana                = 0x00C2,
     En_Nb                  = 0x00C3,
+    Boss_Mo                = 0x00C4,
+    En_Sb                  = 0x00C5,
+    En_Bigokuta            = 0x00C6,
+    En_Karebaba            = 0x00C7,
     Bg_Bdan_Objects        = 0x00C8,
     Demo_Sa                = 0x00C9,
+    Demo_Go                = 0x00CA,
     En_In                  = 0x00CB,
+    En_Tr                  = 0x00CC,
+    Bg_Spot16_Bombstone    = 0x00CD,
+    Bg_Hidan_Kowarerukabe  = 0x00CF,
+    Bg_Bombwall            = 0x00D0,
+    Bg_Spot08_Iceblock     = 0x00D1,
     En_Ru2                 = 0x00D2,
+    Obj_Dekujr             = 0x00D3,
+    Bg_Mizu_Uzu            = 0x00D4,
+    Bg_Spot06_Objects      = 0x00D5,
+    Bg_Ice_Objects         = 0x00D6,
+    Bg_Haka_Water          = 0x00D7,
     En_Ma2                 = 0x00D9,
+    En_Bom_Chu             = 0x00DA,
+    En_Horse_Game_Check    = 0x00DB,
+    Boss_Tw                = 0x00DC,
+    En_Rr                  = 0x00DD,
+    En_Ba                  = 0x00DE,
+    En_Bx                  = 0x00DF,
+    En_Anubice             = 0x00E0,
+    En_Anubice_Fire        = 0x00E1,
+    Bg_Mori_Hashigo        = 0x00E2,
     Bg_Mori_Hashira4       = 0x00E3,
     Bg_Mori_Idomizu        = 0x00E4,
     Bg_Spot16_Doughnut     = 0x00E5,
     Bg_Bdan_Switch         = 0x00E6,
     En_Ma1                 = 0x00E7,
+    Boss_Ganon             = 0x00E8,
     Boss_Sst               = 0x00E9,
+    En_Ny                  = 0x00EC,
+    En_Fr                  = 0x00ED,
+    Item_Shield            = 0x00EE,
+    Bg_Ice_Shelter         = 0x00EF,
+    En_Ice_Hono            = 0x00F0,
+    Item_Ocarina           = 0x00F1,
+    Magic_Dark             = 0x00F4,
+    Demo_6K                = 0x00F5,
+    En_Anubice_Tag         = 0x00F6,
+    Bg_Haka_Gate           = 0x00F7,
+    Bg_Spot15_Saku         = 0x00F8,
+    Bg_Jya_Goroiwa         = 0x00F9,
+    Bg_Jya_Zurerukabe      = 0x00FA,
+    Bg_Jya_Cobra           = 0x00FC,
+    Bg_Jya_Kanaami         = 0x00FD,
     Fishing                = 0x00FE,
     Obj_Oshihiki           = 0x00FF,
+    Bg_Gate_Shutter        = 0x0100,
+    Eff_Dust               = 0x0101,
     Bg_Spot01_Fusya        = 0x0102,
     Bg_Spot01_Idohashira   = 0x0103,
     Bg_Spot01_Idomizu      = 0x0104,
     Bg_Po_Syokudai         = 0x0105,
+    Bg_Ganon_Otyuka        = 0x0106,
     Bg_Spot15_Rrbox        = 0x0107,
+    Bg_Umajump             = 0x0108,
+    Arrow_Fire             = 0x010A,
+    Arrow_Ice              = 0x010B,
+    Arrow_Light            = 0x010C,
+    Item_Etcetera          = 0x010F,
+    Obj_Kibako             = 0x0110,
     Obj_Tsubo              = 0x0111,
     En_Wonder_Item         = 0x0112,
+    En_Ik                  = 0x0113,
+    Demo_Ik                = 0x0114,
     En_Skj                 = 0x0115,
+    En_Skjneedle           = 0x0116,
+    En_G_Switch            = 0x0117,
+    Demo_Ext               = 0x0118,
+    Demo_Shd               = 0x0119,
+    En_Dns                 = 0x011A,
     Elf_Msg                = 0x011B,
+    En_Honotrap            = 0x011C,
+    En_Tubo_Trap           = 0x011D,
+    Obj_Ice_Poly           = 0x011E,
     Bg_Spot03_Taki         = 0x011F,
+    Bg_Spot07_Taki         = 0x0120,
+    En_Fz                  = 0x0121,
+    En_Po_Relay            = 0x0122,
     Bg_Relay_Objects       = 0x0123,
+    En_Diving_Game         = 0x0124,
     En_Kusa                = 0x0125,
+    Obj_Bean               = 0x0126,
     Obj_Bombiwa            = 0x0127,
     Obj_Switch             = 0x012A,
+    Obj_Elevator           = 0x012B,
+    Obj_Lift               = 0x012C,
     Obj_Hsblock            = 0x012D,
     En_Okarina_Tag         = 0x012E,
+    En_Yabusame_Mark       = 0x012F,
     En_Goroiwa             = 0x0130,
+    En_Ex_Ruppy            = 0x0131,
     En_Toryo               = 0x0132,
+    En_Daiku               = 0x0133,
+    En_Nwc                 = 0x0135,
     En_Blkobj              = 0x0136,
+    Item_Inbox             = 0x0137,
+    En_Ge1                 = 0x0138,
+    Obj_Blockstop          = 0x0139,
+    En_Sda                 = 0x013A,
+    En_Clear_Tag           = 0x013B,
     En_Niw_Lady            = 0x013C,
+    En_Gm                  = 0x013D,
+    En_Ms                  = 0x013E,
+    En_Hs                  = 0x013F,
+    Bg_Ingate              = 0x0140,
     En_Kanban              = 0x0141,
     En_Heishi3             = 0x0142,
+    En_Syateki_Niw         = 0x0143,
+    En_Attack_Niw          = 0x0144,
+    Bg_Spot01_Idosoko      = 0x0145,
     En_Sa                  = 0x0146,
     En_Wonder_Talk         = 0x0147,
+    Bg_Gjyo_Bridge         = 0x0148,
     En_Ds                  = 0x0149,
     En_Mk                  = 0x014A,
     En_Bom_Bowl_Man        = 0x014B,
+    En_Bom_Bowl_Pit        = 0x014C,
     En_Owl                 = 0x014D,
     En_Ishi                = 0x014E,
     Obj_Hana               = 0x014F,
+    Obj_Lightswitch        = 0x0150,
+    Obj_Mure2              = 0x0151,
+    En_Go                  = 0x0152,
+    En_Fu                  = 0x0153,
+    En_Changer             = 0x0155,
+    Bg_Jya_Megami          = 0x0156,
+    Bg_Jya_Lift            = 0x0157,
+    Bg_Jya_Bigmirror       = 0x0158,
+    Bg_Jya_Bombchuiwa      = 0x0159,
+    Bg_Jya_Amishutter      = 0x015A,
+    Bg_Jya_Bombiwa         = 0x015B,
     Bg_Spot18_Basket       = 0x015C,
+    En_Ganon_Organ         = 0x015E,
     En_Siofuki             = 0x015F,
+    En_Stream              = 0x0160,
+    En_Mm                  = 0x0162,
     En_Ko                  = 0x0163,
+    En_Kz                  = 0x0164,
+    En_Weather_Tag         = 0x0165,
+    Bg_Sst_Floor           = 0x0166,
     En_Ani                 = 0x0167,
+    En_Ex_Item             = 0x0168,
+    Bg_Jya_Ironobj         = 0x0169,
+    En_Js                  = 0x016A,
+    En_Jsjutan             = 0x016B,
     En_Cs                  = 0x016C,
+    En_Md                  = 0x016D,
     En_Hy                  = 0x016E,
+    En_Ganon_Mant          = 0x016F,
+    En_Okarina_Effect      = 0x0170,
+    En_Mag                 = 0x0171,
+    Door_Gerudo            = 0x0172,
     Elf_Msg2               = 0x0173,
+    Demo_Gt                = 0x0174,
+    En_Po_Field            = 0x0175,
+    Efc_Erupc              = 0x0176,
+    Bg_Zg                  = 0x0177,
     En_Heishi4             = 0x0178,
+    En_Zl3                 = 0x0179,
+    Boss_Ganon2            = 0x017A,
+    En_Kakasi              = 0x017B,
     En_Takara_Man          = 0x017C,
+    Obj_Makeoshihiki       = 0x017D,
+    Oceff_Spot             = 0x017E,
+    End_Title              = 0x017F,
+    En_Torch               = 0x0181,
+    Demo_Ec                = 0x0182,
+    Shot_Sun               = 0x0183,
+    En_Dy_Extra            = 0x0184,
     En_Wonder_Talk2        = 0x0185,
+    En_Ge2                 = 0x0186,
+    Obj_Roomtimer          = 0x0187,
     En_Ssh                 = 0x0188,
+    En_Sth                 = 0x0189,
+    Oceff_Wipe             = 0x018A,
+    Oceff_Storm            = 0x018B,
+    En_Weiyer              = 0x018C,
     Bg_Spot05_Soko         = 0x018D,
+    Bg_Jya_1flift          = 0x018E,
+    Bg_Jya_Haheniron       = 0x018F,
+    Bg_Spot12_Gate         = 0x0190,
+    Bg_Spot12_Saku         = 0x0191,
     En_Hintnuts            = 0x0192,
+    En_Nutsball            = 0x0193,
+    Bg_Spot00_Break        = 0x0194,
     En_Shopnuts            = 0x0195,
+    En_It                  = 0x0196,
+    En_GeldB               = 0x0197,
+    Oceff_Wipe2            = 0x0198,
+    Oceff_Wipe3            = 0x0199,
     En_Niw_Girl            = 0x019A,
     En_Dog                 = 0x019B,
+    En_Si                  = 0x019C,
     Bg_Spot01_Objects2     = 0x019D,
+    Obj_Comb               = 0x019E,
+    Bg_Spot11_Bakudankabe  = 0x019F,
     Obj_Kibako2            = 0x01A0,
+    En_Dnt_Demo            = 0x01A1,
+    En_Dnt_Jiji            = 0x01A2,
+    En_Dnt_Nomal           = 0x01A3,
+    En_Guest               = 0x01A4,
+    Bg_Bom_Guard           = 0x01A5,
+    En_Hs2                 = 0x01A6,
+    Demo_Kekkai            = 0x01A7,
+    Bg_Spot08_Bakudankabe  = 0x01A8,
+    Bg_Spot17_Bakudankabe  = 0x01A9,
+    Obj_Mure3              = 0x01AB,
     En_Tg                  = 0x01AC,
     En_Mu                  = 0x01AD,
     En_Go2                 = 0x01AE,
     En_Wf                  = 0x01AF,
+    En_Skb                 = 0x01B0,
+    Demo_Gj                = 0x01B1,
+    Demo_Geff              = 0x01B2,
+    Bg_Gnd_Firemeiro       = 0x01B3,
+    Bg_Gnd_Darkmeiro       = 0x01B4,
+    Bg_Gnd_Soulmeiro       = 0x01B5,
+    Bg_Gnd_Nisekabe        = 0x01B6,
+    Bg_Gnd_Iceblock        = 0x01B7,
+    En_Gb                  = 0x01B8,
     En_Gs                  = 0x01B9,
+    Bg_Mizu_Bwall          = 0x01BA,
+    Bg_Mizu_Shutter        = 0x01BB,
     En_Daiku_Kakariko      = 0x01BC,
     Bg_Bowl_Wall           = 0x01BD,
+    En_Wall_Tubo           = 0x01BE,
+    En_Po_Desert           = 0x01BF,
     En_Crow                = 0x01C0,
+    Door_Killer            = 0x01C1,
+    Bg_Spot11_Oasis        = 0x01C2,
+    Bg_Spot18_Futa         = 0x01C3,
     Bg_Spot18_Shutter      = 0x01C4,
+    En_Ma3                 = 0x01C5,
     En_Cow                 = 0x01C6,
+    Bg_Ice_Turara          = 0x01C7,
+    Bg_Ice_Shutter         = 0x01C8,
+    En_Kakasi2             = 0x01C9,
+    En_Kakasi3             = 0x01CA,
+    Oceff_Wipe4            = 0x01CB,
+    En_Eg                  = 0x01CC,
+    Bg_Menkuri_Nisekabe    = 0x01CD,
     En_Zo                  = 0x01CE,
+    Obj_Makekinsuta        = 0x01CF,
+    En_Ge3                 = 0x01D0,
     Obj_Timeblock          = 0x01D1,
+    Obj_Hamishi            = 0x01D2,
     En_Zl4                 = 0x01D3,
+    En_Mm2                 = 0x01D4,
+    Bg_Jya_Block           = 0x01D5,
+    Obj_Warp2block         = 0x01D6,
 
     //
     Grezzo_Hintstone       = 0x01D9,
-};
+}
+
+function stringifyActorId(actorId: ActorId): string {
+    return ActorId[actorId];
+}
 
 // Some objects do special magic based on which scene they are loaded into.
 // This is a rough descriptor of the "current scene" -- feel free to expand as needed.
@@ -429,32 +744,24 @@ function isAdultDungeon(scene: Scene) {
     }
 }
 
+const pathBase = `oot3d`;
+
 class SceneDesc implements Viewer.SceneDesc {
     constructor(public id: string, public name: string, public setupIndex: number = -1) {
     }
 
-    public createScene(device: GfxDevice, abortSignal: AbortSignal): Progressable<Viewer.SceneGfx> {
-        // Fetch the ZAR & info ZSI.
-        const path_zar = `${pathBase}/scene/${this.id}.zar`;
-        const path_info_zsi = `${pathBase}/scene/${this.id}_info.zsi`;
-        return Progressable.all([fetchData(path_zar, abortSignal), fetchData(path_info_zsi, abortSignal)]).then(([zar, zsi]) => {
-            return this.createSceneFromData(device, abortSignal, zar, zsi);
-        });
-    }
-
-    private spawnActorForRoom(device: GfxDevice, abortSignal: AbortSignal, scene: Scene, renderer: OoT3DRenderer, roomRenderer: RoomRenderer, actor: ZSI.Actor, j: number): void {
-        function fetchArchive(archivePath: string): Progressable<ZAR.ZAR> { 
-            return renderer.modelCache.fetchArchive(`${pathBase}/actor/${archivePath}`, abortSignal);
+    private spawnActorForRoom(device: GfxDevice, scene: Scene, renderer: OoT3DRenderer, roomRenderer: RoomRenderer, actor: ZSI.Actor, j: number): void {
+        function fetchArchive(archivePath: string): Promise<ZAR.ZAR> { 
+            return renderer.modelCache.fetchArchive(`${pathBase}/actor/${archivePath}`);
         }
 
-        function buildModel(zar: ZAR.ZAR, modelPath: string, scale: number = 0.01): CmbRenderer {
+        function buildModel(zar: ZAR.ZAR, modelPath: string, scale: number = 0.01): CmbInstance {
             const cmbData = renderer.modelCache.getModel(device, renderer, zar, modelPath);
-            const cmbRenderer = new CmbRenderer(device, renderer.textureHolder, cmbData);
+            const cmbRenderer = new CmbInstance(device, renderer.textureHolder, cmbData);
             cmbRenderer.animationController.fps = 20;
             cmbRenderer.setConstantColor(1, TransparentBlack);
             cmbRenderer.name = `${hexzero(actor.actorId, 4)} / ${hexzero(actor.variable, 4)} / ${modelPath}`;
             mat4.scale(cmbRenderer.modelMatrix, actor.modelMatrix, [scale, scale, scale]);
-            cmbRenderer.addToViewRenderer(device, renderer.viewRenderer);
             roomRenderer.objectRenderers.push(cmbRenderer);
             return cmbRenderer;
         }
@@ -470,7 +777,7 @@ class SceneDesc implements Viewer.SceneDesc {
         }
 
         function animFrame(frame: number): AnimationController {
-            const a = new AnimationController(); 
+            const a = new AnimationController();
             a.setTimeInFrames(frame);
             return a;
         }
@@ -574,7 +881,6 @@ class SceneDesc implements Viewer.SceneDesc {
             } else if (whichModel === 0x01) {
                 const b = buildModel(zar, `model/bowling_p2_model.cmb`, 1);
                 b.bindCMAB(parseCMAB(zar, `misc/bowling_p2_model.cmab`));
-
             } else {
                 throw "Starschulz";
             }
@@ -671,7 +977,7 @@ class SceneDesc implements Viewer.SceneDesc {
                 throw "starschulz";
             }
         });
-        else if (actor.actorId === ActorId.Bg_Spot02_Objects) fetchArchive(`zelda_Spot02_Objects.zar`).then((zar) => {
+        else if (actor.actorId === ActorId.Bg_Spot02_Objects) fetchArchive(`zelda_spot02_objects.zar`).then((zar) => {
             const whichModel = actor.variable & 0x0F;
             if (whichModel === 0x00) {
                 buildModel(zar, 'model/obj_s02gate_model.cmb', 0.1);  // Eye of Truth door
@@ -1076,17 +1382,29 @@ class SceneDesc implements Viewer.SceneDesc {
             b.setVertexColorScale(characterLightScale);
         });
         else if (actor.actorId === ActorId.En_Heishi2) fetchArchive(`zelda_sd.zar`).then((zar) => {
-            // Purple Royal Guards. They are without an animation as it causes them to spaghettify...
-            const b = buildModel(zar, `model/soldier2.cmb`);
-            b.setVertexColorScale(characterLightScale);
+            const whichGuard = actor.variable & 0xFF;
+            if (whichGuard === 0x02) { // Hyrule Castle Guard
+                const b = buildModel(zar, `model/soldier.cmb`);
+                b.bindCSAB(parseCSAB(zar, `anim/sd_matsu.csab`)); 
+                b.setVertexColorScale(characterLightScale);
+            } else if (whichGuard === 0x05) { // Death Mountain Guard
+                const b = buildModel(zar, `model/soldier.cmb`);
+                b.bindCSAB(parseCSAB(zar, `anim/sd_matsu.csab`)); 
+                b.setVertexColorScale(characterLightScale);
+            } else if (whichGuard === 0x06) { // Ceremonial Guards
+                const b = buildModel(zar, `model/soldier2.cmb`);
+                b.setVertexColorScale(characterLightScale);
+            } else {
+                throw "whoops";
+            }
         });
         else if (actor.actorId === ActorId.En_Ssh) fetchArchive(`zelda_ssh.zar`).then((zar) => {
-            const b = buildModel(zar, `model/spiderman.cmb`, 0.03 );
+            const b = buildModel(zar, `model/spiderman.cmb`, 0.03);
             b.bindCSAB(parseCSAB(zar, `anim/st_matsu.csab`));
             b.setVertexColorScale(characterLightScale);
         });
         else if (actor.actorId === ActorId.Boss_Sst) fetchArchive(`zelda_sst.zar`).then((zar) => {
-            const b = buildModel(zar, `model/bongobongo.cmb`, 0.015 );
+            const b = buildModel(zar, `model/bongobongo.cmb`, 0.015);
             b.modelMatrix[14] += -500; // looks nicer offset a bit
             b.bindCSAB(parseCSAB(zar, `anim/ss_wait_open.csab`));
             b.setVertexColorScale(characterLightScale);
@@ -1094,12 +1412,12 @@ class SceneDesc implements Viewer.SceneDesc {
             // the boss in there instead.
         });
         else if (actor.actorId === ActorId.En_Go2) fetchArchive(`zelda_oF1d.zar`).then((zar) => {
-            const b = buildModel(zar, `model/goronpeople.cmb` );
+            const b = buildModel(zar, `model/goronpeople.cmb`);
             b.bindCSAB(parseCSAB(zar, `anim/oF1d_dai_goron_kaii.csab`));
             b.setVertexColorScale(characterLightScale);
         });
         else if (actor.actorId === ActorId.En_Cs) fetchArchive(`zelda_cs.zar`).then((zar) => {
-            const b = buildModel(zar, `model/childstalker.cmb`, 0.01 );
+            const b = buildModel(zar, `model/childstalker.cmb`, 0.01);
             b.bindCSAB(parseCSAB(zar, `anim/cs_matsu03.csab`));
             b.setVertexColorScale(characterLightScale);
         });
@@ -1225,6 +1543,11 @@ class SceneDesc implements Viewer.SceneDesc {
             b.setVertexColorScale(characterLightScale);
             // Hide her veil; it's only used in the opening cutscenes.
             b.shapeInstances[9].visible = false;
+        });
+        else if (actor.actorId === ActorId.En_Rl) fetchArchive(`zelda_rl.zar`).then((zar) => {
+            const b = buildModel(zar, `model/raul.cmb`, 0.01);
+            b.bindCSAB(parseCSAB(zar, `anim/rl_matsu.csab`));
+            b.setVertexColorScale(characterLightScale);
         });
         else if (actor.actorId === ActorId.Demo_Du) fetchArchive(`zelda_du.zar`).then((zar) => {
             const b = buildModel(zar, `model/darunia.cmb`, 0.01);
@@ -1619,20 +1942,19 @@ class SceneDesc implements Viewer.SceneDesc {
         else if (actor.actorId === ActorId.En_Wonder_Item) return;
         // Ocarina Trigger
         else if (actor.actorId === ActorId.En_Okarina_Tag) return;
-        else console.warn(`Unknown actor ${j} / ${hexzero(actor.actorId, 4)} / ${hexzero(actor.variable, 4)}`);
+        else console.warn(`Unknown actor ${j} / ${stringifyActorId(actor.actorId)} / ${hexzero(actor.variable, 4)}`);
     }
 
     private spawnSkybox(device: GfxDevice, renderer: OoT3DRenderer, zar: ZAR.ZAR, skyboxSettings: number): void {
         // Attach the skybox to the first roomRenderer.
         const roomRenderer = renderer.roomRenderers[0];
 
-        function buildModel(zar: ZAR.ZAR, modelPath: string): CmbRenderer {
+        function buildModel(zar: ZAR.ZAR, modelPath: string): CmbInstance {
             const cmbData = renderer.modelCache.getModel(device, renderer, zar, modelPath);
-            const cmbRenderer = new CmbRenderer(device, renderer.textureHolder, cmbData);
+            const cmbRenderer = new CmbInstance(device, renderer.textureHolder, cmbData);
             cmbRenderer.isSkybox = true;
             cmbRenderer.animationController.fps = 20;
-            cmbRenderer.addToViewRenderer(device, renderer.viewRenderer);
-            cmbRenderer.setPassMask(OoT3DPass.SKYBOX);
+            cmbRenderer.passMask = OoT3DPass.SKYBOX;
             roomRenderer.objectRenderers.push(cmbRenderer);
             return cmbRenderer;
         }
@@ -1653,9 +1975,18 @@ class SceneDesc implements Viewer.SceneDesc {
         }
     }
 
-    private createSceneFromData(device: GfxDevice, abortSignal: AbortSignal, zarBuffer: ArrayBufferSlice, zsiBuffer: ArrayBufferSlice): Progressable<Viewer.SceneGfx> {
+    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+        const path_zar = `${pathBase}/scene/${this.id}.zar`;
+        const path_info_zsi = `${pathBase}/scene/${this.id}_info.zsi`;
+        const dataFetcher = context.dataFetcher;
+
+        const [zarBuffer, zsiBuffer] = await Promise.all([
+            dataFetcher.fetchData(path_zar, DataFetcherFlags.ALLOW_404),
+            dataFetcher.fetchData(path_info_zsi),
+        ]);
+
         const textureHolder = new CtrTextureHolder();
-        const modelCache = new ModelCache();
+        const modelCache = new ModelCache(dataFetcher);
 
         const zar = zarBuffer.byteLength ? ZAR.parse(zarBuffer) : null;
 
@@ -1663,8 +1994,8 @@ class SceneDesc implements Viewer.SceneDesc {
         assert(zsi.rooms !== null);
 
         const renderer = new OoT3DRenderer(device, textureHolder, zsi, modelCache);
+        context.destroyablePool.push(renderer);
 
-        // TODO(jstpierre): Fix this.
         const scene = chooseSceneFromId(this.id);
 
         const roomZSINames: string[] = [];
@@ -1672,53 +2003,51 @@ class SceneDesc implements Viewer.SceneDesc {
             const filename = zsi.rooms[i].split('/').pop();
             const roomZSIName = `${pathBase}/scene/${filename}`;
             roomZSINames.push(roomZSIName);
-            modelCache.fetchFileData(roomZSIName, abortSignal);
+            modelCache.fetchFileData(roomZSIName);
         }
 
-        modelCache.fetchArchive(`${pathBase}/kankyo/BlueSky.zar`, abortSignal);
+        modelCache.fetchArchive(`${pathBase}/kankyo/BlueSky.zar`);
 
-        return modelCache.waitForLoad().then(() => {
-            for (let i = 0; i < roomZSINames.length; i++) {
-                const roomSetups = ZSI.parseRooms(modelCache.getFileData(roomZSINames[i]));
+        await modelCache.waitForLoad();
 
-                let roomSetup: ZSI.ZSIRoomSetup;
-                if (this.setupIndex === -1)
-                    roomSetup = roomSetups.find((setup) => setup.mesh !== null);
-                else
-                    roomSetup = roomSetups[this.setupIndex];
+        for (let i = 0; i < roomZSINames.length; i++) {
+            const roomSetups = ZSI.parseRooms(modelCache.getFileData(roomZSINames[i]));
 
-                assert(roomSetup.mesh !== null);
-                const filename = roomZSINames[i].split('/').pop();
-                const roomRenderer = new RoomRenderer(device, textureHolder, roomSetup.mesh, filename);
-                roomRenderer.roomSetups = roomSetups;
-                if (zar !== null) {
-                    const cmabFile = zar.files.find((file) => file.name.startsWith(`ROOM${i}\\`) && file.name.endsWith('.cmab') && !file.name.endsWith('_t.cmab'));
-                    if (cmabFile) {
-                        const cmab = CMAB.parse(CMB.Version.Ocarina, cmabFile.buffer);
-                        textureHolder.addTextures(device, cmab.textures);
-                        roomRenderer.bindCMAB(cmab);
-                    }
+            let roomSetup: ZSI.ZSIRoomSetup;
+            if (this.setupIndex === -1)
+                roomSetup = roomSetups.find((setup) => setup.mesh !== null);
+            else
+                roomSetup = roomSetups[this.setupIndex];
+
+            assert(roomSetup.mesh !== null);
+            const filename = roomZSINames[i].split('/').pop();
+            const roomRenderer = new RoomRenderer(device, textureHolder, roomSetup.mesh, filename);
+            roomRenderer.roomSetups = roomSetups;
+            if (zar !== null) {
+                const cmabFile = zar.files.find((file) => file.name.startsWith(`ROOM${i}\\`) && file.name.endsWith('.cmab') && !file.name.endsWith('_t.cmab'));
+                if (cmabFile) {
+                    const cmab = CMAB.parse(CMB.Version.Ocarina, cmabFile.buffer);
+                    textureHolder.addTextures(device, cmab.textures);
+                    roomRenderer.bindCMAB(cmab);
                 }
-
-                roomRenderer.addToViewRenderer(device, renderer.viewRenderer);
-                renderer.roomRenderers.push(roomRenderer);
-
-                for (let j = 0; j < roomSetup.actors.length; j++)
-                    this.spawnActorForRoom(device, abortSignal, scene, renderer, roomRenderer, roomSetup.actors[j], j);
             }
+            renderer.roomRenderers.push(roomRenderer);
 
-            // XXX(jstpierre): We stick doors into the first roomRenderer to keep things simple.
-            for (let j = 0; j < zsi.doorActors.length; j++)
-                this.spawnActorForRoom(device, abortSignal, scene, renderer, renderer.roomRenderers[0], zsi.doorActors[j], j);
+            for (let j = 0; j < roomSetup.actors.length; j++)
+                this.spawnActorForRoom(device, scene, renderer, roomRenderer, roomSetup.actors[j], j);
+        }
 
-            const skyboxZAR = modelCache.getArchive(`${pathBase}/kankyo/BlueSky.zar`);
-            this.spawnSkybox(device, renderer, skyboxZAR, zsi.skyboxSettings);
+        // We stick doors into the first roomRenderer to keep things simple.
+        for (let j = 0; j < zsi.doorActors.length; j++)
+            this.spawnActorForRoom(device, scene, renderer, renderer.roomRenderers[0], zsi.doorActors[j], j);
 
-            return modelCache.waitForLoad().then(() => {
-                renderer.setEnvironmentSettingsIndex(0);
-                return renderer;
-            });
-        });
+        const skyboxZAR = modelCache.getArchive(`${pathBase}/kankyo/BlueSky.zar`);
+        this.spawnSkybox(device, renderer, skyboxZAR, zsi.skyboxSettings);
+
+        await modelCache.waitForLoad();
+
+        renderer.setEnvironmentSettingsIndex(0);
+        return renderer;
     }
 }
 
@@ -1802,7 +2131,7 @@ const sceneDescs = [
     new SceneDesc("shrine_n", "Temple of Time (Outside, Night)"),
     new SceneDesc("shrine_r", "Temple of Time (Outside, Adult)"),
     new SceneDesc("tokinoma", "Temple of Time (Interior)"),
-    new SceneDesc("kenjyanoma", "Chamber of the Sages"),
+    new SceneDesc("kenjyanoma", "Chamber of the Sages", 3),
     new SceneDesc("shop", 'Bazaar'),
 
     "Lake Hylia",

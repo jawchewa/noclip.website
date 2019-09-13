@@ -130,8 +130,8 @@ function getSizeName(siz: ImageSize): string {
     return '' + getSizBitsPerPixel(siz);
 }
 
-export function getFormatString(texture: Texture): string {
-    return `${getFormatName(texture.tile.fmt)}${getSizeName(texture.tile.siz)}`;
+export function getFormatString(fmt: ImageFormat, siz: ImageSize): string {
+    return `${getFormatName(fmt)}${getSizeName(siz)}`;
 }
 
 export class DrawCall {
@@ -177,14 +177,14 @@ export class RSPOutput {
     }
 }
 
-const enum OtherModeH_CycleType {
+export const enum OtherModeH_CycleType {
     G_CYC_1CYCLE = 0x00,
     G_CYC_2CYCLE = 0x01,
     G_CYC_COPY   = 0x02,
     G_CYC_FILL   = 0x03,
 }
 
-const enum ImageFormat {
+export const enum ImageFormat {
     G_IM_FMT_RGBA = 0x00,
     G_IM_FMT_YUV  = 0x01,
     G_IM_FMT_CI   = 0x02,
@@ -192,7 +192,7 @@ const enum ImageFormat {
     G_IM_FMT_I    = 0x04,
 }
 
-const enum ImageSize {
+export const enum ImageSize {
     G_IM_SIZ_4b   = 0x00,
     G_IM_SIZ_8b   = 0x01,
     G_IM_SIZ_16b  = 0x02,
@@ -404,9 +404,7 @@ function translateTileTexture(segmentBuffers: ArrayBufferSlice[], dramAddr: numb
     case (ImageFormat.G_IM_FMT_RGBA << 4 | ImageSize.G_IM_SIZ_16b): return translateTile_RGBA16(segmentBuffers, dramAddr, tile);
     case (ImageFormat.G_IM_FMT_RGBA << 4 | ImageSize.G_IM_SIZ_32b): return translateTile_RGBA32(segmentBuffers, dramAddr, tile);
     default:
-        console.error(`Unknown image format ${tile.fmt} / ${tile.siz}`, tile);
-        debugger;
-        return null;
+        throw new Error(`Unknown image format ${tile.fmt} / ${tile.siz}`);
     }
 }
 
@@ -745,12 +743,11 @@ export function runDL_F3DEX(state: RSPState, addr: number): void {
         const w1 = view.getUint32(i + 0x04);
 
         const cmd: F3DEX_GBI = w0 >>> 24;
-        // console.log(F3DEX_GBI_NameTable[cmd], hexzero(w0, 8), hexzero(w1, 8));
+        // console.log(hexzero(i, 8), F3DEX_GBI_NameTable[cmd], hexzero(w0, 8), hexzero(w1, 8));
 
         switch (cmd) {
         case F3DEX_GBI.G_ENDDL:
-            // This doesn't end the DL (at least in B-K).
-            break;
+            return;
 
         case F3DEX_GBI.G_CLEARGEOMETRYMODE:
             state.gSPClearGeometryMode(w1);

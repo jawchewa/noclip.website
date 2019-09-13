@@ -6,24 +6,25 @@ import { mat4, vec3 } from "gl-matrix";
 import { BMDModelInstance } from "./render";
 import { ANK1, TTK1, TRK1 } from "./j3d";
 import AnimationController from "../AnimationController";
-import { Colors } from "./zww_scenes";
+import { Colors } from "./WindWaker/zww_scenes";
 import { ColorKind, GXRenderHelperGfx } from "../gx/gx_render";
 import { AABB } from '../Geometry';
 import { ScreenSpaceProjection, computeScreenSpaceProjectionFromWorldSpaceAABB } from '../Camera';
 import { GfxDevice } from '../gfx/platform/GfxPlatform';
 import ArrayBufferSlice from '../ArrayBufferSlice';
+import { colorFromRGBA } from '../Color';
+import { GfxRenderInstManager } from '../gfx/render/GfxRenderer';
 
 // Special-case actors
 
 export interface ObjectRenderer {
-    prepareToRender(renderHelper: GXRenderHelperGfx, viewerInput: Viewer.ViewerRenderInput, visible: boolean): void;
+    prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, visible: boolean): void;
     setColors(colors: Colors): void;
     destroy(device: GfxDevice): void;
     setVertexColorsEnabled(v: boolean): void;
     setTexturesEnabled(v: boolean): void
 }
 
-const scratchLight = new GX_Material.Light();
 const bboxScratch = new AABB();
 const screenProjection = new ScreenSpaceProjection();
 export class BMDObjectRenderer implements ObjectRenderer {
@@ -49,7 +50,7 @@ export class BMDObjectRenderer implements ObjectRenderer {
     }
 
     public setParentJoint(o: BMDObjectRenderer, jointName: string): void {
-        this.parentJointMatrix = o.modelInstance.getJointMatrixReference(jointName);
+        this.parentJointMatrix = o.modelInstance.getJointToWorldMatrixReference(jointName);
         o.childObjects.push(this);
     }
 
@@ -75,7 +76,7 @@ export class BMDObjectRenderer implements ObjectRenderer {
             this.childObjects[i].setColors(colors);
     }
 
-    public prepareToRender(renderHelper: GXRenderHelperGfx, viewerInput: Viewer.ViewerRenderInput, visible: boolean): void {
+    public prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, visible: boolean): void {
         this.modelInstance.visible = visible && this.visible;
 
         if (this.modelInstance.visible) {
@@ -94,17 +95,18 @@ export class BMDObjectRenderer implements ObjectRenderer {
         }
 
         //Temporary until lighting is properly figured out
-        GX_Material.lightSetWorldPosition(scratchLight, viewerInput.camera, 500, 500, 500);
-        GX_Material.lightSetWorldDirection(scratchLight, viewerInput.camera, -250, -250, -250);
-        scratchLight.Color.set(1, 1, 1, 0);
-        vec3.set(scratchLight.CosAtten, 1.075, 0, 0);
-        vec3.set(scratchLight.DistAtten, 1.075, 0, 0);
-        this.modelInstance.setGXLight(0, scratchLight);
+        const light = this.modelInstance.getGXLightReference(0);
 
+        GX_Material.lightSetWorldPosition(light, viewerInput.camera, 500, 500, 500);
+        GX_Material.lightSetWorldDirection(light, viewerInput.camera, -250, -250, -250);
+        colorFromRGBA(light.Color, 1, 1, 1, 0);
 
-        this.modelInstance.prepareToRender(renderHelper, viewerInput);
+        vec3.set(light.CosAtten, 1.075, 0, 0);
+        vec3.set(light.DistAtten, 1.075, 0, 0);
+
+        this.modelInstance.prepareToRender(device, renderInstManager, viewerInput);
         for (let i = 0; i < this.childObjects.length; i++)
-            this.childObjects[i].prepareToRender(renderHelper, viewerInput, this.modelInstance.visible);
+            this.childObjects[i].prepareToRender(device, renderInstManager, viewerInput, this.modelInstance.visible);
     }
 
     public destroy(device: GfxDevice): void {

@@ -2,18 +2,24 @@
 import * as BRRES from './brres';
 
 import * as GX_Material from '../gx/gx_material';
-import { mat4, mat2d, vec3 } from "gl-matrix";
-import { MaterialParams, GXTextureHolder, ColorKind, translateTexFilterGfx, translateWrapModeGfx, loadedDataCoalescerGfx, GXRenderHelperGfx, GXShapeHelperGfx, GXMaterialHelperGfx, PacketParams } from "../gx/gx_render";
-import { texProjPerspMtx, texEnvMtx, computeViewMatrix, computeViewMatrixSkybox, Camera, computeViewSpaceDepthFromWorldSpaceAABB } from "../Camera";
+import { mat4, vec3 } from "gl-matrix";
+import { MaterialParams, GXTextureHolder, ColorKind, translateTexFilterGfx, translateWrapModeGfx, PacketParams, ub_MaterialParams, loadedDataCoalescerComboGfx, fillMaterialParamsDataWithOptimizations } from "../gx/gx_render";
+import { GXShapeHelperGfx, GXMaterialHelperGfx, autoOptimizeMaterial } from "../gx/gx_render";
+import { computeViewMatrix, computeViewMatrixSkybox, Camera, computeViewSpaceDepthFromWorldSpaceAABB, texProjCamera } from "../Camera";
 import AnimationController from "../AnimationController";
 import { TextureMapping } from "../TextureHolder";
 import { IntersectionState, AABB } from "../Geometry";
 import { GfxDevice, GfxSampler } from "../gfx/platform/GfxPlatform";
 import { ViewerRenderInput } from "../viewer";
-import { GfxRenderInst, GfxRenderInstBuilder, GfxRendererLayer, makeSortKey, setSortKeyDepth, setSortKeyBias } from "../gfx/render/GfxRenderer";
-import { GfxBufferCoalescer } from '../gfx/helpers/BufferHelpers';
-import { assert, nArray } from '../util';
-import { prepareFrameDebugOverlayCanvas2D, getDebugOverlayCanvas2D, drawWorldSpaceLine } from '../DebugJunk';
+import { GfxRenderInst, GfxRenderInstManager, GfxRendererLayer, makeSortKey, setSortKeyDepth, setSortKeyBias } from "../gfx/render/GfxRenderer";
+import { GfxBufferCoalescerCombo } from '../gfx/helpers/BufferHelpers';
+import { nArray } from '../util';
+import { getDebugOverlayCanvas2D, drawWorldSpaceLine } from '../DebugJunk';
+import { colorCopy, Color } from '../Color';
+import { computeNormalMatrix, texEnvMtx } from '../MathHelpers';
+import { GfxRenderCache } from '../gfx/render/GfxRenderCache';
+import { arrayCopy } from '../gfx/platform/GfxPlatformUtil';
+import { LoadedVertexPacket } from '../gx/gx_displaylist';
 
 export class RRESTextureHolder extends GXTextureHolder<BRRES.TEX0> {
     public addRRESTextures(device: GfxDevice, rres: BRRES.RRES): void {
@@ -21,17 +27,25 @@ export class RRESTextureHolder extends GXTextureHolder<BRRES.TEX0> {
     }
 }
 
+class InstanceStateData {
+    public jointToWorldMatrixVisibility: IntersectionState[] = [];
+    public jointToWorldMatrixArray: mat4[] = [];
+    public jointToWorldMatrixAttribs: BRRES.BillboardMode[] = [];
+    public drawViewMatrixArray: mat4[] = [];
+    public lightSetting: BRRES.LightSetting | null = null;
+}
+
 export class MDL0Model {
     public shapeData: GXShapeHelperGfx[] = [];
     public materialData: MaterialData[] = [];
-    private bufferCoalescer: GfxBufferCoalescer;
+    private bufferCoalescer: GfxBufferCoalescerCombo;
 
-    constructor(device: GfxDevice, renderHelper: GXRenderHelperGfx, public mdl0: BRRES.MDL0, private materialHacks: GX_Material.GXMaterialHacks | null = null) {
-        this.bufferCoalescer = loadedDataCoalescerGfx(device, this.mdl0.shapes.map((shape) => shape.loadedVertexData));
+    constructor(device: GfxDevice, cache: GfxRenderCache, public mdl0: BRRES.MDL0, private materialHacks: GX_Material.GXMaterialHacks | null = null) {
+        this.bufferCoalescer = loadedDataCoalescerComboGfx(device, this.mdl0.shapes.map((shape) => shape.loadedVertexData));
  
         for (let i = 0; i < this.mdl0.shapes.length; i++) {
             const shape = this.mdl0.shapes[i];
-            this.shapeData[i] = new GXShapeHelperGfx(device, renderHelper, this.bufferCoalescer.coalescedBuffers[i], shape.loadedVertexLayout, shape.loadedVertexData);
+            this.shapeData[i] = new GXShapeHelperGfx(device, cache, this.bufferCoalescer.coalescedBuffers[i], shape.loadedVertexLayout, shape.loadedVertexData);
         }
 
         for (let i = 0; i < this.mdl0.materials.length; i++) {
@@ -52,193 +66,254 @@ export class MDL0Model {
 const bboxScratch = new AABB();
 const packetParams = new PacketParams();
 class ShapeInstance {
-    public renderInsts: GfxRenderInst[] = [];
     public sortKeyBias = 0;
-    private visible = true;
 
-    constructor(public shape: BRRES.MDL0_ShapeEntry, public shapeData: GXShapeHelperGfx, public node: BRRES.MDL0_NodeEntry) {
+    constructor(public shape: BRRES.MDL0_ShapeEntry, public shapeData: GXShapeHelperGfx, public sortVizNode: BRRES.MDL0_NodeEntry, public materialInstance: MaterialInstance) {
     }
 
-    public buildRenderInst(renderInstBuilder: GfxRenderInstBuilder, namePrefix: string): void {
-        for (let i = 0; i < this.shape.loadedVertexData.packets.length; i++) {
-            const packet = this.shape.loadedVertexData.packets[i];
-            const renderInst = this.shapeData.buildRenderInstPacket(renderInstBuilder, packet);
-            renderInst.name = `${namePrefix}/${this.shape.name}/${i}`;
-            renderInstBuilder.pushRenderInst(renderInst);
-            this.renderInsts.push(renderInst);
-        }
-    }
+    public prepareToRender(device: GfxDevice, textureHolder: GXTextureHolder, renderInstManager: GfxRenderInstManager, depth: number, camera: Camera, instanceStateData: InstanceStateData, isSkybox: boolean): void {
+        const materialInstance = this.materialInstance;
 
-    private computeModelView(dst: mat4, modelMatrix: mat4, camera: Camera, isSkybox: boolean): void {
-        if (isSkybox) {
-            computeViewMatrixSkybox(dst, camera);
-        } else {
-            computeViewMatrix(dst, camera);
-        }
+        const template = renderInstManager.pushTemplateRenderInst();
+        template.sortKey = materialInstance.sortKey;
+        template.sortKey = setSortKeyDepth(template.sortKey, depth);
+        template.sortKey = setSortKeyBias(template.sortKey, this.sortKeyBias);
 
-        mat4.mul(dst, dst, modelMatrix);
-    }
+        materialInstance.setOnRenderInst(device, renderInstManager.gfxRenderCache, template);
 
-    public prepareToRender(renderHelper: GXRenderHelperGfx, depth: number, viewerInput: ViewerRenderInput, matrixArray: mat4[], matrixVisibility: IntersectionState[], isSkybox: boolean): void {
-        const visible = this.visible && this.node.visible && depth >= 0;
+        const usesSkinning = this.shape.mtxIdx < 0;
+        if (!usesSkinning)
+            materialInstance.fillMaterialParams(template, textureHolder, instanceStateData, this.shape.mtxIdx, null, camera);
 
         packetParams.clear();
         for (let p = 0; p < this.shape.loadedVertexData.packets.length; p++) {
             const packet = this.shape.loadedVertexData.packets[p];
-            const renderInst = this.renderInsts[p];
-
-            const camera = viewerInput.camera;
-            const modelMatrix = matrixArray[this.node.mtxId];
 
             let instVisible = false;
-            if (visible) {
-                if (this.shape.mtxIdx < 0) {
-                    for (let j = 0; j < packet.posNrmMatrixTable.length; j++) {
-                        const mtxIdx = packet.posNrmMatrixTable[j];
+            if (usesSkinning) {
+                for (let j = 0; j < packet.posNrmMatrixTable.length; j++) {
+                    const posNrmMatrixIdx = packet.posNrmMatrixTable[j];
 
-                        // Leave existing matrix.
-                        if (mtxIdx === 0xFFFF)
-                            continue;
+                    // Leave existing matrix.
+                    if (posNrmMatrixIdx === 0xFFFF)
+                        continue;
 
-                        this.computeModelView(packetParams.u_PosMtx[j], matrixArray[mtxIdx], camera, isSkybox);
+                    mat4.copy(packetParams.u_PosMtx[j], instanceStateData.drawViewMatrixArray[posNrmMatrixIdx]);
 
-                        if (matrixVisibility[j] !== IntersectionState.FULLY_OUTSIDE)
-                            instVisible = true;
-                    }
-                } else {
-                    instVisible = true;
-                    this.computeModelView(packetParams.u_PosMtx[0], modelMatrix, camera, isSkybox);
+                    if (instanceStateData.jointToWorldMatrixVisibility[j] !== IntersectionState.FULLY_OUTSIDE)
+                        instVisible = true;
                 }
+            } else {
+                instVisible = true;
+                mat4.copy(packetParams.u_PosMtx[0], instanceStateData.drawViewMatrixArray[this.shape.mtxIdx]);
             }
 
-            renderInst.visible = instVisible;
-            if (instVisible) {
-                renderInst.sortKey = setSortKeyDepth(renderInst.parentRenderInst.sortKey, depth);
-                renderInst.sortKey = setSortKeyBias(renderInst.sortKey, this.sortKeyBias);
-                this.shapeData.fillPacketParams(packetParams, renderInst, renderHelper);
-            }
+            if (!instVisible)
+                continue;
+
+            const renderInst = this.shapeData.pushRenderInst(renderInstManager, packet);
+            this.shapeData.fillPacketParams(packetParams, renderInst);
+
+            if (usesSkinning)
+                materialInstance.fillMaterialParams(renderInst, textureHolder, instanceStateData, this.shape.mtxIdx, packet, camera);
         }
+
+        renderInstManager.popTemplateRenderInst();
     }
 }
 
+function mat4SwapTranslationColumns(m: mat4): void {
+    const tx = m[12];
+    m[12] = m[8];
+    m[8] = tx;
+    const ty = m[13];
+    m[13] = m[9];
+    m[9] = ty;
+}
+
+function colorChannelCopy(o: GX_Material.ColorChannelControl): GX_Material.ColorChannelControl {
+    return Object.assign({}, o);
+}
+
+function lightChannelCopy(o: GX_Material.LightChannelControl): GX_Material.LightChannelControl {
+    const colorChannel = colorChannelCopy(o.colorChannel);
+    const alphaChannel = colorChannelCopy(o.alphaChannel);
+    return { colorChannel, alphaChannel };
+}
+
+const materialParams = new MaterialParams();
 class MaterialInstance {
     private srt0Animators: BRRES.SRT0TexMtxAnimator[] = [];
     private pat0Animators: BRRES.PAT0TexAnimator[] = [];
     private clr0Animators: BRRES.CLR0ColorAnimator[] = [];
-    private materialParams = new MaterialParams();
-    private materialHelper: GXMaterialHelperGfx;
-    public templateRenderInst: GfxRenderInst;
+    public materialHelper: GXMaterialHelperGfx;
+    public sortKey: number = 0;
 
-    constructor(device: GfxDevice, renderHelper: GXRenderHelperGfx, private modelInstance: MDL0ModelInstance, public materialData: MaterialData) {
-        this.materialHelper = new GXMaterialHelperGfx(device, renderHelper, materialData.material.gxMaterial, materialData.materialHacks);
-        this.templateRenderInst = this.materialHelper.templateRenderInst;
-        this.templateRenderInst.name = this.materialData.material.name;
+    constructor(private modelInstance: MDL0ModelInstance, public materialData: MaterialData) {
+        // Create a copy of the GX material, so we can patch in custom channel controls without affecting the original.
+        const gxMaterial: GX_Material.GXMaterial = Object.assign({}, materialData.material.gxMaterial);
+        gxMaterial.lightChannels = arrayCopy(gxMaterial.lightChannels, lightChannelCopy);
+        gxMaterial.useTexMtxIdx = nArray(8, () => false);
+
+        this.materialHelper = new GXMaterialHelperGfx(gxMaterial, materialData.materialHacks);
         const layer = this.materialData.material.translucent ? GfxRendererLayer.TRANSLUCENT : GfxRendererLayer.OPAQUE;
         this.setSortKeyLayer(layer);
+    }
+
+    public setSkinningEnabled(v: boolean): void {
+        for (let i = 0; i < this.materialData.material.texSrts.length; i++) {
+            const mapMode = this.materialData.material.texSrts[i].mapMode;
+            if (mapMode === BRRES.MapMode.ENV_CAMERA || mapMode === BRRES.MapMode.ENV_SPEC || mapMode === BRRES.MapMode.ENV_LIGHT)
+                this.materialHelper.material.useTexMtxIdx[i] = v;
+        }
+
+        this.materialHelper.createProgram();
     }
 
     public setSortKeyLayer(layer: GfxRendererLayer): void {
         if (this.materialData.material.translucent)
             layer |= GfxRendererLayer.TRANSLUCENT;
-        this.templateRenderInst.sortKey = makeSortKey(layer);
+        this.sortKey = makeSortKey(layer);
     }
 
-    public setVertexColorsEnabled(v: boolean): void {
-        this.materialHelper.setVertexColorsEnabled(v);
+    public setMaterialHacks(materialHacks: GX_Material.GXMaterialHacks): void {
+        this.materialHelper.setMaterialHacks(materialHacks);
     }
 
-    public setTexturesEnabled(v: boolean): void {
-        this.materialHelper.setTexturesEnabled(v);
-    }
-
-    public bindSRT0(animationController: AnimationController, srt0: BRRES.SRT0): void {
-        const material = this.materialData.material;
-        for (let i: BRRES.TexMtxIndex = 0; i < BRRES.TexMtxIndex.COUNT; i++) {
-            const srtAnimator = BRRES.bindSRT0Animator(animationController, srt0, material.name, i);
-            if (srtAnimator)
-                this.srt0Animators[i] = srtAnimator;
+    public bindSRT0(animationController: AnimationController | null, srt0: BRRES.SRT0 | null): void {
+        if (srt0 !== null) {
+            const material = this.materialData.material;
+            for (let i: BRRES.TexMtxIndex = 0; i < BRRES.TexMtxIndex.COUNT; i++) {
+                const srtAnimator = BRRES.bindSRT0Animator(animationController, srt0, material.name, i);
+                if (srtAnimator)
+                    this.srt0Animators[i] = srtAnimator;
+            }
+        } else {
+            for (let i: BRRES.TexMtxIndex = 0; i < BRRES.TexMtxIndex.COUNT; i++)
+                this.srt0Animators[i] = null;
         }
     }
 
-    public bindPAT0(animationController: AnimationController, pat0: BRRES.PAT0): void {
-        const material = this.materialData.material;
-        for (let i = 0; i < 8; i++) {
-            const patAnimator = BRRES.bindPAT0Animator(animationController, pat0, material.name, i);
-            if (patAnimator)
-                this.pat0Animators[i] = patAnimator;
+    public bindPAT0(animationController: AnimationController | null, pat0: BRRES.PAT0 | null): void {
+        if (pat0 !== null) {
+            const material = this.materialData.material;
+            for (let i = 0; i < 8; i++) {
+                const patAnimator = BRRES.bindPAT0Animator(animationController, pat0, material.name, i);
+                if (patAnimator)
+                    this.pat0Animators[i] = patAnimator;
+            }
+        } else {
+            for (let i = 0; i < 8; i++)
+                this.pat0Animators[i] = null;
         }
     }
 
-    public bindCLR0(animationController: AnimationController, clr0: BRRES.CLR0): void {
-        const material = this.materialData.material;
-        for (let i = 0; i < BRRES.AnimatableColor.COUNT; i++) {
-            const clrAnimator = BRRES.bindCLR0Animator(animationController, clr0, material.name, i);
-            if (clrAnimator)
-                this.clr0Animators[i] = clrAnimator;
+    public bindCLR0(animationController: AnimationController | null, clr0: BRRES.CLR0 | null): void {
+        if (clr0 !== null) {
+            const material = this.materialData.material;
+            for (let i = 0; i < BRRES.AnimatableColor.COUNT; i++) {
+                const clrAnimator = BRRES.bindCLR0Animator(animationController, clr0, material.name, i);
+                if (clrAnimator)
+                    this.clr0Animators[i] = clrAnimator;
+            }
+        } else {
+            for (let i = 0; i < BRRES.AnimatableColor.COUNT; i++)
+                this.clr0Animators[i] = null;
         }
     }
 
-    public calcIndTexMatrix(dst: mat2d, indIdx: number): void {
+    public calcIndTexMatrix(dst: mat4, indIdx: number): void {
         const material = this.materialData.material;
         const texMtxIdx: BRRES.TexMtxIndex = BRRES.TexMtxIndex.IND0 + indIdx;
         if (this.srt0Animators[texMtxIdx]) {
             this.srt0Animators[texMtxIdx].calcIndTexMtx(dst);
+            // TODO(jstpierre): What scale is used here?
+            dst[12] = 1.0;
         } else {
-            mat2d.copy(dst, material.indTexMatrices[indIdx]);
+            const indTexMtx = material.indTexMatrices[indIdx];
+            const a = indTexMtx[0], c = indTexMtx[1], tx = indTexMtx[2], scale = indTexMtx[3];
+            const b = indTexMtx[4], d = indTexMtx[5], ty = indTexMtx[6];
+            mat4.set(dst,
+                a,     b,  0, 0,
+                c,     d,  0, 0,
+                tx,    ty, 0, 0,
+                scale, 0,  0, 0,
+            );
         }
     }
 
-    public calcTexMatrix(dst: mat4, texIdx: number): void {
+    public calcTexAnimMatrix(dst: mat4, texIdx: number): void {
         const material = this.materialData.material;
         const texMtxIdx: BRRES.TexMtxIndex = BRRES.TexMtxIndex.TEX0 + texIdx;
         if (this.srt0Animators[texMtxIdx]) {
-            this.srt0Animators[texMtxIdx].calcTexMtx(matrixScratch);
+            this.srt0Animators[texMtxIdx].calcTexMtx(dst);
         } else {
             mat4.copy(dst, material.texSrts[texMtxIdx].srtMtx);
         }
     }
 
-    private calcPostTexMatrix(dst: mat4, texIdx: number, viewerInput: ViewerRenderInput, flipY: boolean): void {
+    private calcTexMatrix(materialParams: MaterialParams, texIdx: number, camera: Camera): void {
         const material = this.materialData.material;
         const texSrt = material.texSrts[texIdx];
+        const flipY = materialParams.m_TextureMapping[texIdx].flipY;
         const flipYScale = flipY ? -1.0 : 1.0;
+        const dstPost = materialParams.u_PostTexMtx[texIdx];
+
+        // Fast path.
+        if (texSrt.mapMode === BRRES.MapMode.TEXCOORD) {
+            this.calcTexAnimMatrix(dstPost, texIdx);
+            return;
+        }
 
         if (texSrt.mapMode === BRRES.MapMode.PROJECTION) {
-            const camera = viewerInput.camera;
-            texProjPerspMtx(dst, camera.fovY, camera.aspect, 0.5, -0.5 * flipYScale, 0.5, 0.5);
+            texProjCamera(dstPost, camera, 0.5, -0.5 * flipYScale, 0.5, 0.5);
+
+            // Apply effect matrix.
+            mat4.mul(dstPost, texSrt.effectMtx, dstPost);
 
             // XXX(jstpierre): ZSS hack. Reference camera 31 is set up by the game to be an overhead
             // camera for clouds. Kill it until we can emulate the camera system in this game...
             // XXX(jstpierre): Klonoa uses camera 1 for clouds.
             if (texSrt.refCamera === 31 || texSrt.refCamera === 1) {
-                dst[0] = 0;
-                dst[5] = 0;
+                dstPost[0] = 0;
+                dstPost[5] = 0;
             }
         } else if (texSrt.mapMode === BRRES.MapMode.ENV_CAMERA) {
-            texEnvMtx(dst, 0.5, -0.5 * flipYScale, 0.5, 0.5);
+            texEnvMtx(dstPost, 0.5, -0.5 * flipYScale, 0.5, 0.5);
+
+            // Apply effect matrix.
+            mat4.mul(dstPost, texSrt.effectMtx, dstPost);
         } else {
-            mat4.identity(dst);
+            mat4.identity(dstPost);
         }
 
-        // Apply effect matrix.
-        mat4.mul(dst, texSrt.effectMtx, dst);
-
         // Calculate SRT.
-        this.calcTexMatrix(matrixScratch, texIdx);
+        this.calcTexAnimMatrix(matrixScratch, texIdx);
 
         // SRT matrices have translation in fourth component, but we want our matrix to have translation
         // in third component. Swap.
-        const tx = matrixScratch[12];
-        matrixScratch[12] = matrixScratch[8];
-        matrixScratch[8] = tx;
-        const ty = matrixScratch[13];
-        matrixScratch[13] = matrixScratch[9];
-        matrixScratch[9] = ty;
+        mat4SwapTranslationColumns(matrixScratch);
 
-        mat4.mul(dst, matrixScratch, dst);
+        mat4.mul(dstPost, matrixScratch, dstPost);
     }
 
-    public fillMaterialParams(materialParams: MaterialParams, textureHolder: GXTextureHolder, viewerInput: ViewerRenderInput): void {
+    private calcColor(materialParams: MaterialParams, i: ColorKind, fallbackColor: Color, a: BRRES.AnimatableColor): void {
+        const dst = materialParams.u_Color[i];
+        let color: Color;
+        if (this.modelInstance && this.modelInstance.colorOverrides[i]) {
+            color = this.modelInstance.colorOverrides[i];
+        } else {
+            color = fallbackColor;
+        }
+
+        if (this.clr0Animators[a]) {
+            this.clr0Animators[a].calcColor(dst, color);
+        } else {
+            colorCopy(dst, color);
+        }
+    }
+
+    private fillMaterialParamsData(materialParams: MaterialParams, textureHolder: GXTextureHolder, instanceStateData: InstanceStateData, posNrmMatrixIdx: number, packet: LoadedVertexPacket | null = null, camera: Camera): void {
         const material = this.materialData.material;
 
         for (let i = 0; i < 8; i++) {
@@ -250,46 +325,59 @@ class MaterialInstance {
                 continue;
 
             this.fillTextureMapping(m, textureHolder, i);
-            // Fill in sampler state.
-            m.gfxSampler = this.materialData.gfxSamplers[i];
             m.lodBias = sampler.lodBias;
         }
 
+        // Fill in our environment mapped texture matrices.
+        for (let i = 0; i < 10; i++) {
+            let texMtxIdx: number;
+            if (packet !== null) {
+                texMtxIdx = packet.texMatrixTable[i];
+
+                // Don't bother computing a normal matrix if the matrix is unused.
+                if (texMtxIdx === 0xFFFF)
+                    continue;
+            } else {
+                texMtxIdx = posNrmMatrixIdx;
+            }
+
+            computeNormalMatrix(materialParams.u_TexMtx[i], instanceStateData.drawViewMatrixArray[texMtxIdx]);
+        }
+
         for (let i = 0; i < 8; i++)
-            this.calcPostTexMatrix(materialParams.u_PostTexMtx[i], i, viewerInput, materialParams.m_TextureMapping[i].flipY);
+            this.calcTexMatrix(materialParams, i, camera);
         for (let i = 0; i < 3; i++)
             this.calcIndTexMatrix(materialParams.u_IndTexMtx[i], i);
 
-        const calcColor = (i: ColorKind, fallbackColor: GX_Material.Color, a: BRRES.AnimatableColor) => {
-            const dst = materialParams.u_Color[i];
-            let color: GX_Material.Color;
-            if (this.modelInstance && this.modelInstance.colorOverrides[i]) {
-                color = this.modelInstance.colorOverrides[i];
-            } else {
-                color = fallbackColor;
+        this.calcColor(materialParams, ColorKind.MAT0, material.colorMatRegs[0], BRRES.AnimatableColor.MAT0);
+        this.calcColor(materialParams, ColorKind.MAT1, material.colorMatRegs[1], BRRES.AnimatableColor.MAT1);
+        this.calcColor(materialParams, ColorKind.AMB0, material.colorAmbRegs[0], BRRES.AnimatableColor.AMB0);
+        this.calcColor(materialParams, ColorKind.AMB1, material.colorAmbRegs[1], BRRES.AnimatableColor.AMB1);
+
+        this.calcColor(materialParams, ColorKind.K0, material.colorConstants[0], BRRES.AnimatableColor.K0);
+        this.calcColor(materialParams, ColorKind.K1, material.colorConstants[1], BRRES.AnimatableColor.K1);
+        this.calcColor(materialParams, ColorKind.K2, material.colorConstants[2], BRRES.AnimatableColor.K2);
+        this.calcColor(materialParams, ColorKind.K3, material.colorConstants[3], BRRES.AnimatableColor.K3);
+
+        this.calcColor(materialParams, ColorKind.CPREV, material.colorRegisters[0], -1);
+        this.calcColor(materialParams, ColorKind.C0, material.colorRegisters[1], BRRES.AnimatableColor.C0);
+        this.calcColor(materialParams, ColorKind.C1, material.colorRegisters[2], BRRES.AnimatableColor.C1);
+        this.calcColor(materialParams, ColorKind.C2, material.colorRegisters[3], BRRES.AnimatableColor.C2);
+
+        const lightSetting = instanceStateData.lightSetting;
+        if (instanceStateData.lightSetting !== null) {
+            const lightSet = lightSetting.lightSet[this.materialData.material.lightSetIdx];
+            if (lightSet !== undefined) {
+                lightSet.calcLights(materialParams.u_Lights, lightSetting, camera.viewMatrix);
+                lightSet.calcAmbColorMult(materialParams.u_Color[ColorKind.AMB0], lightSetting);
+                if (lightSet.calcLightSetLitMask(this.materialHelper.material.lightChannels, lightSetting)) {
+                    this.materialHelper.material.hasLightsBlock = undefined;
+                    autoOptimizeMaterial(this.materialHelper.material);
+                    this.materialHelper.calcMaterialParamsBufferSize();
+                    this.materialHelper.createProgram();
+                }
             }
-
-            if (this.clr0Animators[a]) {
-                this.clr0Animators[a].calcColor(dst, color);
-            } else {
-                dst.copy(color);
-            }
-        };
-
-        calcColor(ColorKind.MAT0, material.colorMatRegs[0], BRRES.AnimatableColor.MAT0);
-        calcColor(ColorKind.MAT1, material.colorMatRegs[1], BRRES.AnimatableColor.MAT1);
-        calcColor(ColorKind.AMB0, material.colorAmbRegs[0], BRRES.AnimatableColor.AMB0);
-        calcColor(ColorKind.AMB1, material.colorAmbRegs[1], BRRES.AnimatableColor.AMB1);
-
-        calcColor(ColorKind.K0, material.colorConstants[0], BRRES.AnimatableColor.K0);
-        calcColor(ColorKind.K1, material.colorConstants[1], BRRES.AnimatableColor.K1);
-        calcColor(ColorKind.K2, material.colorConstants[2], BRRES.AnimatableColor.K2);
-        calcColor(ColorKind.K3, material.colorConstants[3], BRRES.AnimatableColor.K3);
-
-        calcColor(ColorKind.CPREV, material.colorRegisters[0], -1);
-        calcColor(ColorKind.C0, material.colorRegisters[1], BRRES.AnimatableColor.C0);
-        calcColor(ColorKind.C1, material.colorRegisters[2], BRRES.AnimatableColor.C1);
-        calcColor(ColorKind.C2, material.colorRegisters[3], BRRES.AnimatableColor.C2);
+        }
     }
 
     private fillTextureMapping(dst: TextureMapping, textureHolder: GXTextureHolder, i: number): void {
@@ -304,10 +392,18 @@ class MaterialInstance {
         dst.gfxSampler = this.materialData.gfxSamplers[i];
     }
 
-    public prepareToRender(renderHelper: GXRenderHelperGfx, textureHolder: GXTextureHolder, viewerInput: ViewerRenderInput): void {
-        this.fillMaterialParams(this.materialParams, textureHolder, viewerInput);
-        this.templateRenderInst.setSamplerBindingsFromTextureMappings(this.materialParams.m_TextureMapping);
-        this.materialHelper.fillMaterialParams(this.materialParams, renderHelper);
+    public setOnRenderInst(device: GfxDevice, cache: GfxRenderCache, renderInst: GfxRenderInst): void {
+        this.materialHelper.setOnRenderInst(device, cache, renderInst);
+    }
+
+    public fillMaterialParams(renderInst: GfxRenderInst, textureHolder: GXTextureHolder, instanceStateData: InstanceStateData, posNrmMatrixIdx: number, packet: LoadedVertexPacket | null, camera: Camera): void {
+        this.fillMaterialParamsData(materialParams, textureHolder, instanceStateData, posNrmMatrixIdx, packet, camera);
+
+        let offs = renderInst.allocateUniformBuffer(ub_MaterialParams, this.materialHelper.materialParamsBufferSize);
+        const d = renderInst.mapUniformBufferF32(ub_MaterialParams);
+        fillMaterialParamsDataWithOptimizations(this.materialHelper.material, d, offs, materialParams);
+
+        renderInst.setSamplerBindingsFromTextureMappings(materialParams.m_TextureMapping);
     }
 
     public destroy(device: GfxDevice): void {
@@ -315,20 +411,155 @@ class MaterialInstance {
     }
 }
 
-const matrixScratchArray = nArray(128, () => mat4.create());
+const enum MtxCol {
+    X = 0, Y = 4, Z = 8,
+}
+
+function GetMtx34Scale(m: mat4, c: MtxCol): number {
+    return Math.hypot(m[c + 0], m[c + 1], m[c + 2]);
+}
+
+function SetMdlViewMtxSR(dst: mat4, scaleX: number, scaleY: number, scaleZ: number, rxx: number, rxy: number, rxz: number, ryx: number, ryy: number, ryz: number, rzx: number, rzy: number, rzz: number): void {
+    dst[0] =  scaleX * rxx;
+    dst[1] =  scaleX * rxy;
+    dst[2] =  scaleX * rxz;
+    dst[3] =  0.0;
+
+    dst[4] =  scaleY * ryx;
+    dst[5] =  scaleY * ryy;
+    dst[6] =  scaleY * ryz;
+    dst[7] =  0.0;
+
+    dst[8] =  scaleZ * rzx;
+    dst[9] =  scaleZ * rzy;
+    dst[10] = scaleZ * rzz;
+    dst[11] = 0.0;
+}
+
+const scratchVec3 = nArray(3, () => vec3.create());
+function Calc_BILLBOARD_STD(m: mat4, nodeMatrix: mat4, parentNodeMatrix: mat4 | null, vy: vec3 = scratchVec3[0]): void {
+    vec3.set(vy, m[4], m[5], 0);
+    vec3.normalize(vy, vy);
+
+    const yx = vy[0], yy = vy[1];
+    const scaleX = GetMtx34Scale(nodeMatrix, MtxCol.X);
+    const scaleY = GetMtx34Scale(nodeMatrix, MtxCol.Y);
+    const scaleZ = GetMtx34Scale(nodeMatrix, MtxCol.Z);
+
+    SetMdlViewMtxSR(m, scaleX, scaleY, scaleZ,
+         yy, yx, 0,
+        -yx, yy, 0,
+        0, 0, 1);
+}
+
+function Calc_BILLBOARD_PERSP_STD(m: mat4, nodeMatrix: mat4, parentNodeMatrix: mat4 | null, vx: vec3 = scratchVec3[0], vy: vec3 = scratchVec3[1], vz: vec3 = scratchVec3[2]): void {
+    vec3.set(vy, m[4], m[5], m[6]);
+    vec3.set(vz, -m[12], -m[13], -m[14]);
+    vec3.normalize(vz, vz);
+    vec3.cross(vx, vy, vz);
+    vec3.normalize(vx, vx);
+    vec3.cross(vy, vz, vx);
+
+    const scaleX = GetMtx34Scale(nodeMatrix, MtxCol.X);
+    const scaleY = GetMtx34Scale(nodeMatrix, MtxCol.Y);
+    const scaleZ = GetMtx34Scale(nodeMatrix, MtxCol.Z);
+    SetMdlViewMtxSR(m, scaleX, scaleY, scaleZ,
+        vx[0], vx[1], vx[2],
+        vy[0], vy[1], vy[2],
+        vz[0], vz[1], vz[2]);
+}
+
+const scratchMatrixInv1 = mat4.create();
+function GetModelLocalAxisY(v: vec3, parentModelMatrix: mat4 | null, modelMatrix: mat4, scratchMatrix: mat4 = scratchMatrixInv1): void {
+    if (parentModelMatrix !== null) {
+        mat4.invert(scratchMatrix, parentModelMatrix);
+        mat4.mul(scratchMatrix, parentModelMatrix, modelMatrix);
+        vec3.set(v, scratchMatrix[4], scratchMatrix[5], scratchMatrix[6]);
+    } else {
+        vec3.set(v, modelMatrix[4], modelMatrix[5], modelMatrix[6]);
+    }
+}
+
+function Calc_BILLBOARD_ROT(m: mat4, nodeMatrix: mat4, parentNodeMatrix: mat4 | null, vy: vec3 = scratchVec3[0]): void {
+    GetModelLocalAxisY(vy, parentNodeMatrix, nodeMatrix);
+    vy[2] = 0;
+    vec3.normalize(vy, vy);
+
+    const yx = vy[0], yy = vy[1];
+    const scaleX = GetMtx34Scale(nodeMatrix, MtxCol.X);
+    const scaleY = GetMtx34Scale(nodeMatrix, MtxCol.Y);
+    const scaleZ = GetMtx34Scale(nodeMatrix, MtxCol.Z);
+
+    SetMdlViewMtxSR(m, scaleX, scaleY, scaleZ,
+         yy, yx, 0,
+        -yx, yy, 0,
+        0, 0, 1);
+}
+
+function Calc_BILLBOARD_PERSP_ROT(m: mat4, nodeMatrix: mat4, parentNodeMatrix: mat4 | null, vx: vec3 = scratchVec3[0], vy: vec3 = scratchVec3[1], vz: vec3 = scratchVec3[2]): void {
+    GetModelLocalAxisY(vy, parentNodeMatrix, nodeMatrix);
+    vec3.set(vz, -m[12], -m[13], -m[14]);
+    vec3.normalize(vy, vy);
+    vec3.cross(vx, vy, vz);
+    vec3.normalize(vx, vx);
+    vec3.cross(vz, vx, vy);
+
+    const scaleX = GetMtx34Scale(nodeMatrix, MtxCol.X);
+    const scaleY = GetMtx34Scale(nodeMatrix, MtxCol.Y);
+    const scaleZ = GetMtx34Scale(nodeMatrix, MtxCol.Z);
+    SetMdlViewMtxSR(m, scaleX, scaleY, scaleZ,
+        vx[0], vx[1], vx[2],
+        vy[0], vy[1], vy[2],
+        vz[0], vz[1], vz[2]);
+}
+
+function Calc_BILLBOARD_Y(m: mat4, nodeMatrix: mat4, parentNodeMatrix: mat4 | null, vx: vec3 = scratchVec3[0], vy: vec3 = scratchVec3[1], vz: vec3 = scratchVec3[2]): void {
+    vec3.set(vy, m[4], m[5], m[6]);
+    vec3.set(vx, vy[1], -vy[0], 0);
+    vec3.normalize(vy, vy);
+    vec3.normalize(vx, vx);
+    vec3.cross(vz, vx, vy);
+
+    const scaleX = GetMtx34Scale(nodeMatrix, MtxCol.X);
+    const scaleY = GetMtx34Scale(nodeMatrix, MtxCol.Y);
+    const scaleZ = GetMtx34Scale(nodeMatrix, MtxCol.Z);
+    SetMdlViewMtxSR(m, scaleX, scaleY, scaleZ,
+        vx[0], vx[1], vx[2],
+        vy[0], vy[1], vy[2],
+        vz[0], vz[1], vz[2]);
+}
+
+function Calc_BILLBOARD_PERSP_Y(m: mat4, nodeMatrix: mat4, parentNodeMatrix: mat4 | null, vx: vec3 = scratchVec3[0], vy: vec3 = scratchVec3[1], vz: vec3 = scratchVec3[2]): void {
+    vec3.set(vy, m[4], m[5], m[6]);
+    vec3.set(vz, -m[12], -m[13], -m[14]);
+    vec3.normalize(vz, vz);
+    vec3.cross(vx, vy, vz);
+    vec3.normalize(vx, vx);
+    vec3.cross(vy, vz, vx);
+
+    const scaleX = GetMtx34Scale(nodeMatrix, MtxCol.X);
+    const scaleY = GetMtx34Scale(nodeMatrix, MtxCol.Y);
+    const scaleZ = GetMtx34Scale(nodeMatrix, MtxCol.Z);
+    SetMdlViewMtxSR(m, scaleX, scaleY, scaleZ,
+        vx[0], vx[1], vx[2],
+        vy[0], vy[1], vy[2],
+        vz[0], vz[1], vz[2]);
+}
+
+const matrixScratchArray = nArray(1, () => mat4.create());
 const scratchVec3a = vec3.create();
 const scratchVec3b = vec3.create();
 export class MDL0ModelInstance {
-    private shapeInstances: ShapeInstance[] = [];
-    private materialInstances: MaterialInstance[] = [];
-    private chr0NodeAnimator: BRRES.CHR0NodesAnimator;
+    public shapeInstances: ShapeInstance[] = [];
+    public materialInstances: MaterialInstance[] = [];
 
-    private matrixVisibility: IntersectionState[] = [];
-    private matrixArray: mat4[] = [];
-    private matrixScratch: mat4 = mat4.create();
+    private chr0NodeAnimator: BRRES.CHR0NodesAnimator | null = null;
+    private vis0NodeAnimator: BRRES.VIS0NodesAnimator | null = null;
+    private instanceStateData = new InstanceStateData();
+
     private debugBones = false;
 
-    public colorOverrides: GX_Material.Color[] = [];
+    public colorOverrides: Color[] = [];
 
     public modelMatrix: mat4 = mat4.create();
     public visible: boolean = true;
@@ -337,20 +568,18 @@ export class MDL0ModelInstance {
     public passMask: number = 1;
     public templateRenderInst: GfxRenderInst;
 
-    constructor(device: GfxDevice, renderHelper: GXRenderHelperGfx, public textureHolder: GXTextureHolder, public mdl0Model: MDL0Model, public namePrefix: string = '') {
+    constructor(public textureHolder: GXTextureHolder, public mdl0Model: MDL0Model, public namePrefix: string = '') {
         this.name = `${namePrefix}/${mdl0Model.mdl0.name}`;
 
-        this.matrixArray = nArray(mdl0Model.mdl0.numWorldMtx, () => mat4.create());
-        while (matrixScratchArray.length < this.matrixArray.length)
+        this.instanceStateData.jointToWorldMatrixArray = nArray(mdl0Model.mdl0.numWorldMtx, () => mat4.create());
+        this.instanceStateData.drawViewMatrixArray = nArray(mdl0Model.mdl0.numViewMtx, () => mat4.create());
+        while (matrixScratchArray.length < this.instanceStateData.jointToWorldMatrixArray.length)
             matrixScratchArray.push(mat4.create());
 
-        this.templateRenderInst = renderHelper.renderInstBuilder.pushTemplateRenderInst();
-        this.templateRenderInst.name = this.name;
         for (let i = 0; i < this.mdl0Model.materialData.length; i++)
-            this.materialInstances[i] = new MaterialInstance(device, renderHelper, this, this.mdl0Model.materialData[i]);
-        this.execDrawOpList(renderHelper, this.mdl0Model.mdl0.sceneGraph.drawOpaOps, false);
-        this.execDrawOpList(renderHelper, this.mdl0Model.mdl0.sceneGraph.drawXluOps, true);
-        renderHelper.renderInstBuilder.popTemplateRenderInst();
+            this.materialInstances[i] = new MaterialInstance(this, this.mdl0Model.materialData[i]);
+        this.execDrawOpList(this.mdl0Model.mdl0.sceneGraph.drawOpaOps, false);
+        this.execDrawOpList(this.mdl0Model.mdl0.sceneGraph.drawXluOps, true);
     }
 
     public setSortKeyLayer(layer: GfxRendererLayer): void {
@@ -360,16 +589,20 @@ export class MDL0ModelInstance {
 
     public setVertexColorsEnabled(v: boolean): void {
         for (let i = 0; i < this.materialInstances.length; i++)
-            this.materialInstances[i].setVertexColorsEnabled(v);
+            this.materialInstances[i].setMaterialHacks({ disableVertexColors: !v });
     }
 
     public setTexturesEnabled(v: boolean): void {
         for (let i = 0; i < this.materialInstances.length; i++)
-            this.materialInstances[i].setTexturesEnabled(v);
+            this.materialInstances[i].setMaterialHacks({ disableTextures: !v });
     }
 
     public bindCHR0(animationController: AnimationController, chr0: BRRES.CHR0): void {
         this.chr0NodeAnimator = BRRES.bindCHR0Animator(animationController, chr0, this.mdl0Model.mdl0.nodes);
+    }
+
+    public bindVIS0(animationController: AnimationController, vis0: BRRES.VIS0): void {
+        this.vis0NodeAnimator = BRRES.bindVIS0Animator(animationController, vis0, this.mdl0Model.mdl0.nodes);
     }
 
     /**
@@ -378,19 +611,23 @@ export class MDL0ModelInstance {
      * @param animationController An {@link AnimationController} to control the progress of this animation to.
      * By default, this will default to this instance's own {@member animationController}.
      */
-    public bindSRT0(animationController: AnimationController, srt0: BRRES.SRT0): void {
+    public bindSRT0(animationController: AnimationController | null, srt0: BRRES.SRT0 | null): void {
         for (let i = 0; i < this.materialInstances.length; i++)
             this.materialInstances[i].bindSRT0(animationController, srt0);
     }
 
-    public bindPAT0(animationController: AnimationController, pat0: BRRES.PAT0): void {
+    public bindPAT0(animationController: AnimationController | null, pat0: BRRES.PAT0 | null): void {
         for (let i = 0; i < this.materialInstances.length; i++)
             this.materialInstances[i].bindPAT0(animationController, pat0);
     }
 
-    public bindCLR0(animationController: AnimationController, clr0: BRRES.CLR0): void {
+    public bindCLR0(animationController: AnimationController | null, clr0: BRRES.CLR0 | null): void {
         for (let i = 0; i < this.materialInstances.length; i++)
             this.materialInstances[i].bindCLR0(animationController, clr0);
+    }
+
+    public bindLightSetting(lightSetting: BRRES.LightSetting): void {
+        this.instanceStateData.lightSetting = lightSetting;
     }
 
     /**
@@ -418,9 +655,13 @@ export class MDL0ModelInstance {
         for (let i = 0; i < rres.pat0.length; i++)
             if (rres.pat0[i].name === name || name === null)
                 this.bindPAT0(animationController, rres.pat0[i]);
+
+        for (let i = 0; i < rres.vis0.length; i++)
+            if (rres.vis0[i].name === name || name === null)
+                this.bindVIS0(animationController, rres.vis0[i]);
     }
 
-    public setColorOverride(i: ColorKind, color: GX_Material.Color): void {
+    public setColorOverride(i: ColorKind, color: Color): void {
         this.colorOverrides[i] = color;
     }
 
@@ -429,51 +670,112 @@ export class MDL0ModelInstance {
     }
 
     private isAnyShapeVisible(): boolean {
-        for (let i = 0; i < this.matrixVisibility.length; i++)
-            if (this.matrixVisibility[i] !== IntersectionState.FULLY_OUTSIDE)
+        for (let i = 0; i < this.instanceStateData.jointToWorldMatrixVisibility.length; i++)
+            if (this.instanceStateData.jointToWorldMatrixVisibility[i] !== IntersectionState.FULLY_OUTSIDE)
                 return true;
         return false;
     }
 
-    public prepareToRender(renderHelper: GXRenderHelperGfx, viewerInput: ViewerRenderInput): void {
-        let modelVisible = this.visible;
+    private calcView(camera: Camera): void {
+        const viewMatrix = matrixScratch;
+
+        if (this.isSkybox)
+            computeViewMatrixSkybox(viewMatrix, camera);
+        else
+            computeViewMatrix(viewMatrix, camera);
+
+        const numViewMtx = this.mdl0Model.mdl0.numViewMtx;
+        for (let i = 0; i < numViewMtx; i++) {
+            const nodeToWorldMatrix = this.instanceStateData.jointToWorldMatrixArray[i];
+            const dstDrawMatrix = this.instanceStateData.drawViewMatrixArray[i];
+
+            mat4.mul(dstDrawMatrix, viewMatrix, nodeToWorldMatrix);
+
+            // nodeId should exist for non-envelope matrix IDs.
+            const nodeId = this.mdl0Model.mdl0.mtxIdToNodeId[i];
+            const node = nodeId >= 0 ? this.mdl0Model.mdl0.nodes[nodeId] : null;
+
+            // Billboard is not supported for skinned meshes.
+            if (node !== null) {
+                // attribs should exist for non-envelope matrix IDs.
+                const billboardMode = this.instanceStateData.jointToWorldMatrixAttribs[i];
+
+                const hasBillboardAncestor = !!(node.flags & BRRES.NodeFlags.REFER_BB_ANCESTOR);
+                // TODO(jstpierre): Nodes under the influence of a billboarded parent
+                // assert(!hasBillboardAncestor);
+
+                if (billboardMode !== BRRES.BillboardMode.NONE) {
+                    const parentNodeId = node.parentNodeId;
+                    const parentNodeToWorldMatrix = parentNodeId >= 0 ? this.instanceStateData.jointToWorldMatrixArray[parentNodeId] : null;
+
+                    if (billboardMode === BRRES.BillboardMode.BILLBOARD) {
+                        Calc_BILLBOARD_STD(dstDrawMatrix, nodeToWorldMatrix, parentNodeToWorldMatrix);
+                    } else if (billboardMode === BRRES.BillboardMode.PERSP_BILLBOARD) {
+                        Calc_BILLBOARD_PERSP_STD(dstDrawMatrix, nodeToWorldMatrix, parentNodeToWorldMatrix);
+                    } else if (billboardMode === BRRES.BillboardMode.ROT) {
+                        Calc_BILLBOARD_ROT(dstDrawMatrix, nodeToWorldMatrix, parentNodeToWorldMatrix);
+                    } else if (billboardMode === BRRES.BillboardMode.PERSP_ROT) {
+                        Calc_BILLBOARD_PERSP_ROT(dstDrawMatrix, nodeToWorldMatrix, parentNodeToWorldMatrix);
+                    } else if (billboardMode === BRRES.BillboardMode.Y) {
+                        Calc_BILLBOARD_Y(dstDrawMatrix, nodeToWorldMatrix, parentNodeToWorldMatrix);
+                    } else if (billboardMode === BRRES.BillboardMode.PERSP_Y) {
+                        Calc_BILLBOARD_PERSP_Y(dstDrawMatrix, nodeToWorldMatrix, parentNodeToWorldMatrix);
+                    }
+                }
+            }
+        }
+    }
+
+    public prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: ViewerRenderInput): void {
+        let modelVisibility = this.visible ? IntersectionState.PARTIAL_INTERSECT : IntersectionState.FULLY_OUTSIDE;
         const mdl0 = this.mdl0Model.mdl0;
+        const camera = viewerInput.camera;
 
-        if (modelVisible) {
-            this.templateRenderInst.name = this.name;
-            this.templateRenderInst.passMask = this.passMask;
-
-            if (mdl0.bbox !== null) {
+        if (modelVisibility !== IntersectionState.FULLY_OUTSIDE) {
+            if (this.isSkybox) {
+                modelVisibility = IntersectionState.FULLY_INSIDE;
+            } else if (mdl0.bbox !== null) {
                 // Frustum cull.
                 bboxScratch.transform(mdl0.bbox, this.modelMatrix);
                 if (!viewerInput.camera.frustum.contains(bboxScratch))
-                    modelVisible = false;
+                    modelVisibility = IntersectionState.FULLY_OUTSIDE;
             }
+        }
 
-            if (this.debugBones)
-                prepareFrameDebugOverlayCanvas2D();
-
-            this.execNodeTreeOpList(mdl0.sceneGraph.nodeTreeOps, viewerInput, modelVisible);
+        if (modelVisibility !== IntersectionState.FULLY_OUTSIDE) {
+            this.execNodeTreeOpList(mdl0.sceneGraph.nodeTreeOps, viewerInput.camera, modelVisibility);
             this.execNodeMixOpList(mdl0.sceneGraph.nodeMixOps);
 
             if (!this.isAnyShapeVisible())
-                modelVisible = false;
+                modelVisibility = IntersectionState.FULLY_OUTSIDE;
         }
 
         let depth = -1;
-        if (modelVisible) {
-            this.templateRenderInst.passMask = this.passMask;
-
-            for (let i = 0; i < this.materialInstances.length; i++)
-                this.materialInstances[i].prepareToRender(renderHelper, this.textureHolder, viewerInput);
-
+        if (modelVisibility !== IntersectionState.FULLY_OUTSIDE) {
             const rootJoint = mdl0.nodes[0];
-            bboxScratch.transform(rootJoint.bbox, this.modelMatrix);
-            depth = Math.max(computeViewSpaceDepthFromWorldSpaceAABB(viewerInput.camera, bboxScratch), 0);
+            if (rootJoint.bbox != null) {
+                bboxScratch.transform(rootJoint.bbox, this.modelMatrix);
+                depth = Math.max(computeViewSpaceDepthFromWorldSpaceAABB(viewerInput.camera, bboxScratch), 0);
+            } else {
+                depth = Math.max(depth, 0);
+            }
         }
 
-        for (let i = 0; i < this.shapeInstances.length; i++)
-            this.shapeInstances[i].prepareToRender(renderHelper, depth, viewerInput, this.matrixArray, this.matrixVisibility, this.isSkybox);
+        if (depth < 0)
+            return;
+
+        this.calcView(viewerInput.camera);
+
+        const template = renderInstManager.pushTemplateRenderInst();
+        template.filterKey = this.passMask;
+        for (let i = 0; i < this.shapeInstances.length; i++) {
+            const shapeInstance = this.shapeInstances[i];
+            const shapeVisibility = (this.vis0NodeAnimator !== null ? this.vis0NodeAnimator.calcVisibility(shapeInstance.sortVizNode.id) : shapeInstance.sortVizNode.visible);
+            if (!shapeVisibility)
+                continue;
+            shapeInstance.prepareToRender(device, this.textureHolder, renderInstManager, depth, camera, this.instanceStateData, this.isSkybox);
+        }
+        renderInstManager.popTemplateRenderInst();
     }
 
     public destroy(device: GfxDevice): void {
@@ -481,39 +783,33 @@ export class MDL0ModelInstance {
             this.materialInstances[i].destroy(device);
     }
 
-    private execDrawOpList(renderHelper: GXRenderHelperGfx, opList: BRRES.DrawOp[], translucent: boolean): void {
+    private execDrawOpList(opList: BRRES.DrawOp[], translucent: boolean): void {
         const mdl0 = this.mdl0Model.mdl0;
-        const renderInstBuilder = renderHelper.renderInstBuilder;
 
         for (let i = 0; i < opList.length; i++) {
             const op = opList[i];
 
-            const node = mdl0.nodes[op.nodeId];
-            const usesEnvelope = (node.mtxId < 0);
-            if (usesEnvelope)
-                throw "whoops";
+            const materialInstance = this.materialInstances[op.matId];
 
+            const node = mdl0.nodes[op.nodeId];
             const shape = this.mdl0Model.mdl0.shapes[op.shpId];
             const shapeData = this.mdl0Model.shapeData[op.shpId];
-            const shapeInstance = new ShapeInstance(shape, shapeData, node);
+            const shapeInstance = new ShapeInstance(shape, shapeData, node, materialInstance);
             if (translucent)
                 shapeInstance.sortKeyBias = i;
 
-            const materialInstance = this.materialInstances[op.matId];
-            assert(materialInstance.materialData.material.translucent === translucent);
-            renderInstBuilder.pushTemplateRenderInst(materialInstance.templateRenderInst);
-            shapeInstance.buildRenderInst(renderInstBuilder, this.mdl0Model.mdl0.name);
-            renderInstBuilder.popTemplateRenderInst();
+            const usesSkinning = shape.mtxIdx < 0;
+            materialInstance.setSkinningEnabled(usesSkinning);
 
             this.shapeInstances.push(shapeInstance);
         }
     }
 
-    private execNodeTreeOpList(opList: BRRES.NodeTreeOp[], viewerInput: ViewerRenderInput, visible: boolean): void {
+    private execNodeTreeOpList(opList: BRRES.NodeTreeOp[], camera: Camera, rootVisibility: IntersectionState): void {
         const mdl0 = this.mdl0Model.mdl0;
 
-        mat4.copy(this.matrixArray[0], this.modelMatrix);
-        this.matrixVisibility[0] = visible ? (this.isSkybox ? IntersectionState.FULLY_INSIDE : IntersectionState.PARTIAL_INTERSECT) : IntersectionState.FULLY_OUTSIDE;
+        mat4.copy(this.instanceStateData.jointToWorldMatrixArray[0], this.modelMatrix);
+        this.instanceStateData.jointToWorldMatrixVisibility[0] = rootVisibility;
 
         for (let i = 0; i < opList.length; i++) {
             const op = opList[i];
@@ -522,41 +818,44 @@ export class MDL0ModelInstance {
                 const node = mdl0.nodes[op.nodeId];
                 const parentMtxId = op.parentMtxId;
                 const dstMtxId = node.mtxId;
-    
+
                 let modelMatrix;
-                if (this.chr0NodeAnimator && this.chr0NodeAnimator.calcModelMtx(this.matrixScratch, op.nodeId)) {
-                    modelMatrix = this.matrixScratch;
+                if (this.chr0NodeAnimator !== null && this.chr0NodeAnimator.calcModelMtx(matrixScratch, op.nodeId)) {
+                    modelMatrix = matrixScratch;
                 } else {
                     modelMatrix = node.modelMatrix;
                 }
-                mat4.mul(this.matrixArray[dstMtxId], this.matrixArray[parentMtxId], modelMatrix);
+                mat4.mul(this.instanceStateData.jointToWorldMatrixArray[dstMtxId], this.instanceStateData.jointToWorldMatrixArray[parentMtxId], modelMatrix);
 
-                if (visible) {
-                    if (this.isSkybox) {
-                        this.matrixVisibility[dstMtxId] = IntersectionState.FULLY_INSIDE;
+                if (rootVisibility !== IntersectionState.FULLY_OUTSIDE) {
+                    if (rootVisibility === IntersectionState.FULLY_INSIDE || node.bbox === null) {
+                        this.instanceStateData.jointToWorldMatrixVisibility[dstMtxId] = IntersectionState.FULLY_INSIDE;
                     } else {
-                        bboxScratch.transform(node.bbox, this.matrixArray[dstMtxId]);
-                        this.matrixVisibility[dstMtxId] = viewerInput.camera.frustum.intersect(bboxScratch);
+                        bboxScratch.transform(node.bbox, this.instanceStateData.jointToWorldMatrixArray[dstMtxId]);
+                        this.instanceStateData.jointToWorldMatrixVisibility[dstMtxId] = camera.frustum.intersect(bboxScratch);
                     }
                 } else {
-                    this.matrixVisibility[dstMtxId] = IntersectionState.FULLY_OUTSIDE;
+                    this.instanceStateData.jointToWorldMatrixVisibility[dstMtxId] = IntersectionState.FULLY_OUTSIDE;
                 }
+
+                this.instanceStateData.jointToWorldMatrixAttribs[dstMtxId] = node.billboardMode;
 
                 if (this.debugBones) {
                     const ctx = getDebugOverlayCanvas2D();
 
                     vec3.set(scratchVec3a, 0, 0, 0);
-                    vec3.transformMat4(scratchVec3a, scratchVec3a, this.matrixArray[parentMtxId]);
+                    vec3.transformMat4(scratchVec3a, scratchVec3a, this.instanceStateData.jointToWorldMatrixArray[parentMtxId]);
                     vec3.set(scratchVec3b, 0, 0, 0);
-                    vec3.transformMat4(scratchVec3b, scratchVec3b, this.matrixArray[dstMtxId]);
+                    vec3.transformMat4(scratchVec3b, scratchVec3b, this.instanceStateData.jointToWorldMatrixArray[dstMtxId]);
 
-                    drawWorldSpaceLine(ctx, viewerInput.camera, scratchVec3a, scratchVec3b);
+                    drawWorldSpaceLine(ctx, camera, scratchVec3a, scratchVec3b);
                 }
             } else if (op.op === BRRES.ByteCodeOp.MTXDUP) {
                 const srcMtxId = op.fromMtxId;
                 const dstMtxId = op.toMtxId;
-                mat4.copy(this.matrixArray[dstMtxId], this.matrixArray[srcMtxId]);
-                this.matrixVisibility[dstMtxId] = this.matrixVisibility[srcMtxId];
+                mat4.copy(this.instanceStateData.jointToWorldMatrixArray[dstMtxId], this.instanceStateData.jointToWorldMatrixArray[srcMtxId]);
+                this.instanceStateData.jointToWorldMatrixVisibility[dstMtxId] = this.instanceStateData.jointToWorldMatrixVisibility[srcMtxId];
+                this.instanceStateData.jointToWorldMatrixAttribs[dstMtxId] = this.instanceStateData.jointToWorldMatrixAttribs[srcMtxId];
             }
         }
     }
@@ -566,14 +865,14 @@ export class MDL0ModelInstance {
             const op = opList[i];
 
             if (op.op === BRRES.ByteCodeOp.NODEMIX) {
-                const dst = this.matrixArray[op.dstMtxId];
+                const dst = this.instanceStateData.jointToWorldMatrixArray[op.dstMtxId];
                 dst.fill(0);
 
                 for (let j = 0; j < op.blendMtxIds.length; j++)
                     mat4.multiplyScalarAndAdd(dst, dst, matrixScratchArray[op.blendMtxIds[j]], op.weights[j]);
             } else if (op.op === BRRES.ByteCodeOp.EVPMTX) {
                 const node = this.mdl0Model.mdl0.nodes[op.nodeId];
-                mat4.mul(matrixScratchArray[op.mtxId], this.matrixArray[op.mtxId], node.inverseBindPose);
+                mat4.mul(matrixScratchArray[op.mtxId], this.instanceStateData.jointToWorldMatrixArray[op.mtxId], node.inverseBindPose);
             }
         }
     }

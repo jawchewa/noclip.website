@@ -1,74 +1,83 @@
 
 import ArrayBufferSlice from '../ArrayBufferSlice';
-import Progressable from '../Progressable';
-import { fetchData } from '../fetch';
+import { DataFetcher, DataFetcherFlags } from '../DataFetcher';
 import * as Viewer from '../viewer';
 import * as Yaz0 from '../compression/Yaz0';
 import * as UI from '../ui';
 
-import { BMD, BMT, BTK, BTI, TEX1_TextureData, BRK, BCK, LoopMode } from './j3d';
+import { BMD, BMT, BTK, BTI, TEX1_TextureData, BRK, BCK, LoopMode, BTI_Texture } from './j3d';
 import * as RARC from './rarc';
-import { BMDModel, BMDModelInstance, J3DTextureHolder } from './render';
+import { BMDModel, BMDModelInstance, BTIData } from './render';
 import { EFB_WIDTH, EFB_HEIGHT, GXMaterialHacks } from '../gx/gx_material';
-import { TextureOverride } from '../TextureHolder';
 import { readString, assertExists, hexzero, leftPad, assert } from '../util';
 import { GfxDevice, GfxHostAccessPass, GfxRenderPass } from '../gfx/platform/GfxPlatform';
-import { GXRenderHelperGfx } from '../gx/gx_render';
-import { GfxRenderInstViewRenderer, GfxRendererLayer } from '../gfx/render/GfxRenderer';
+import { GXRenderHelperGfx, fillSceneParamsDataOnTemplate } from '../gx/gx_render';
+import { GfxRendererLayer } from '../gfx/render/GfxRenderer';
 import { BasicRenderTarget, ColorTexture, standardFullClearRenderPassDescriptor, depthClearRenderPassDescriptor, noClearRenderPassDescriptor } from '../gfx/helpers/RenderTargetHelpers';
-import { RENDER_HACKS_ICON } from '../bk/scenes';
 import { mat4 } from 'gl-matrix';
 import { BMDObjectRenderer, ObjectRenderer } from './ztp_actors';
 import AnimationController from '../AnimationController';
+import { TextureMapping } from '../TextureHolder';
+import { GfxRenderCache } from '../gfx/render/GfxRenderCache';
+import { SceneContext } from '../SceneBase';
 
-class ZTPTextureHolder extends J3DTextureHolder {
-    public findTextureEntryIndex(name: string): number {
-        let i: number = -1;
+class ZTPExtraTextures {
+    public extraTextures: BTIData[] = [];
 
-        i = this.searchTextureEntryIndex(name);
-        if (i >= 0) return i;
-
-        i = this.searchTextureEntryIndex(`ExtraTex/${name.toLowerCase().replace('.tga', '')}`);
-        if (i >= 0) return i;
-
-        return -1;
+    public addBTI(device: GfxDevice, btiTexture: BTI_Texture): void {
+        this.extraTextures.push(new BTIData(device, btiTexture));
     }
 
-    public addExtraTextures(device: GfxDevice, extraTextures: TEX1_TextureData[]): void {
-        this.addTextures(device, extraTextures.map((texture) => {
-            const name = `ExtraTex/${texture.name.toLowerCase()}`;
-            return { ...texture, name };
-        }));
+    public destroy(device: GfxDevice): void {
+        for (let i = 0; i < this.extraTextures.length; i++)
+            this.extraTextures[i].destroy(device);
     }
+
+    public fillTextureMapping = (m: TextureMapping, samplerName: string): boolean => {
+        // Look through for extra textures.
+        const searchName = samplerName.toLowerCase().replace('.tga', '');
+        const extraTexture = this.extraTextures.find((extraTex) => extraTex.btiTexture.name === searchName);
+        if (extraTexture !== undefined)
+            return extraTexture.fillTextureMapping(m);
+
+        return false;
+    };
 }
 
 const materialHacks: GXMaterialHacks = {
     lightingFudge: (p) => `(0.5 * (${p.ambSource} + 0.6) * ${p.matSource})`,
 };
 
-function createScene(device: GfxDevice, renderHelper: GXRenderHelperGfx, textureHolder: J3DTextureHolder, bmdFile: RARC.RARCFile, btkFile: RARC.RARCFile, brkFile: RARC.RARCFile, bckFile: RARC.RARCFile, bmtFile: RARC.RARCFile) {
+function createModelInstance(device: GfxDevice, cache: GfxRenderCache, extraTextures: ZTPExtraTextures, bmdFile: RARC.RARCFile, btkFile: RARC.RARCFile, brkFile: RARC.RARCFile, bckFile: RARC.RARCFile, bmtFile: RARC.RARCFile) {
     const bmd = BMD.parse(bmdFile.buffer);
     const bmt = bmtFile ? BMT.parse(bmtFile.buffer) : null;
-    textureHolder.addJ3DTextures(device, bmd, bmt);
-    const bmdModel = new BMDModel(device, renderHelper, bmd, bmt);
-    const scene = new BMDModelInstance(device, renderHelper, textureHolder, bmdModel, materialHacks);
+    const bmdModel = new BMDModel(device, cache, bmd, bmt);
+    const modelInstance = new BMDModelInstance(bmdModel, materialHacks);
+
+    for (let i = 0; i < bmdModel.tex1Data.tex1.samplers.length; i++) {
+        // Look for any unbound textures and set them.
+        const sampler = bmdModel.tex1Data.tex1.samplers[i];
+        const m = modelInstance.materialInstanceState.textureMappings[i];
+        if (m.gfxTexture === null)
+            extraTextures.fillTextureMapping(m, sampler.name);
+    }
 
     if (btkFile !== null) {
         const btk = BTK.parse(btkFile.buffer);
-        scene.bindTTK1(btk.ttk1);
+        modelInstance.bindTTK1(btk.ttk1);
     }
 
     if (brkFile !== null) {
         const brk = BRK.parse(brkFile.buffer);
-        scene.bindTRK1(brk.trk1);
+        modelInstance.bindTRK1(brk.trk1);
     }
 
     if (bckFile !== null) {
         const bck = BCK.parse(bckFile.buffer);
-        scene.bindANK1(bck.ank1);
+        modelInstance.bindANK1(bck.ank1);
     }
 
-    return scene;
+    return modelInstance;
 }
 
 const enum ZTPPass {
@@ -80,14 +89,13 @@ const enum ZTPPass {
 
 class TwilightPrincessRenderer implements Viewer.SceneGfx {
     public renderHelper: GXRenderHelperGfx;
-    public viewRenderer = new GfxRenderInstViewRenderer();
     public mainRenderTarget = new BasicRenderTarget();
     public opaqueSceneTexture = new ColorTexture();
     public modelInstances: BMDModelInstance[] = [];
     public objectRenderers: ObjectRenderer[] = [];
     public objectsVisible: boolean = true;
 
-    constructor(device: GfxDevice, public modelCache: ModelCache, public textureHolder: J3DTextureHolder, public stageRarc: RARC.RARC) {
+    constructor(device: GfxDevice, public modelCache: ModelCache, public extraTextures: ZTPExtraTextures, public stageRarc: RARC.RARC) {
         this.renderHelper = new GXRenderHelperGfx(device);
     }
 
@@ -97,7 +105,7 @@ class TwilightPrincessRenderer implements Viewer.SceneGfx {
 
         const renderHacksPanel = new UI.Panel();
         renderHacksPanel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR;
-        renderHacksPanel.setTitle(RENDER_HACKS_ICON, 'Render Hacks');
+        renderHacksPanel.setTitle(UI.RENDER_HACKS_ICON, 'Render Hacks');
         const enableVertexColorsCheckbox = new UI.Checkbox('Enable Vertex Colors', true);
         enableVertexColorsCheckbox.onchanged = () => {
             for (let i = 0; i < this.modelInstances.length; i++)
@@ -123,62 +131,76 @@ class TwilightPrincessRenderer implements Viewer.SceneGfx {
         return [layers, renderHacksPanel];
     }
 
-    public finish(device: GfxDevice): void {
-        this.renderHelper.finishBuilder(device, this.viewRenderer);
+    private prepareToRender(device: GfxDevice, hostAccessPass: GfxHostAccessPass, viewerInput: Viewer.ViewerRenderInput): void {
+        const template = this.renderHelper.pushTemplateRenderInst();
+        fillSceneParamsDataOnTemplate(template, viewerInput);
+        for (let i = 0; i < this.modelInstances.length; i++)
+            this.modelInstances[i].prepareToRender(device, this.renderHelper.renderInstManager, viewerInput);
+        for (let i = 0; i < this.objectRenderers.length; i++)
+            this.objectRenderers[i].prepareToRender(device, this.renderHelper.renderInstManager, viewerInput, this.objectsVisible);
+        this.renderHelper.prepareToRender(device, hostAccessPass);
+        this.renderHelper.renderInstManager.popTemplateRenderInst();
     }
 
-    private prepareToRender(hostAccessPass: GfxHostAccessPass, viewerInput: Viewer.ViewerRenderInput): void {
-        viewerInput.camera.setClipPlanes(20, 500000);
-        this.renderHelper.fillSceneParams(viewerInput);
-        for (let i = 0; i < this.modelInstances.length; i++)
-            this.modelInstances[i].prepareToRender(this.renderHelper, viewerInput);
-        for (let i = 0; i < this.objectRenderers.length; i++)
-            this.objectRenderers[i].prepareToRender(this.renderHelper, viewerInput, this.objectsVisible);
-        this.renderHelper.prepareToRender(hostAccessPass);
+    private setIndirectTextureOverride(): void {
+        for (let i = 0; i < this.modelInstances.length; i++) {
+            const m = this.modelInstances[i].getTextureMappingReference('fbtex_dummy');
+            if (m !== null) {
+                m.gfxTexture = this.opaqueSceneTexture.gfxTexture;
+                m.width = EFB_WIDTH;
+                m.height = EFB_HEIGHT;
+                m.flipY = true;
+            }
+        }
     }
 
     public render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput): GfxRenderPass {
-        const hostAccessPass = device.createHostAccessPass();
-        this.prepareToRender(hostAccessPass, viewerInput);
-        device.submitPass(hostAccessPass);
+        const renderInstManager = this.renderHelper.renderInstManager;
 
-        this.viewRenderer.prepareToRender(device);
+        this.setIndirectTextureOverride();
+
+        const hostAccessPass = device.createHostAccessPass();
+        this.prepareToRender(device, hostAccessPass, viewerInput);
+        device.submitPass(hostAccessPass);
 
         this.mainRenderTarget.setParameters(device, viewerInput.viewportWidth, viewerInput.viewportHeight);
         this.opaqueSceneTexture.setParameters(device, viewerInput.viewportWidth, viewerInput.viewportHeight);
-        this.viewRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
 
         const skyboxPassRenderer = this.mainRenderTarget.createRenderPass(device, standardFullClearRenderPassDescriptor);
-        this.viewRenderer.executeOnPass(device, skyboxPassRenderer, ZTPPass.SKYBOX);
+        skyboxPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        renderInstManager.setVisibleByFilterKeyExact(ZTPPass.SKYBOX);
+        renderInstManager.drawOnPassRenderer(device, skyboxPassRenderer);
         skyboxPassRenderer.endPass(null);
         device.submitPass(skyboxPassRenderer);
 
         const opaquePassRenderer = this.mainRenderTarget.createRenderPass(device, depthClearRenderPassDescriptor);
-        this.viewRenderer.executeOnPass(device, opaquePassRenderer, ZTPPass.OPAQUE);
+        opaquePassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        renderInstManager.setVisibleByFilterKeyExact(ZTPPass.OPAQUE);
+        renderInstManager.drawOnPassRenderer(device, opaquePassRenderer);
 
         let lastPassRenderer: GfxRenderPass;
-        if (this.viewRenderer.hasAnyVisible(ZTPPass.INDIRECT)) {
+        renderInstManager.setVisibleByFilterKeyExact(ZTPPass.INDIRECT);
+        if (renderInstManager.hasAnyVisible()) {
             opaquePassRenderer.endPass(this.opaqueSceneTexture.gfxTexture);
             device.submitPass(opaquePassRenderer);
 
-            const textureOverride: TextureOverride = { gfxTexture: this.opaqueSceneTexture.gfxTexture, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
-            this.textureHolder.setTextureOverride("fbtex_dummy", textureOverride);
-
             const indTexPassRenderer = this.mainRenderTarget.createRenderPass(device, noClearRenderPassDescriptor);
-            this.viewRenderer.executeOnPass(device, indTexPassRenderer, ZTPPass.INDIRECT);
+            indTexPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+            renderInstManager.drawOnPassRenderer(device, indTexPassRenderer);
             lastPassRenderer = indTexPassRenderer;
         } else {
             lastPassRenderer = opaquePassRenderer;
         }
 
-        this.viewRenderer.executeOnPass(device, lastPassRenderer, ZTPPass.TRANSPARENT);
+        renderInstManager.setVisibleByFilterKeyExact(ZTPPass.TRANSPARENT);
+        renderInstManager.drawOnPassRenderer(device, lastPassRenderer);
+        renderInstManager.resetRenderInsts();
         return lastPassRenderer;
     }
 
     public destroy(device: GfxDevice) {
         this.renderHelper.destroy(device);
-        this.viewRenderer.destroy(device);
-        this.textureHolder.destroy(device);
+        this.extraTextures.destroy(device);
         this.mainRenderTarget.destroy(device);
         this.opaqueSceneTexture.destroy(device);
         this.modelInstances.forEach((instance) => instance.destroy(device));
@@ -213,7 +235,7 @@ function getRoomListFromDZS(buffer: ArrayBufferSlice): number[] {
 }
 
 function bmdModelUsesTexture(model: BMDModel, textureName: string): boolean {
-    return model.tex1Samplers.some((tex1Sampler) => tex1Sampler.name === textureName);
+    return model.bmd.tex1.samplers.some((sampler) => sampler.name === textureName);
 }
 
 interface DZSChunkHeader {
@@ -244,32 +266,35 @@ interface Destroyable {
 }
 
 class ModelCache {
-    private fileProgressableCache = new Map<string, Progressable<ArrayBufferSlice>>();
+    private fileProgressableCache = new Map<string, Promise<ArrayBufferSlice>>();
     private fileDataCache = new Map<string, ArrayBufferSlice>();
-    private archiveProgressableCache = new Map<string, Progressable<RARC.RARC>>();
+    private archiveProgressableCache = new Map<string, Promise<RARC.RARC>>();
     private archiveCache = new Map<string, RARC.RARC>();
     private modelCache = new Map<string, BMDModel>();
     public extraCache = new Map<string, Destroyable>();
     public extraModels: BMDModel[] = [];
 
-    public waitForLoad(): Progressable<any> {
-        const v: Progressable<any>[] = [... this.fileProgressableCache.values(), ... this.archiveProgressableCache.values()];
-        return Progressable.all(v);
+    constructor(private dataFetcher: DataFetcher) {
     }
 
-    private fetchFile(path: string, abortSignal: AbortSignal): Progressable<ArrayBufferSlice> {
+    public waitForLoad(): Promise<any> {
+        const v: Promise<any>[] = [... this.fileProgressableCache.values(), ... this.archiveProgressableCache.values()];
+        return Promise.all(v);
+    }
+
+    private fetchFile(path: string): Promise<ArrayBufferSlice> {
         assert(!this.fileProgressableCache.has(path));
-        const p = fetchData(path, abortSignal);
+        const p = this.dataFetcher.fetchData(path);
         this.fileProgressableCache.set(path, p);
         return p;
     }
 
-    public fetchFileData(path: string, abortSignal: AbortSignal): Progressable<ArrayBufferSlice> {
+    public fetchFileData(path: string): Promise<ArrayBufferSlice> {
         const p = this.fileProgressableCache.get(path);
         if (p !== undefined) {
             return p.then(() => this.getFileData(path));
         } else {
-            return this.fetchFile(path, abortSignal).then((data) => {
+            return this.fetchFile(path).then((data) => {
                 this.fileDataCache.set(path, data);
                 return data;
             });
@@ -284,10 +309,10 @@ class ModelCache {
         return assertExists(this.archiveCache.get(archivePath));
     }
 
-    public fetchArchive(archivePath: string, abortSignal: AbortSignal): Progressable<RARC.RARC> {
+    public fetchArchive(archivePath: string): Promise<RARC.RARC> {
         let p = this.archiveProgressableCache.get(archivePath);
         if (p === undefined) {
-            p = this.fetchFile(archivePath, abortSignal).then((data) => {
+            p = this.fetchFile(archivePath).then((data) => {
                 if (readString(data, 0, 0x04) === 'Yaz0')
                     return Yaz0.decompress(data);
                 else
@@ -303,7 +328,7 @@ class ModelCache {
         return p;
     }
 
-    public getModel(device: GfxDevice, renderer: TwilightPrincessRenderer, rarc: RARC.RARC, modelPath: string, hacks?: (bmd: BMD) => void): BMDModel {
+    public getModel(device: GfxDevice, cache: GfxRenderCache, rarc: RARC.RARC, modelPath: string, hacks?: (bmd: BMD) => void): BMDModel {
         let p = this.modelCache.get(modelPath);
 
         if (p === undefined) {
@@ -311,8 +336,7 @@ class ModelCache {
             const bmd = BMD.parse(bmdData);
             if (hacks !== undefined)
                 hacks(bmd);
-            renderer.textureHolder.addJ3DTextures(device, bmd);
-            p = new BMDModel(device, renderer.renderHelper, bmd);
+            p = new BMDModel(device, cache, bmd);
             this.modelCache.set(modelPath, p);
         }
 
@@ -340,7 +364,7 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
             this.id = this.stageId;
     }
 
-    private createRoomScenes(device: GfxDevice, abortSignal: AbortSignal, renderer: TwilightPrincessRenderer, rarc: RARC.RARC, rarcBasename: string): void {
+    private createRoomScenes(device: GfxDevice, renderer: TwilightPrincessRenderer, rarc: RARC.RARC, rarcBasename: string): void {
         const bmdFiles = rarc.files.filter((f) => f.name.endsWith('.bmd') || f.name.endsWith('.bdl'));
         bmdFiles.forEach((bmdFile) => {
             const basename = bmdFile.name.split('.')[0];
@@ -349,7 +373,8 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
             const bckFile = rarc.files.find((f) => f.name === `${basename}.bck`) || null;
             const bmtFile = rarc.files.find((f) => f.name === `${basename}.bmt`) || null;
 
-            const modelInstance = createScene(device, renderer.renderHelper, renderer.textureHolder, bmdFile, btkFile, brkFile, bckFile, bmtFile);
+            const cache = renderer.renderHelper.renderInstManager.gfxRenderCache;
+            const modelInstance = createModelInstance(device, cache, renderer.extraTextures, bmdFile, btkFile, brkFile, bckFile, bmtFile);
             modelInstance.name = `${rarcBasename}/${basename}`;
 
             let passMask: ZTPPass = 0;
@@ -375,11 +400,10 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
         });
         const dzrFile = rarc.findFileData('dzr/room.dzr');
 
-        this.spawnObjectsFromDZR(device, abortSignal, renderer, dzrFile, mat4.create());
+        this.spawnObjectsFromDZR(device, renderer, dzrFile, mat4.create());
     }
 
-
-    private spawnObjectsFromTGOBLayer(device: GfxDevice, abortSignal: AbortSignal, renderer: TwilightPrincessRenderer, buffer: ArrayBufferSlice, tgobHeader: DZSChunkHeader | undefined, worldModelMatrix: mat4): void {
+    private spawnObjectsFromTGOBLayer(device: GfxDevice, renderer: TwilightPrincessRenderer, buffer: ArrayBufferSlice, tgobHeader: DZSChunkHeader | undefined, worldModelMatrix: mat4): void {
         if (tgobHeader === undefined)
             return;
 
@@ -400,13 +424,13 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
             localModelMatrix[13] += posY;
             localModelMatrix[14] += posZ;
 
-            this.spawnObjectsForActor(device, abortSignal, renderer, name, parameters, localModelMatrix, worldModelMatrix);
+            this.spawnObjectsForActor(device, renderer, name, parameters, localModelMatrix, worldModelMatrix);
 
             actrTableIdx += 0x20;
         }
     }
 
-    private spawnObjectsFromACTRLayer(device: GfxDevice, abortSignal: AbortSignal, renderer: TwilightPrincessRenderer, buffer: ArrayBufferSlice, actrHeader: DZSChunkHeader | undefined, worldModelMatrix: mat4): void {
+    private spawnObjectsFromACTRLayer(device: GfxDevice, renderer: TwilightPrincessRenderer, buffer: ArrayBufferSlice, actrHeader: DZSChunkHeader | undefined, worldModelMatrix: mat4): void {
         if (actrHeader === undefined)
             return;
 
@@ -430,41 +454,42 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
             localModelMatrix[13] += posY;
             localModelMatrix[14] += posZ;
 
-            this.spawnObjectsForActor(device, abortSignal, renderer, name, parameters, localModelMatrix, worldModelMatrix);
+            this.spawnObjectsForActor(device, renderer, name, parameters, localModelMatrix, worldModelMatrix);
 
             actrTableIdx += 0x20;
         }
     }
 
-    private spawnObjectsFromDZR(device: GfxDevice, abortSignal: AbortSignal, renderer: TwilightPrincessRenderer, buffer: ArrayBufferSlice, modelMatrix: mat4): void {
+    private spawnObjectsFromDZR(device: GfxDevice, renderer: TwilightPrincessRenderer, buffer: ArrayBufferSlice, modelMatrix: mat4): void {
         const chunkHeaders = parseDZSHeaders(buffer);
 
-        this.spawnObjectsFromACTRLayer(device, abortSignal, renderer, buffer, chunkHeaders.get('ACTR'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, abortSignal, renderer, buffer, chunkHeaders.get('ACT0'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, abortSignal, renderer, buffer, chunkHeaders.get('ACT1'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, abortSignal, renderer, buffer, chunkHeaders.get('ACT2'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, abortSignal, renderer, buffer, chunkHeaders.get('ACT3'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, abortSignal, renderer, buffer, chunkHeaders.get('ACT4'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, abortSignal, renderer, buffer, chunkHeaders.get('ACT5'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, abortSignal, renderer, buffer, chunkHeaders.get('ACT6'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, abortSignal, renderer, buffer, chunkHeaders.get('ACT7'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, abortSignal, renderer, buffer, chunkHeaders.get('ACT8'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, abortSignal, renderer, buffer, chunkHeaders.get('ACT9'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, abortSignal, renderer, buffer, chunkHeaders.get('ACTA'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, abortSignal, renderer, buffer, chunkHeaders.get('ACTB'), modelMatrix);
-        this.spawnObjectsFromTGOBLayer(device, abortSignal, renderer, buffer, chunkHeaders.get('TGOB'), modelMatrix);
+        this.spawnObjectsFromACTRLayer(device, renderer, buffer, chunkHeaders.get('ACTR'), modelMatrix);
+        this.spawnObjectsFromACTRLayer(device, renderer, buffer, chunkHeaders.get('ACT0'), modelMatrix);
+        this.spawnObjectsFromACTRLayer(device, renderer, buffer, chunkHeaders.get('ACT1'), modelMatrix);
+        this.spawnObjectsFromACTRLayer(device, renderer, buffer, chunkHeaders.get('ACT2'), modelMatrix);
+        this.spawnObjectsFromACTRLayer(device, renderer, buffer, chunkHeaders.get('ACT3'), modelMatrix);
+        this.spawnObjectsFromACTRLayer(device, renderer, buffer, chunkHeaders.get('ACT4'), modelMatrix);
+        this.spawnObjectsFromACTRLayer(device, renderer, buffer, chunkHeaders.get('ACT5'), modelMatrix);
+        this.spawnObjectsFromACTRLayer(device, renderer, buffer, chunkHeaders.get('ACT6'), modelMatrix);
+        this.spawnObjectsFromACTRLayer(device, renderer, buffer, chunkHeaders.get('ACT7'), modelMatrix);
+        this.spawnObjectsFromACTRLayer(device, renderer, buffer, chunkHeaders.get('ACT8'), modelMatrix);
+        this.spawnObjectsFromACTRLayer(device, renderer, buffer, chunkHeaders.get('ACT9'), modelMatrix);
+        this.spawnObjectsFromACTRLayer(device, renderer, buffer, chunkHeaders.get('ACTA'), modelMatrix);
+        this.spawnObjectsFromACTRLayer(device, renderer, buffer, chunkHeaders.get('ACTB'), modelMatrix);
+        this.spawnObjectsFromTGOBLayer(device, renderer, buffer, chunkHeaders.get('TGOB'), modelMatrix);
     }
 
-    private spawnObjectsForActor(device: GfxDevice, abortSignal: AbortSignal, renderer: TwilightPrincessRenderer, name: string, parameters: number, localModelMatrix: mat4, worldModelMatrix: mat4): void {
+    private spawnObjectsForActor(device: GfxDevice, renderer: TwilightPrincessRenderer, name: string, parameters: number, localModelMatrix: mat4, worldModelMatrix: mat4): void {
         const modelCache = renderer.modelCache;
+        const cache = renderer.renderHelper.renderInstManager.gfxRenderCache;
 
-        function fetchArchive(objArcName: string): Progressable<RARC.RARC> {
-            return renderer.modelCache.fetchArchive(`${pathBase}/res/Object/${objArcName}`, abortSignal);
+        function fetchArchive(objArcName: string): Promise<RARC.RARC> {
+            return renderer.modelCache.fetchArchive(`${pathBase}/res/Object/${objArcName}`);
         }
 
         function buildChildModel(rarc: RARC.RARC, modelPath: string): BMDObjectRenderer {
-            const model = modelCache.getModel(device, renderer, rarc, modelPath);
-            const modelInstance = new BMDModelInstance(device, renderer.renderHelper, renderer.textureHolder, model);
+            const model = modelCache.getModel(device, cache, rarc, modelPath);
+            const modelInstance = new BMDModelInstance(model);
             modelInstance.name = name;
             modelInstance.passMask = ZTPPass.OPAQUE;
             modelInstance.setSortKeyLayer(GfxRendererLayer.OPAQUE + 1);
@@ -485,10 +510,9 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
         function buildChildModelBMT(rarc: RARC.RARC, modelPath: string, bmtPath: string): BMDObjectRenderer {
             const bmd = BMD.parse(rarc.findFileData(modelPath));
             const bmt = BMT.parse(rarc.findFileData(bmtPath));
-            renderer.textureHolder.addJ3DTextures(device, bmd, bmt);
-            const model = new BMDModel(device, renderer.renderHelper, bmd, bmt);
+            const model = new BMDModel(device, cache, bmd, bmt);
             modelCache.extraModels.push(model);
-            const modelInstance = new BMDModelInstance(device, renderer.renderHelper, renderer.textureHolder, model);
+            const modelInstance = new BMDModelInstance(model);
             modelInstance.name = name;
             modelInstance.setSortKeyLayer(GfxRendererLayer.OPAQUE + 1);
             return new BMDObjectRenderer(modelInstance);
@@ -507,199 +531,199 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
         function animFrame(frame: number): AnimationController { const a = new AnimationController(); a.setTimeInFrames(frame); return a; }
 
         //Goat
-        if (name === 'Cow') fetchArchive(`Cow.arc`).then((rarc) => {
+        if (name === 'Cow') fetchArchive(`Cow.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/cow.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/cow_wait_a.bck`));
         });
         //Epona
-        if (name === 'Horse') fetchArchive(`Horse.arc`).then((rarc) => {
+        if (name === 'Horse') fetchArchive(`Horse.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/hs.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/hs_wait_01.bck`));
         });
         //Ordon Village Cat
-        else if (name === 'Npc_ne') fetchArchive(`Npc_ne.arc`).then((rarc) => {
+        else if (name === 'Npc_ne') fetchArchive(`Npc_ne.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/ne.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/ne_wait.bck`));
         });
         //Monkey
-        else if (name === 'Npc_ks') fetchArchive(`Npc_ks.arc`).then((rarc) => {
+        else if (name === 'Npc_ks') fetchArchive(`Npc_ks.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/saru.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/saru_wait_a.bck`));
         });
         //Cuccoo
-        else if (name === 'Ni') fetchArchive(`Ni.arc`).then((rarc) => {
+        else if (name === 'Ni') fetchArchive(`Ni.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/ni.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/ni_wait1.bck`));
         });
         //Spirits
         //Hero's Shade - Golden Wolf
-        else if (name === 'GWolf') fetchArchive(`GWolf.arc`).then((rarc) => {
+        else if (name === 'GWolf') fetchArchive(`GWolf.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/gw.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/wl_waitsit.bck`));
         });
         //Ordona
-        else if (name === 'FSeirei') fetchArchive(`Seirei.arc`).then((rarc) => {
+        else if (name === 'FSeirei') fetchArchive(`Seirei.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmde/seia.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/seia_wait_a.bck`));
         });
         //Children
         //Malo
-        else if (name === 'Maro') fetchArchive(`Maro.arc`).then((rarc) => {
+        else if (name === 'Maro') fetchArchive(`Maro.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/maro.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/maro_wait_a.bck`));
         });
         //Collin
-        else if (name === 'Kolin') fetchArchive(`Kolin.arc`).then((rarc) => {
+        else if (name === 'Kolin') fetchArchive(`Kolin.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/kolin.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/kolin_wait_a.bck`));
         });
         //Talo
-        else if (name === 'Taro') fetchArchive(`Taro.arc`).then((rarc) => {
+        else if (name === 'Taro') fetchArchive(`Taro.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/taro.bmd`);
-            fetchArchive(`Taro0.arc`).then((animrarc) => {
+            fetchArchive(`Taro0.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/taro_wait_a.bck`));
             });
         });
         //Beth
-        else if (name === 'Besu') fetchArchive(`Besu.arc`).then((rarc) => {
+        else if (name === 'Besu') fetchArchive(`Besu.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/besu.bmd`);
-            fetchArchive(`Besu0.arc`).then((animrarc) => {
+            fetchArchive(`Besu0.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/besu_wait_a.bck`));
             });
         });
         //Ordon NPCs
         //Ilia
-        else if (name === 'Yelia') fetchArchive(`Yelia.arc`).then((rarc) => {
+        else if (name === 'Yelia') fetchArchive(`Yelia.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/yelia.bmd`);
-            fetchArchive(`Yelia0.arc`).then((animrarc) => {
+            fetchArchive(`Yelia0.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/yelia_wait_a.bck`));
             });
         });
         //Fado
-        else if (name === 'Aru') fetchArchive(`Aru.arc`).then((rarc) => {
+        else if (name === 'Aru') fetchArchive(`Aru.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/aru.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/aru_wait_a.bck`));
         });
         //Hanch
-        else if (name === 'Hanjo') fetchArchive(`Hanjo.arc`).then((rarc) => {
+        else if (name === 'Hanjo') fetchArchive(`Hanjo.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/hanjo.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/hanjo_wait_a.bck`));
         });
         //Jaggle
-        else if (name === 'Jagar') fetchArchive(`Jagar.arc`).then((rarc) => {
+        else if (name === 'Jagar') fetchArchive(`Jagar.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/jagar.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/jagar_wait_a.bck`));
         });
         //Rusl
-        else if (name === 'Moi') fetchArchive(`Moi.arc`).then((rarc) => {
+        else if (name === 'Moi') fetchArchive(`Moi.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/moi.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/moi_wait_a.bck`));
         });
         //Mayor Bo
-        else if (name === 'Bou') fetchArchive(`Bou.arc`).then((rarc) => {
+        else if (name === 'Bou') fetchArchive(`Bou.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/bou.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/bou_wait_a.bck`));
         });
         //Pergie
-        else if (name === 'Kyury') fetchArchive(`Kyury.arc`).then((rarc) => {
+        else if (name === 'Kyury') fetchArchive(`Kyury.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/kyury.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/kyury_wait_a.bck`));
         });
         //Sera
-        else if (name === 'Seira') fetchArchive(`Sera.arc`).then((rarc) => {
+        else if (name === 'Seira') fetchArchive(`Sera.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/sera.bmd`);
-            fetchArchive(`Seira.arc`).then((animrarc) => {
+            fetchArchive(`Seira.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/sera_wait_a.bck`));
             });
         });
         //Uli
-        else if (name === 'Uri') fetchArchive(`Uri.arc`).then((rarc) => {
+        else if (name === 'Uri') fetchArchive(`Uri.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/uri.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/uri_wait_a.bck`));
         });
         //Faron Woods NPCs
         //Rusk R
-        else if (name === 'MoiR') fetchArchive(`MoiR.arc`).then((rarc) => {
+        else if (name === 'MoiR') fetchArchive(`MoiR.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/moir.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/moir_wait_a.bck`));
         });
         //Coro
-        else if (name === 'Kkri') fetchArchive(`Kkri.arc`).then((rarc) => {
+        else if (name === 'Kkri') fetchArchive(`Kkri.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/kkri.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/kkri_waitsit_a.bck`));
         });
         //Trill
-        else if (name === 'MYNA') fetchArchive(`NPC_myna.arc`).then((rarc) => {
+        else if (name === 'MYNA') fetchArchive(`NPC_myna.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/myna.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/myna_wait_a.bck`));
         });
         //Kakariko NPCs
         //Renaldo
-        else if (name === 'Len') fetchArchive(`Len.arc`).then((rarc) => {
+        else if (name === 'Len') fetchArchive(`Len.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/len.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/len_wait_a.bck`));
         });
         //Luda
-        else if (name === 'Lud') fetchArchive(`Lud.arc`).then((rarc) => {
+        else if (name === 'Lud') fetchArchive(`Lud.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/lud.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/lud_wait_a.bck`));
         });
         //Barns
-        else if (name === 'Bans') fetchArchive(`Bans.arc`).then((rarc) => {
+        else if (name === 'Bans') fetchArchive(`Bans.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmde/bans.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/bans_wait_a.bck`));
         });
         //Shad
-        else if (name === 'Shad') fetchArchive(`Shad.arc`).then((rarc) => {
+        else if (name === 'Shad') fetchArchive(`Shad.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/shad.bmd`);
-            fetchArchive(`Shad1.arc`).then((animrarc) => {
+            fetchArchive(`Shad1.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/shad_wait_a.bck`));
             });
         });
         //Gorons
         //Normal Gorons
-        else if (name === 'grA' || name === 'Obj_grA') fetchArchive(`grA_mdl.arc`).then((rarc) => {
+        else if (name === 'grA' || name === 'Obj_grA') fetchArchive(`grA_mdl.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/gra_a.bmd`);
 
-            fetchArchive(`grA_base.arc`).then((animrarc) => {
+            fetchArchive(`grA_base.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/gra_wait_a.bck`));
             });
         });
         //Child Gorons
-        else if (name === 'grC') fetchArchive(`grC_mdl.arc`).then((rarc) => {
+        else if (name === 'grC') fetchArchive(`grC_mdl.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/grc_a.bmd`);
-            fetchArchive(`grC.arc`).then((animrarc) => {
+            fetchArchive(`grC.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/grc_wait_a.bck`));
             });
         });
         //Gor Coron
-        else if (name === 'grD' || name === 'grD1') fetchArchive(`grD.arc`).then((rarc) => {
+        else if (name === 'grD' || name === 'grD1') fetchArchive(`grD.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/grd.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/grd_wait_a.bck`));
         });
         //Gor Ebizo
-        else if (name === 'grO') fetchArchive(`grO.arc`).then((rarc) => {
+        else if (name === 'grO') fetchArchive(`grO.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/gro_a.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/gro_wait_a.bck`));
         });
         //Gor Liggs
-        else if (name === 'grR') fetchArchive(`grR.arc`).then((rarc) => {
+        else if (name === 'grR') fetchArchive(`grR.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/grr.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/grr_wait_a.bck`));
         });
         //Gor Amato
-        else if (name === 'grS') fetchArchive(`grS.arc`).then((rarc) => {
+        else if (name === 'grS') fetchArchive(`grS.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/grs.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/grs_wait_a.bck`));
         });
         //Darbus
-        else if (name === 'grZ') fetchArchive(`grZ.arc`).then((rarc) => {
+        else if (name === 'grZ') fetchArchive(`grZ.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/grz.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/grz_wait_a.bck`));
         });
         //Lake Hylia
         //Thelma's Coach
-        else if (name === 'Coach') fetchArchive(`Coach.arc`).then((rarc) => {
+        else if (name === 'Coach') fetchArchive(`Coach.arc`).then((rarc: RARC.RARC) => {
             //TODO Fix positions of models
             const coach = buildModel(rarc, `bmdr/coach.bmd`);
             const thelma = buildModel(rarc, `bmdr/theb.bmd`);
@@ -712,336 +736,336 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
             horse.bindANK1(parseBCK(rarc, `bck/hu_wait_01.bck`));
         });
         //Fyer
-        else if (name === 'Toby') fetchArchive(`Toby.arc`).then((rarc) => {
+        else if (name === 'Toby') fetchArchive(`Toby.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/toby.bmd`);
-            fetchArchive(`Toby0.arc`).then((animrarc) => {
+            fetchArchive(`Toby0.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/toby_wait_a.bck`));
             });
         });
         //Falbi
-        else if (name === 'Raca') fetchArchive(`Raca.arc`).then((rarc) => {
+        else if (name === 'Raca') fetchArchive(`Raca.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/raca.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/raca_wait_a.bck`));
         });
         //Auru
-        else if (name === 'Rafrel') fetchArchive(`Rafrel.arc`).then((rarc) => {
+        else if (name === 'Rafrel') fetchArchive(`Rafrel.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/raf.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/raf_wait_a.bck`));
         });
         //Plumm
-        else if (name === 'myna2') fetchArchive(`MYNA_b.arc`).then((rarc) => {
+        else if (name === 'myna2') fetchArchive(`MYNA_b.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/myna_b.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/myna_b_wait_a.bck`));
         });
         //Zora's River
         //Iza
-        else if (name === 'Hoz') fetchArchive(`Hoz.arc`).then((rarc) => {
+        else if (name === 'Hoz') fetchArchive(`Hoz.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/hoz.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/hoz_wait_a.bck`));
         });
         //Hena
-        else if (name === 'Henna') fetchArchive(`Henna.arc`).then((rarc) => {
+        else if (name === 'Henna') fetchArchive(`Henna.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/henna.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/henna_wait_a.bck`));
         });
         //Zoras
         //Rutela
-        else if (name === 'zraC') fetchArchive(`zrZ_GT.arc`).then((rarc) => {
+        else if (name === 'zraC') fetchArchive(`zrZ_GT.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/zrz_gt.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/zrz_wait_gt_a.bck`));
         });   
         //Prince Ralis
-        else if (name === 'zrC') fetchArchive(`zrC_MDL.arc`).then((rarc) => {
+        else if (name === 'zrC') fetchArchive(`zrC_MDL.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdv/zrc.bmd`);
-            fetchArchive(`zrC.arc`).then((animrarc) => {
+            fetchArchive(`zrC.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/zrc_wait_a.bck`));
             });
         });
         //Normal Zoras
-        else if (name === 'zrA') fetchArchive(`zrA_MDL.arc`).then((rarc) => {
+        else if (name === 'zrA') fetchArchive(`zrA_MDL.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdv/zra.bmd`);
-            fetchArchive(`zrA_sp.arc`).then((animrarc) => {
+            fetchArchive(`zrA_sp.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/zra_wait_sp.bck`));
             });
         });        
         //Castle Town
         //Telma
-        else if (name === 'The') fetchArchive(`The.arc`).then((rarc) => {
+        else if (name === 'The') fetchArchive(`The.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/the.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/the_wait_a.bck`));
         });
         //Louise - Telma's Cat
-        else if (name === 'Peru') fetchArchive(`Peru.arc`).then((rarc) => {
+        else if (name === 'Peru') fetchArchive(`Peru.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/gz_ne.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/gz_ne_wait_a.bck`));
         });
         //Postman
-        else if (name === 'Post') fetchArchive(`Post.arc`).then((rarc) => {
+        else if (name === 'Post') fetchArchive(`Post.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/post.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/post_wait_a.bck`));
         });
         //Jovani
-        else if (name === 'Pouya') fetchArchive(`PouyaA.arc`).then((rarc) => {
+        else if (name === 'Pouya') fetchArchive(`PouyaA.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdv/pouyaa.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/pouyaa_wait_a.bck`));
         });
         //Agitha
-        else if (name === 'ins') fetchArchive(`Ins.arc`).then((rarc) => {
+        else if (name === 'ins') fetchArchive(`Ins.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/ins.bmd`);
-            fetchArchive(`Ins1.arc`).then((animrarc) => {
+            fetchArchive(`Ins1.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/ins_wait_a.bck`));
             });
         });
         //Chudley
-        else if (name === 'clerkA') fetchArchive(`clerkA.arc`).then((rarc) => {
+        else if (name === 'clerkA') fetchArchive(`clerkA.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/clerka.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/clerka_wait_a.bck`));
         });
-        else if (name === 'clerkB') fetchArchive(`clerkB.arc`).then((rarc) => {
+        else if (name === 'clerkB') fetchArchive(`clerkB.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/clerkb.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/clerkb_wait_a.bck`));
         });
         //Soal
-        else if (name === 'shoe') fetchArchive(`shoe.arc`).then((rarc) => {
+        else if (name === 'shoe') fetchArchive(`shoe.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/shoe.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/shoe_talk_a.bck`));//fix
         });
         //Dr. Borville
-        else if (name === 'Doc') fetchArchive(`Doc.arc`).then((rarc) => {
+        else if (name === 'Doc') fetchArchive(`Doc.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/doc.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/doc_wait_a.bck`));
         });
         //Charlo
-        else if (name === 'prayer') fetchArchive(`Prayer.arc`).then((rarc) => {
+        else if (name === 'prayer') fetchArchive(`Prayer.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/prayer.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/w_pray.bck`));
         });
         //Purlo
-        else if (name === 'chin') fetchArchive(`chin_mdl.arc`).then((rarc) => {
+        else if (name === 'chin') fetchArchive(`chin_mdl.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/chin.bmd`);
-            fetchArchive(`Chin.arc`).then((animrarc) => {
+            fetchArchive(`Chin.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/chin_wait_a.bck`));//fix
             });
         });
         //Hannah
-        else if (name === 'km_Hana') fetchArchive(`kasi_hana.arc`).then((rarc) => {
+        else if (name === 'km_Hana') fetchArchive(`kasi_hana.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/hana.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));//fix
             });
         });
         //Kili
-        else if (name === 'km_Kyu') fetchArchive(`kasi_kyu.arc`).then((rarc) => {
+        else if (name === 'km_Kyu') fetchArchive(`kasi_kyu.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/kyu.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));//fix
             });
         });
         //Misha
-        else if (name === 'km_Mich') fetchArchive(`kasi_mich.arc`).then((rarc) => {
+        else if (name === 'km_Mich') fetchArchive(`kasi_mich.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mich.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));//fix
             });
         });
         //Random Castle Town NPCs
-        else if (name === 'WAD_a') fetchArchive(`WAD_a.arc`).then((rarc) => {
+        else if (name === 'WAD_a') fetchArchive(`WAD_a.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/wad_a.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
             });
         });
-        else if (name === 'WAD_a2') fetchArchive(`WAD_a2.arc`).then((rarc) => {
+        else if (name === 'WAD_a2') fetchArchive(`WAD_a2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/wad_a2.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
             });
         });
-        else if (name === 'WAN_a') fetchArchive(`WAN_a.arc`).then((rarc) => {
+        else if (name === 'WAN_a') fetchArchive(`WAN_a.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/wan_a.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
             });
         });
-        else if (name === 'WAN_a2') fetchArchive(`WAN_a2.arc`).then((rarc) => {
+        else if (name === 'WAN_a2') fetchArchive(`WAN_a2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/wan_a2.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
             });
         });
-        else if (name === 'WAN_b') fetchArchive(`WAN_b.arc`).then((rarc) => {
+        else if (name === 'WAN_b') fetchArchive(`WAN_b.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/wan_b.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
             });
         });
-        else if (name === 'WAN_b2') fetchArchive(`WAN_b2.arc`).then((rarc) => {
+        else if (name === 'WAN_b2') fetchArchive(`WAN_b2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/wan_b2.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
             });
         });
-        else if (name === 'WGN_a') fetchArchive(`WGN_a.arc`).then((rarc) => {
+        else if (name === 'WGN_a') fetchArchive(`WGN_a.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/wgn_a.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
             });
         });
-        else if (name === 'WGN_a2') fetchArchive(`WGN_a2.arc`).then((rarc) => {
+        else if (name === 'WGN_a2') fetchArchive(`WGN_a2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/wgn_a2.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
             });
         });
-        else if (name === 'WCN_a') fetchArchive(`WCN_a.arc`).then((rarc) => {
+        else if (name === 'WCN_a') fetchArchive(`WCN_a.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/wcn_a.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
             });//fix
         });
-        else if (name === 'WCN_a2') fetchArchive(`WCN_a2.arc`).then((rarc) => {
+        else if (name === 'WCN_a2') fetchArchive(`WCN_a2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/wcn_a2.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
             });//fix
         });
-        else if (name === 'WON_a2') fetchArchive(`WON_a2.arc`).then((rarc) => {
+        else if (name === 'WON_a2') fetchArchive(`WON_a2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/won_a2.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
             });
         });
-        else if (name === 'DoorBoy') fetchArchive(`DoorBoy.arc`).then((rarc) => {
+        else if (name === 'DoorBoy') fetchArchive(`DoorBoy.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/doorboy.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
             });
         });
-        else if (name === 'MAN_a') fetchArchive(`MAN_a.arc`).then((rarc) => {
+        else if (name === 'MAN_a') fetchArchive(`MAN_a.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/man_a.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
             });
         });
-        else if (name === 'MAN_a2') fetchArchive(`MAN_a2.arc`).then((rarc) => {
+        else if (name === 'MAN_a2') fetchArchive(`MAN_a2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/man_a2.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
             });
         });
-        else if (name === 'MCN_a') fetchArchive(`MCN_a.arc`).then((rarc) => {
+        else if (name === 'MCN_a') fetchArchive(`MCN_a.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mcn_a.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
             });//fix
         });
-        else if (name === 'MCN_a2') fetchArchive(`MCN_a2.arc`).then((rarc) => {
+        else if (name === 'MCN_a2') fetchArchive(`MCN_a2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mcn_a2.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
             });//fix
         });
-        else if (name === 'MAN_b') fetchArchive(`MAN_b.arc`).then((rarc) => {
+        else if (name === 'MAN_b') fetchArchive(`MAN_b.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/man_b.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
             });
         });
-        else if (name === 'MAN_c') fetchArchive(`MAN_c.arc`).then((rarc) => {
+        else if (name === 'MAN_c') fetchArchive(`MAN_c.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/man_c.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
             });
         });
-        else if (name === 'MAT_a') fetchArchive(`MAT_a.arc`).then((rarc) => {
+        else if (name === 'MAT_a') fetchArchive(`MAT_a.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mat_a.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
             });
         });
-        else if (name === 'MAT_a2') fetchArchive(`MAT_a2.arc`).then((rarc) => {
+        else if (name === 'MAT_a2') fetchArchive(`MAT_a2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mat_a2.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
             });
         });
-        else if (name === 'MAS_a') fetchArchive(`MAS_a.arc`).then((rarc) => {
+        else if (name === 'MAS_a') fetchArchive(`MAS_a.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mas_a.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
             });
         });
-        else if (name === 'MAD_a') fetchArchive(`MAD_a.arc`).then((rarc) => {
+        else if (name === 'MAD_a') fetchArchive(`MAD_a.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mad_a.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
             });//fix
         });
-        else if (name === 'MAD_a2') fetchArchive(`MAD_a2.arc`).then((rarc) => {
+        else if (name === 'MAD_a2') fetchArchive(`MAD_a2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mad_a2.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
             });//fix
         });
-        else if (name === 'MBN_a') fetchArchive(`MBN_a.arc`).then((rarc) => {
+        else if (name === 'MBN_a') fetchArchive(`MBN_a.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mbn_a.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
             });
         });
-        else if (name === 'MBN_a2') fetchArchive(`MBN_a2.arc`).then((rarc) => {
+        else if (name === 'MBN_a2') fetchArchive(`MBN_a2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mbn_a2.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
             });
         });
-        else if (name === 'MON_a') fetchArchive(`MON_a.arc`).then((rarc) => {
+        else if (name === 'MON_a') fetchArchive(`MON_a.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mon_a.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
             });
         });
-        else if (name === 'MON_a2') fetchArchive(`MON_a2.arc`).then((rarc) => {
+        else if (name === 'MON_a2') fetchArchive(`MON_a2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mon_a.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc) => {
+            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
                 m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
             });
         });
         //Snowpeak NPCs
         //Yeta
-        else if (name === 'ykW') fetchArchive(`ykW.arc`).then((rarc) => {
+        else if (name === 'ykW') fetchArchive(`ykW.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/ykw.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/ykw_wait_a.bck`));
         });
         //Yeto
-        else if (name === 'ykM') fetchArchive(`ykM.arc`).then((rarc) => {
+        else if (name === 'ykM') fetchArchive(`ykM.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/ykm.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/ykm_wait_a.bck`));
         });
         //Ashei
-        else if (name === 'Ash') fetchArchive(`Ash.arc`).then((rarc) => {
+        else if (name === 'Ash') fetchArchive(`Ash.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/ash.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/ash_wait_a.bck`));
         });
         //Other NPCs
         //Zelda
-        else if (name === 'Zelda' || name === 'Hzelda') fetchArchive(`Zelda.arc`).then((rarc) => {
+        else if (name === 'Zelda' || name === 'Hzelda') fetchArchive(`Zelda.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmde/zelda.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/zelda_wait_a.bck`));
         });
-        else if (name === 'Dmidna') fetchArchive(`Midna.arc`).then((rarc) => {
+        else if (name === 'Dmidna') fetchArchive(`Midna.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdv/s_md.bmd`);
             //m.bindANK1(parseBCK(rarc, `bck/midna_wait_a.bck`));
         });
         //Mini Bosses
         //Ook Boss Monkey
-        else if (name === 'E_mk') fetchArchive(`E_mk.arc`).then((rarc) => {
+        else if (name === 'E_mk') fetchArchive(`E_mk.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mk.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/mk_wait.bck`));
         });
         //Bosses
         //Blizzeta
-        else if (name === 'B_yo') fetchArchive(`B_yo.arc`).then((rarc) => {
+        else if (name === 'B_yo') fetchArchive(`B_yo.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmde/ykw_b.bmd`);
             m.bindANK1(parseBCK(rarc, `bck/ykw_b_waita.bck`));
         });
@@ -1053,24 +1077,27 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
             console.warn(`Unknown object: ${name}`);
         }
     }
-
-    public createScene(device: GfxDevice, abortSignal: AbortSignal): Progressable<Viewer.SceneGfx> {
+    public createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+        const dataFetcher = context.dataFetcher;
         const stagePath = `${pathBase}/res/Stage/${this.stageId}`;
-        const textureHolder = new ZTPTextureHolder();
-        const modelCache = new ModelCache();
+        const extraTextures = new ZTPExtraTextures();
+        const modelCache = new ModelCache(dataFetcher);
 
-        return this.fetchRarc(`${stagePath}/STG_00.arc`).then((stageRarc: RARC.RARC) => {
+        return this.fetchRarc(`${stagePath}/STG_00.arc`, dataFetcher).then((stageRarc: RARC.RARC) => {
             // Load stage shared textures.
             const texcFolder = stageRarc.findDir(`texc`);
             const extraTextureFiles = texcFolder !== null ? texcFolder.files : [];
-            const extraTextures = extraTextureFiles.map((file) => {
+
+            for (let i = 0; i < extraTextureFiles.length; i++) {
+                const file = extraTextureFiles[i];
                 const name = file.name.split('.')[0];
-                return BTI.parse(file.buffer, name).texture;
-            });
+                const bti = BTI.parse(file.buffer, name).texture;
+                extraTextures.addBTI(device, bti);
+            }
 
-            textureHolder.addExtraTextures(device, extraTextures);
+            const renderer = new TwilightPrincessRenderer(device, modelCache, extraTextures, stageRarc);
 
-            const renderer = new TwilightPrincessRenderer(device, modelCache, textureHolder, stageRarc);
+            const cache = renderer.renderHelper.renderInstManager.gfxRenderCache;
 
             [`vrbox_sora`, `vrbox_kasumim`].forEach((basename) => {
                 const bmdFile = stageRarc.findFile(`bmdp/${basename}.bmd`);
@@ -1079,7 +1106,7 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
                 const btkFile = stageRarc.findFile(`btk/${basename}.btk`);
                 const brkFile = stageRarc.findFile(`brk/${basename}.brk`);
                 const bckFile = stageRarc.findFile(`bck/${basename}.bck`);
-                const scene = createScene(device, renderer.renderHelper, textureHolder, bmdFile, btkFile, brkFile, bckFile, null);
+                const scene = createModelInstance(device, cache, extraTextures, bmdFile, btkFile, brkFile, bckFile, null);
                 scene.name = `stage/${basename}`;
                 scene.isSkybox = true;
                 renderer.modelInstances.push(scene);
@@ -1098,26 +1125,31 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
                 roomNames = roomList.map((i) => `R${leftPad(''+i, 2)}_00`);
             }
 
-            return Progressable.all(roomNames.map((roomName) => this.fetchRarc(`${stagePath}/${roomName}.arc`))).then((roomRarcs: (RARC.RARC | null)[]) => {
+            return Promise.all(roomNames.map((roomName) => this.fetchRarc(`${stagePath}/${roomName}.arc`, dataFetcher))).then((roomRarcs: (RARC.RARC | null)[]) => {
                 roomRarcs.forEach((rarc: RARC.RARC | null, i) => {
                     if (rarc === null) return;
-                    this.createRoomScenes(device, abortSignal, renderer, rarc, roomNames[i]);
+                    this.createRoomScenes(device, renderer, rarc, roomNames[i]);
                 });
 
                 return modelCache.waitForLoad().then(() => 
                 {
-                    renderer.finish(device);
                     return renderer;
                 });
             });
         });
     }
 
-    private fetchRarc(path: string): Progressable<RARC.RARC | null> {
-        return fetchData(path).then((buffer: ArrayBufferSlice) => {
-            if (buffer.byteLength === 0) return null;
-            return Yaz0.decompress(buffer).then((buffer: ArrayBufferSlice) => buffer && RARC.parse(buffer)).catch((e)=>null);
-        });
+    // private fetchRarc(path: string): Progressable<RARC.RARC | null> {
+    //     return fetchData(path).then((buffer: ArrayBufferSlice) => {
+    //         if (buffer.byteLength === 0) return null;
+    //         return Yaz0.decompress(buffer).then((buffer: ArrayBufferSlice) => buffer && RARC.parse(buffer)).catch((e)=>null);
+    //     });
+    private async fetchRarc(path: string, dataFetcher: DataFetcher): Promise<RARC.RARC | null> {
+        const buffer = await dataFetcher.fetchData(path, DataFetcherFlags.ALLOW_404);
+        if (buffer.byteLength === 0)
+            return null;
+        const decompressed = await Yaz0.decompress(buffer);
+        return RARC.parse(decompressed);
     }
 }
 
@@ -1128,7 +1160,7 @@ const name = "The Legend of Zelda: Twilight Princess";
 const sceneDescs = [
     "Ordon Province",
     new TwilightPrincessSceneDesc("Ordon Village", "F_SP103", ["R00_00"]),
-    new TwilightPrincessSceneDesc("Outside Link's House", "F_SP103", ["R01_00"]),
+    new TwilightPrincessSceneDesc("Link's House Area", "F_SP103", ['R01_00']),
     new TwilightPrincessSceneDesc("Ordon Ranch", "F_SP00"),
     new TwilightPrincessSceneDesc("Ordon Woods", "F_SP104"),
 

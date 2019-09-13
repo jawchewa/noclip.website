@@ -1,24 +1,26 @@
 
-import { GXTextureHolder, MaterialParams, PacketParams, ColorKind, loadedDataCoalescerGfx, GXShapeHelperGfx, GXRenderHelperGfx, translateWrapModeGfx, GXMaterialHelperGfx } from '../gx/gx_render';
+import { GXTextureHolder, MaterialParams, PacketParams, ColorKind, translateWrapModeGfx, ub_MaterialParams, loadedDataCoalescerComboGfx, ub_SceneParams, fillSceneParamsData, u_SceneParamsBufferSize, SceneParams, fillSceneParams, fillSceneParamsDataOnTemplate } from '../gx/gx_render';
+import { GXMaterialHelperGfx, GXShapeHelperGfx, BasicGXRendererHelper } from '../gx/gx_render';
 
 import * as TPL from './tpl';
-import { TTYDWorld, Material, SceneGraphNode, Batch, SceneGraphPart, Sampler, MaterialAnimator, bindMaterialAnimator, AnimationEntry, MeshAnimator, bindMeshAnimator, MaterialLayer } from './world';
+import { TTYDWorld, Material, SceneGraphNode, Batch, SceneGraphPart, Sampler, MaterialAnimator, bindMaterialAnimator, AnimationEntry, MeshAnimator, bindMeshAnimator, MaterialLayer, DrawModeFlags } from './world';
 
 import * as Viewer from '../viewer';
 import { mat4 } from 'gl-matrix';
 import { assert, nArray } from '../util';
 import AnimationController from '../AnimationController';
 import { DeviceProgram } from '../Program';
-import { GfxDevice, GfxSampler, GfxTexFilterMode, GfxMipFilterMode, GfxRenderPass, GfxBufferUsage, GfxBufferFrequencyHint, GfxBindingLayoutDescriptor, GfxHostAccessPass } from '../gfx/platform/GfxPlatform';
-import { BufferFillerHelper } from '../gfx/helpers/UniformBufferHelpers';
+import { GfxDevice, GfxSampler, GfxTexFilterMode, GfxMipFilterMode, GfxBindingLayoutDescriptor, GfxHostAccessPass, GfxProgram } from '../gfx/platform/GfxPlatform';
+import { fillVec4 } from '../gfx/helpers/UniformBufferHelpers';
 import { TextureMapping } from '../TextureHolder';
-import { GfxBufferCoalescer, GfxCoalescedBuffers } from '../gfx/helpers/BufferHelpers';
-import { GfxRenderInst, GfxRenderInstBuilder, GfxRenderInstViewRenderer, GfxRendererLayer, makeSortKey, makeSortKeyOpaque, setSortKeyDepth } from '../gfx/render/GfxRenderer';
-import { GfxRenderBuffer } from '../gfx/render/GfxRenderBuffer';
+import { GfxCoalescedBuffersCombo, GfxBufferCoalescerCombo } from '../gfx/helpers/BufferHelpers';
+import { GfxRenderInstManager, GfxRenderInst, GfxRendererLayer, makeSortKey, makeSortKeyOpaque, setSortKeyDepth } from '../gfx/render/GfxRenderer';
 import { Camera, computeViewMatrix, computeViewSpaceDepthFromWorldSpaceAABB } from '../Camera';
-import { BasicRenderTarget, standardFullClearRenderPassDescriptor } from '../gfx/helpers/RenderTargetHelpers';
-import { fullscreenMegaState } from '../gfx/helpers/GfxMegaStateDescriptorHelpers';
 import { AABB } from '../Geometry';
+import { colorCopy } from '../Color';
+import * as UI from '../ui';
+import { GfxRenderCache } from '../gfx/render/GfxRenderCache';
+import { GXMaterialHacks } from '../gx/gx_material';
 
 export class TPLTextureHolder extends GXTextureHolder<TPL.TPLTexture> {
     public addTPLTextures(device: GfxDevice, tpl: TPL.TPL): void {
@@ -45,7 +47,7 @@ void main() {
     p.x = (gl_VertexID == 1) ? 2.0 : 0.0;
     p.y = (gl_VertexID == 2) ? 2.0 : 0.0;
     gl_Position.xy = p * vec2(2) - vec2(1);
-    gl_Position.zw = vec2(1);
+    gl_Position.zw = vec2(-1, 1);
     v_TexCoord = p * u_ScaleOffset.xy + u_ScaleOffset.zw;
 }
 `;
@@ -60,79 +62,69 @@ void main() {
 `;
 }
 
+const backgroundBillboardBindingLayouts: GfxBindingLayoutDescriptor[] = [{ numUniformBuffers: 1, numSamplers: 1 }];
+
 class BackgroundBillboardRenderer {
     private program = new BackgroundBillboardProgram();
-    private bufferFiller: BufferFillerHelper;
-    private paramsBuffer: GfxRenderBuffer;
-    private paramsBufferOffset: number;
-    private renderInst: GfxRenderInst;
+    private gfxProgram: GfxProgram;
     private textureMappings = nArray(1, () => new TextureMapping());
 
-    constructor(device: GfxDevice, viewRenderer: GfxRenderInstViewRenderer, public textureHolder: TPLTextureHolder, public textureName: string) {
-        const gfxProgram = device.createProgram(this.program);
-        const programReflection = device.queryProgram(gfxProgram);
-        const paramsLayout = programReflection.uniformBufferLayouts[0];
-        this.bufferFiller = new BufferFillerHelper(paramsLayout);
-        this.paramsBuffer = new GfxRenderBuffer(GfxBufferUsage.UNIFORM, GfxBufferFrequencyHint.DYNAMIC);
-
-        const bindingLayouts: GfxBindingLayoutDescriptor[] = [{ numUniformBuffers: 1, numSamplers: 1 }];
-
-        const renderInstBuilder = new GfxRenderInstBuilder(device, programReflection, bindingLayouts, [ this.paramsBuffer ]);
-        this.renderInst = renderInstBuilder.pushRenderInst();
-        this.renderInst.name = 'BackgroundBillboardRenderer';
-        this.renderInst.drawTriangles(3);
-        this.renderInst.sortKey = makeSortKeyOpaque(GfxRendererLayer.BACKGROUND, programReflection.uniqueKey);
-        // No input state, we don't use any vertex buffers for full-screen passes.
-        this.renderInst.inputState = null;
-        this.renderInst.setGfxProgram(gfxProgram);
-        this.renderInst.setMegaStateFlags(fullscreenMegaState);
-        this.paramsBufferOffset = renderInstBuilder.newUniformBufferInstance(this.renderInst, 0);
-        renderInstBuilder.finish(device, viewRenderer);
+    constructor(device: GfxDevice, public textureHolder: TPLTextureHolder, public textureName: string) {
+        this.gfxProgram = device.createProgram(this.program);
+        // Fill texture mapping.
+        this.textureHolder.fillTextureMapping(this.textureMappings[0], this.textureName);
     }
 
-    public prepareToRender(hostAccessPass: GfxHostAccessPass, renderInput: Viewer.ViewerRenderInput): void {
+    public prepareToRender(renderInstManager: GfxRenderInstManager, renderInput: Viewer.ViewerRenderInput): void {
+        const renderInst = renderInstManager.pushRenderInst();
+        renderInst.drawPrimitives(3);
+        renderInst.sortKey = makeSortKeyOpaque(GfxRendererLayer.BACKGROUND, this.gfxProgram.ResourceUniqueId);
+        renderInst.setInputLayoutAndState(null, null);
+        renderInst.setBindingLayouts(backgroundBillboardBindingLayouts);
+        renderInst.setGfxProgram(this.gfxProgram);
+        renderInst.allocateUniformBuffer(BackgroundBillboardProgram.ub_Params, 4);
+
         // Set our texture bindings.
-        this.textureHolder.fillTextureMapping(this.textureMappings[0], this.textureName);
-        this.renderInst.setSamplerBindingsFromTextureMappings(this.textureMappings);
+        renderInst.setSamplerBindingsFromTextureMappings(this.textureMappings);
 
         // Upload new buffer data.
+        let offs = renderInst.getUniformBufferOffset(BackgroundBillboardProgram.ub_Params);
+        const d = renderInst.mapUniformBufferF32(BackgroundBillboardProgram.ub_Params);
 
         // Extract yaw
         const view = renderInput.camera.viewMatrix;
         const o = Math.atan2(-view[2], view[0]) / (Math.PI * 2) * 4;
-        this.bufferFiller.reset();
         const aspect = renderInput.viewportWidth / renderInput.viewportHeight;
-        this.bufferFiller.fillVec4(aspect, -1, o, 0);
-        this.bufferFiller.endAndUpload(hostAccessPass, this.paramsBuffer, this.paramsBufferOffset);
-        this.paramsBuffer.prepareToRender(hostAccessPass);
+
+        offs += fillVec4(d, offs, aspect, -1, o, 0);
     }
 
     public destroy(device: GfxDevice): void {
-        device.destroyProgram(this.renderInst.gfxProgram);
-        this.paramsBuffer.destroy(device);
+        device.destroyProgram(this.gfxProgram);
     }
 }
 
-class Command_Material {
+class MaterialInstance {
     private materialParams = new MaterialParams();
     private materialHelper: GXMaterialHelperGfx;
     private materialAnimators: MaterialAnimator[] = [];
     private gfxSamplers: GfxSampler[] = [];
-    public templateRenderInst: GfxRenderInst;
+    public materialParamsBlockOffs: number = 0;
     public isTranslucent: boolean;
 
-    constructor(device: GfxDevice, renderHelper: GXRenderHelperGfx, public material: Material) {
-        this.materialHelper = new GXMaterialHelperGfx(device, renderHelper, this.material.gxMaterial);
+    constructor(device: GfxDevice, cache: GfxRenderCache, public material: Material) {
+        this.materialHelper = new GXMaterialHelperGfx(this.material.gxMaterial);
+        this.materialHelper.cacheProgram(device, cache);
 
         this.gfxSamplers = this.material.samplers.map((sampler) => {
-            return Command_Material.translateSampler(device, sampler);
+            return MaterialInstance.translateSampler(device, sampler);
         });
 
-        this.templateRenderInst = this.materialHelper.templateRenderInst;
-        const layer = this.getRendererLayer(material.materialLayer);
-        this.templateRenderInst.sortKey = makeSortKey(layer, this.materialHelper.programKey);
         this.isTranslucent = material.materialLayer === MaterialLayer.BLEND;
-        this.templateRenderInst.setMegaStateFlags({ polygonOffset: material.materialLayer === MaterialLayer.ALPHA_TEST });
+    }
+
+    public setMaterialHacks(materialHacks: GXMaterialHacks): void {
+        this.materialHelper.setMaterialHacks(materialHacks);
     }
 
     private getRendererLayer(materialLayer: MaterialLayer): GfxRendererLayer {
@@ -177,12 +169,12 @@ class Command_Material {
             }
         }
 
-        materialParams.u_Color[ColorKind.MAT0].copy(this.material.matColorReg);
+        colorCopy(materialParams.u_Color[ColorKind.MAT0], this.material.matColorReg);
     }
 
     public stopAnimation(): void {
         for (let i = 0; i < this.material.samplers.length; i++)
-            this.materialAnimators[i] = null;
+            delete this.materialAnimators[i];
     }
 
     public playAnimation(animationController: AnimationController, animation: AnimationEntry): boolean {
@@ -197,9 +189,25 @@ class Command_Material {
         return hasAnimation;
     }
 
-    public prepareToRender(renderHelper: GXRenderHelperGfx, textureHolder: TPLTextureHolder): void {
+    public setOnRenderInst(device: GfxDevice, cache: GfxRenderCache, renderInst: GfxRenderInst): void {
+        // Set up the program.
+        this.materialHelper.setOnRenderInst(device, cache, renderInst);
+
+        renderInst.setUniformBufferOffset(ub_MaterialParams, this.materialParamsBlockOffs, this.materialHelper.materialParamsBufferSize);
+        renderInst.setSamplerBindingsFromTextureMappings(this.materialParams.m_TextureMapping);
+
+        const layer = this.getRendererLayer(this.material.materialLayer);
+        renderInst.sortKey = makeSortKey(layer, this.materialHelper.programKey);
+        const megaStateFlags = renderInst.getMegaStateFlags();
+        megaStateFlags.polygonOffset = this.material.materialLayer === MaterialLayer.ALPHA_TEST;
+    }
+
+    public prepareToRender(renderInstManager: GfxRenderInstManager, textureHolder: TPLTextureHolder): void {
+        assert(this.materialParamsBlockOffs === 0);
+        this.materialParamsBlockOffs = this.materialHelper.allocateMaterialParamsBlock(renderInstManager);
+
         this.fillMaterialParams(this.materialParams, textureHolder);
-        this.materialHelper.fillMaterialParams(this.materialParams, renderHelper);
+        this.materialHelper.fillMaterialParamsData(renderInstManager, this.materialParamsBlockOffs, this.materialParams);
     }
 
     public destroy(device: GfxDevice) {
@@ -208,34 +216,30 @@ class Command_Material {
     }
 }
 
-class Command_Batch {
+class BatchInstance {
     private shapeHelper: GXShapeHelperGfx;
-    private renderInst: GfxRenderInst;
     private packetParams = new PacketParams();
 
-    constructor(device: GfxDevice, renderHelper: GXRenderHelperGfx, private materialCommand: Command_Material, private nodeCommand: Command_Node, private batch: Batch, private coalescedBuffers: GfxCoalescedBuffers) {
-        this.shapeHelper = new GXShapeHelperGfx(device, renderHelper, coalescedBuffers, batch.loadedVertexLayout, batch.loadedVertexData);
-        this.renderInst = this.shapeHelper.buildRenderInst(renderHelper.renderInstBuilder, materialCommand.templateRenderInst);
-        renderHelper.renderInstBuilder.pushRenderInst(this.renderInst);
-        this.renderInst.setSamplerBindingsInherit();
-        this.renderInst.name = nodeCommand.namePath;
-        // Pull in render flags on the node itself.
-        this.renderInst.setMegaStateFlags(nodeCommand.node.renderFlags);
+    constructor(device: GfxDevice, cache: GfxRenderCache, private materialInstance: MaterialInstance, private nodeInstance: NodeInstance, private batch: Batch, private coalescedBuffers: GfxCoalescedBuffersCombo) {
+        this.shapeHelper = new GXShapeHelperGfx(device, cache, coalescedBuffers, batch.loadedVertexLayout, batch.loadedVertexData);
     }
 
     private computeModelView(dst: mat4, camera: Camera): void {
         computeViewMatrix(dst, camera);
-        mat4.mul(dst, dst, this.nodeCommand.modelMatrix);
+        mat4.mul(dst, dst, this.nodeInstance.modelMatrix);
     }
 
-    public prepareToRender(renderHelper: GXRenderHelperGfx, renderInput: Viewer.ViewerRenderInput): void {
-        this.renderInst.visible = this.nodeCommand.visible;
+    public prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput): void {
+        if (!this.nodeInstance.visible)
+            return;
 
-        if (this.renderInst.visible) {
-            this.computeModelView(this.packetParams.u_PosMtx[0], renderInput.camera);
-            this.shapeHelper.fillPacketParams(this.packetParams, this.renderInst, renderHelper);
-            this.renderInst.sortKey = setSortKeyDepth(this.renderInst.sortKey, this.nodeCommand.depth);
-        }
+        const renderInst = this.shapeHelper.pushRenderInst(renderInstManager);
+        this.nodeInstance.setOnRenderInst(renderInst, viewerInput);
+        this.materialInstance.setOnRenderInst(device, renderInstManager.gfxRenderCache, renderInst);
+        renderInst.setMegaStateFlags(this.nodeInstance.node.renderFlags);
+        this.computeModelView(this.packetParams.u_PosMtx[0], viewerInput.camera);
+        this.shapeHelper.fillPacketParams(this.packetParams, renderInst);
+        renderInst.sortKey = setSortKeyDepth(renderInst.sortKey, this.nodeInstance.depth);
     }
 
     public destroy(device: GfxDevice): void {
@@ -243,17 +247,20 @@ class Command_Batch {
     }
 }
 
+const sceneParams = new SceneParams();
 const bboxScratch = new AABB();
-class Command_Node {
+class NodeInstance {
     public visible: boolean = true;
-    public children: Command_Node[] = [];
+    public children: NodeInstance[] = [];
     public modelMatrix: mat4 = mat4.create();
     public meshAnimator: MeshAnimator | null = null;
     public depth: number = 0;
     public namePath: string;
+    public isDecal: boolean;
 
-    constructor(public node: SceneGraphNode, parentNamePath: string) {
+    constructor(public node: SceneGraphNode, parentNamePath: string, private childIndex: number) {
         this.namePath = `${parentNamePath}/${node.nameStr}`;
+        this.isDecal = !!(node.drawModeFlags & DrawModeFlags.IS_DECAL);
     }
 
     public updateModelMatrix(parentMatrix: mat4): void {
@@ -266,9 +273,28 @@ class Command_Node {
         }
     }
 
-    public prepareToRender(camera: Camera, visible: boolean): void {
-        this.visible = visible;
+    public setOnRenderInst(renderInst: GfxRenderInst, viewerInput: Viewer.ViewerRenderInput): void {
+        if (this.isDecal) {
+            let offs = renderInst.allocateUniformBuffer(ub_SceneParams, u_SceneParamsBufferSize);
+            const d = renderInst.mapUniformBufferF32(ub_SceneParams);
+            fillSceneParams(sceneParams, viewerInput.camera, viewerInput.viewportWidth, viewerInput.viewportHeight);
+            // The game will actually adjust the projection matrix based on the child index, if the decal flag
+            // is set. This happens in _mapDispMapObj.
+            //
+            //      proj[5] = proj[5] * (1.0 + (indexBias * -2.0 * pCam->far * pCam->near) /
+            //                          (1.0 * (pCam->far + pCam->near) * (1.0 + indexBias)));
+            //
+            // TODO(jstpierre): This is designed for a GX viewport transform. Port it to OpenGL.
 
+            const indexBias = this.childIndex * 0.01;
+            const frustum = viewerInput.camera.frustum, far = frustum.far, near = frustum.near;
+            const depthBias = (1.0 + (indexBias * -2 * far * near) / (far + near) * (1.0 + indexBias));
+            sceneParams.u_Projection[10] *= depthBias;
+            fillSceneParamsData(d, offs, sceneParams);
+        }
+    }
+
+    public prepareToRender(camera: Camera): void {
         // Compute depth from camera.
         if (this.visible) {
             bboxScratch.transform(this.node.bbox, this.modelMatrix);
@@ -283,6 +309,12 @@ class Command_Node {
             this.children[i].stopAnimation();
     }
 
+    public setVisible(visible: boolean): void {
+        this.visible = visible;
+        for (let i = 0; i < this.children.length; i++)
+            this.children[i].setVisible(visible);
+    }
+
     public playAnimation(animationController: AnimationController, animation: AnimationEntry): void {
         const m = bindMeshAnimator(animationController, animation, this.node.nameStr);
         if (m)
@@ -293,27 +325,24 @@ class Command_Node {
     }
 }
 
-export class WorldRenderer implements Viewer.SceneGfx {
+export class WorldRenderer extends BasicGXRendererHelper {
     public name: string;
 
-    private viewRenderer = new GfxRenderInstViewRenderer();
-    private renderTarget = new BasicRenderTarget();
-
-    private bufferCoalescer: GfxBufferCoalescer;
+    private bufferCoalescer: GfxBufferCoalescerCombo;
     private batches: Batch[];
 
-    private batchCommands: Command_Batch[] = [];
-    private materialCommands: Command_Material[] = [];
-    private rootNode: Command_Node;
+    private batchInstances: BatchInstance[] = [];
+    private materialInstances: MaterialInstance[] = [];
+    private rootNode: NodeInstance;
     private rootMatrix: mat4 = mat4.create();
 
-    private renderHelper: GXRenderHelperGfx;
     private backgroundRenderer: BackgroundBillboardRenderer | null = null;
     private animationController = new AnimationController();
     public animationNames: string[];
 
     constructor(device: GfxDevice, private d: TTYDWorld, public textureHolder: TPLTextureHolder, backgroundTextureName: string | null) {
-        this.renderHelper = new GXRenderHelperGfx(device);
+        super(device);
+
         this.translateModel(device, d);
 
         const rootScale = 75;
@@ -325,7 +354,7 @@ export class WorldRenderer implements Viewer.SceneGfx {
         this.playAllAnimations();
 
         if (backgroundTextureName !== null)
-            this.backgroundRenderer = new BackgroundBillboardRenderer(device, this.viewRenderer, textureHolder, backgroundTextureName);
+            this.backgroundRenderer = new BackgroundBillboardRenderer(device, textureHolder, backgroundTextureName);
     }
 
     public playAllAnimations(): void {
@@ -335,8 +364,8 @@ export class WorldRenderer implements Viewer.SceneGfx {
 
     public playAnimation(animation: AnimationEntry): void {
         if (animation.materialAnimation !== null)
-            for (let i = 0; i < this.materialCommands.length; i++)
-                this.materialCommands[i].playAnimation(this.animationController, animation);
+            for (let i = 0; i < this.materialInstances.length; i++)
+                this.materialInstances[i].playAnimation(this.animationController, animation);
 
         if (animation.meshAnimation !== null)
             this.rootNode.playAnimation(this.animationController, animation);
@@ -355,84 +384,126 @@ export class WorldRenderer implements Viewer.SceneGfx {
     }
 
     public stopAllAnimations(): void {
-        for (let i = 0; i < this.materialCommands.length; i++)
-            this.materialCommands[i].stopAnimation();
+        for (let i = 0; i < this.materialInstances.length; i++)
+            this.materialInstances[i].stopAnimation();
 
         this.rootNode.stopAnimation();
     }
 
-    public prepareToRender(hostAccessPass: GfxHostAccessPass, viewerInput: Viewer.ViewerRenderInput): void {
-        if (this.backgroundRenderer !== null)
-            this.backgroundRenderer.prepareToRender(hostAccessPass, viewerInput);
+    public prepareToRender(device: GfxDevice, hostAccessPass: GfxHostAccessPass, viewerInput: Viewer.ViewerRenderInput): void {
+        viewerInput.camera.setClipPlanes(1, 32768);
 
-        this.renderHelper.fillSceneParams(viewerInput);
+        const renderInstManager = this.renderHelper.renderInstManager;
+        const template = this.renderHelper.pushTemplateRenderInst();
 
-        // Update models.
-        for (let i = 0; i < this.materialCommands.length; i++)
-            this.materialCommands[i].prepareToRender(this.renderHelper, this.textureHolder);
-
-        // Recursively update node model matrices.
-        const updateNode = (nodeCommand: Command_Node, parentMatrix: mat4, parentVisible: boolean | undefined) => {
-            const visible = parentVisible === false ? false : !(nodeCommand.node.visible === false);
-            nodeCommand.updateModelMatrix(parentMatrix);
-            nodeCommand.prepareToRender(viewerInput.camera, visible);
-            for (let i = 0; i < nodeCommand.children.length; i++)
-                updateNode(nodeCommand.children[i], nodeCommand.modelMatrix, visible);
-        };
-
-        updateNode(this.rootNode, this.rootMatrix, undefined);
-
-        // Update shapes
-        for (let i = 0; i < this.batchCommands.length; i++)
-            this.batchCommands[i].prepareToRender(this.renderHelper, viewerInput);
-
-        this.renderHelper.prepareToRender(hostAccessPass);
-    }
-
-    public render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput): GfxRenderPass {
         this.animationController.setTimeInMilliseconds(viewerInput.time);
 
-        const hostAccessPass = device.createHostAccessPass();
-        this.prepareToRender(hostAccessPass, viewerInput);
-        device.submitPass(hostAccessPass);
+        if (this.backgroundRenderer !== null)
+            this.backgroundRenderer.prepareToRender(this.renderHelper.renderInstManager, viewerInput);
 
-        this.viewRenderer.prepareToRender(device);
+        fillSceneParamsDataOnTemplate(template, viewerInput);
 
-        this.renderTarget.setParameters(device, viewerInput.viewportWidth, viewerInput.viewportHeight);
-        const passRenderer = this.renderTarget.createRenderPass(device, standardFullClearRenderPassDescriptor);
-        this.viewRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
-        this.viewRenderer.executeOnPass(device, passRenderer);
-        return passRenderer;
+        // Recursively update node model matrices.
+        const updateNode = (nodeInstance: NodeInstance, parentMatrix: mat4) => {
+            nodeInstance.updateModelMatrix(parentMatrix);
+            nodeInstance.prepareToRender(viewerInput.camera);
+            for (let i = 0; i < nodeInstance.children.length; i++)
+                updateNode(nodeInstance.children[i], nodeInstance.modelMatrix);
+        };
+
+        updateNode(this.rootNode, this.rootMatrix);
+
+        // First, go through materials and reset their material params blocks...
+        for (let i = 0; i < this.materialInstances.length; i++)
+            this.materialInstances[i].prepareToRender(this.renderHelper.renderInstManager, this.textureHolder);
+
+        // Update shapes
+        for (let i = 0; i < this.batchInstances.length; i++)
+            this.batchInstances[i].prepareToRender(device, this.renderHelper.renderInstManager, viewerInput);
+
+        for (let i = 0; i < this.materialInstances.length; i++)
+            this.materialInstances[i].materialParamsBlockOffs = 0;
+
+        renderInstManager.popTemplateRenderInst();
+        this.renderHelper.prepareToRender(device, hostAccessPass);
+    }
+
+    public createPanels(): UI.Panel[] {
+        const renderHacksPanel = new UI.Panel();
+        renderHacksPanel.setTitle(UI.RENDER_HACKS_ICON, 'Render Hacks');
+        const enableVertexColorsCheckbox = new UI.Checkbox('Enable Vertex Colors', true);
+        enableVertexColorsCheckbox.onchanged = () => {
+            for (let i = 0; i < this.materialInstances.length; i++)
+                this.materialInstances[i].setMaterialHacks({ disableVertexColors: !enableVertexColorsCheckbox.checked });
+        };
+        renderHacksPanel.contents.appendChild(enableVertexColorsCheckbox.elem);
+        const enableTextures = new UI.Checkbox('Enable Textures', true);
+        enableTextures.onchanged = () => {
+            for (let i = 0; i < this.materialInstances.length; i++)
+                this.materialInstances[i].setMaterialHacks({ disableTextures: !enableTextures.checked });
+        };
+        renderHacksPanel.contents.appendChild(enableTextures.elem);
+        const showTextureCoords = new UI.Checkbox('Show Texture Coordinates', false);
+        showTextureCoords.onchanged = () => {
+            for (let i = 0; i < this.materialInstances.length; i++)
+                this.materialInstances[i].setMaterialHacks({ useTextureCoords: showTextureCoords.checked });
+        };
+        renderHacksPanel.contents.appendChild(showTextureCoords.elem);
+        const enableANode = new UI.Checkbox('Enable Collision', false);
+        enableANode.onchanged = () => {
+            const aNodeInst = this.rootNode.children.find((nodeInstance) => nodeInstance.node.nameStr === this.d.information.aNodeStr);
+            aNodeInst.setVisible(enableANode.checked);
+        };
+        renderHacksPanel.contents.appendChild(enableANode.elem);
+        const enableSNode = new UI.Checkbox('Enable Render Root', true);
+        enableSNode.onchanged = () => {
+            const sNodeInst = this.rootNode.children.find((nodeInstance) => nodeInstance.node.nameStr === this.d.information.sNodeStr);
+            sNodeInst.setVisible(enableSNode.checked);
+        };
+        renderHacksPanel.contents.appendChild(enableSNode.elem);
+        const otherNodes = this.rootNode.children.filter((nodeInstance) => nodeInstance.node.nameStr !== this.d.information.aNodeStr && nodeInstance.node.nameStr !== this.d.information.sNodeStr);
+        if (otherNodes.length > 0) {
+            const enableOtherNodes = new UI.Checkbox('Enable Other Root Nodes', false);
+            enableOtherNodes.onchanged = () => {
+                otherNodes.forEach((nodeInstance) => nodeInstance.setVisible(enableOtherNodes.checked));
+            };
+            renderHacksPanel.contents.appendChild(enableOtherNodes.elem);
+        }
+        return [renderHacksPanel];
     }
 
     public destroy(device: GfxDevice): void {
+        super.destroy(device);
+
         this.bufferCoalescer.destroy(device);
-        this.materialCommands.forEach((cmd) => cmd.destroy(device));
-        this.batchCommands.forEach((cmd) => cmd.destroy(device));
-        this.renderHelper.destroy(device);
-        this.viewRenderer.destroy(device);
-        this.renderTarget.destroy(device);
+        this.materialInstances.forEach((cmd) => cmd.destroy(device));
+        this.batchInstances.forEach((cmd) => cmd.destroy(device));
         this.textureHolder.destroy(device);
         if (this.backgroundRenderer !== null)
             this.backgroundRenderer.destroy(device);
     }
 
-    private translatePart(device: GfxDevice, nodeCommand: Command_Node, part: SceneGraphPart): void {
+    private translatePart(device: GfxDevice, nodeInstance: NodeInstance, part: SceneGraphPart): void {
         const batch = part.batch;
         const batchIndex = this.batches.indexOf(batch);
         assert(batchIndex >= 0);
-        const materialCommand = this.materialCommands[part.material.index];
-        const batchCommand = new Command_Batch(device, this.renderHelper, materialCommand, nodeCommand, batch, this.bufferCoalescer.coalescedBuffers[batchIndex]);
-        this.batchCommands.push(batchCommand);
+        const materialInstance = this.materialInstances[part.material.index];
+        const cache = this.getCache();
+        const batchInstance = new BatchInstance(device, cache, materialInstance, nodeInstance, batch, this.bufferCoalescer.coalescedBuffers[batchIndex]);
+        this.batchInstances.push(batchInstance);
     }
 
-    private translateSceneGraph(device: GfxDevice, node: SceneGraphNode, parentPath: string = ''): Command_Node {
-        const nodeCommand = new Command_Node(node, parentPath);
-        for (const part of node.parts)
-            this.translatePart(device, nodeCommand, part);
-        for (const child of node.children)
-            nodeCommand.children.push(this.translateSceneGraph(device, child, nodeCommand.namePath));
-        return nodeCommand;
+    private translateSceneGraph(device: GfxDevice, node: SceneGraphNode, parentPath: string = '', childIndex: number = 0): NodeInstance {
+        const nodeInstance = new NodeInstance(node, parentPath, childIndex);
+        for (let i = 0; i < node.parts.length; i++)
+            this.translatePart(device, nodeInstance, node.parts[i]);
+        for (let i = 0; i < node.children.length; i++) {
+            const childInstance = this.translateSceneGraph(device, node.children[i], nodeInstance.namePath, i);
+            if (nodeInstance.isDecal)
+                childInstance.isDecal = true;
+            nodeInstance.children.push(childInstance);
+        }
+        return nodeInstance;
     }
 
     private collectBatches(batches: Batch[], node: SceneGraphNode): void {
@@ -443,17 +514,24 @@ export class WorldRenderer implements Viewer.SceneGfx {
     }
 
     private translateModel(device: GfxDevice, d: TTYDWorld): void {
-        this.materialCommands = d.materials.map((material) => new Command_Material(device, this.renderHelper, material));
+        this.materialInstances = d.materials.map((material) => {
+            return new MaterialInstance(device, this.renderHelper.renderInstManager.gfxRenderCache, material);
+        });
 
-        const rootNode = d.sNode;
+        const rootNode = d.rootNode;
 
         this.batches = [];
         this.collectBatches(this.batches, rootNode);
 
         // Coalesce buffers.
-        this.bufferCoalescer = loadedDataCoalescerGfx(device, this.batches.map((batch) => batch.loadedVertexData));
+        this.bufferCoalescer = loadedDataCoalescerComboGfx(device, this.batches.map((batch) => batch.loadedVertexData));
 
         this.rootNode = this.translateSceneGraph(device, rootNode);
-        this.renderHelper.finishBuilder(device, this.viewRenderer);
+
+        for (let i = 0; i < this.rootNode.children.length; i++) {
+            const nodeInstance = this.rootNode.children[i];
+            if (nodeInstance.node.nameStr !== d.information.sNodeStr)
+                nodeInstance.setVisible(false);
+        }
     }
 }

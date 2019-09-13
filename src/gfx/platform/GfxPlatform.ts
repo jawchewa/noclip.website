@@ -5,7 +5,7 @@
 
 import { GfxBuffer, GfxTexture, GfxColorAttachment, GfxDepthStencilAttachment, GfxSampler, GfxProgram, GfxInputLayout, GfxInputState, GfxRenderPipeline, GfxBindings, GfxResource } from "./GfxPlatformImpl";
 import { GfxFormat } from "./GfxPlatformFormat";
-import { DeviceProgram, DeviceProgramReflection } from "../../Program";
+import { DeviceProgram } from "../../Program";
 import { Color } from "../../Color";
 
 export enum GfxCompareMode {
@@ -125,8 +125,8 @@ export interface GfxBufferBinding {
 }
 
 export interface GfxSamplerBinding {
-    texture: GfxTexture;
-    sampler: GfxSampler;
+    gfxTexture: GfxTexture | null;
+    gfxSampler: GfxSampler | null;
 }
 
 export interface GfxBindingLayoutDescriptor {
@@ -137,7 +137,7 @@ export interface GfxBindingLayoutDescriptor {
 export interface GfxBindingsDescriptor {
     bindingLayout: GfxBindingLayoutDescriptor;
     uniformBufferBindings: GfxBufferBinding[];
-    samplerBindings: (GfxSamplerBinding | null)[];
+    samplerBindings: GfxSamplerBinding[];
 }
 
 export interface GfxInputLayoutDescriptor {
@@ -212,10 +212,10 @@ export interface GfxRenderPipelineDescriptor {
 
 // TODO(jstpierre): Support MRT. This might be tricksy.
 export interface GfxRenderPassDescriptor {
-    colorAttachment: GfxColorAttachment;
+    colorAttachment: GfxColorAttachment | null;
     colorLoadDisposition: GfxLoadDisposition;
     colorClearColor: Color;
-    depthStencilAttachment: GfxDepthStencilAttachment;
+    depthStencilAttachment: GfxDepthStencilAttachment | null;
     depthLoadDisposition: GfxLoadDisposition;
     depthClearValue: number;
     stencilLoadDisposition: GfxLoadDisposition;
@@ -224,15 +224,20 @@ export interface GfxRenderPassDescriptor {
 
 export interface GfxDeviceLimits {
     uniformBufferWordAlignment: number;
+    uniformBufferMaxPageWordSize: number;
 }
 
-export interface GfxProgramReflection extends DeviceProgramReflection {
+export interface GfxProgramReflection {
     name: string;
     uniqueKey: number;
 }
 
 export interface GfxInputStateReflection {
     inputLayout: GfxInputLayout;
+}
+
+export interface GfxRenderPipelineReflection {
+    uniqueHash: number;
 }
 
 export interface GfxDebugGroup {
@@ -267,6 +272,7 @@ export interface GfxRenderPass {
     // Draw commands.
     draw(vertexCount: number, firstVertex: number): void;
     drawIndexed(indexCount: number, firstIndex: number): void;
+    drawIndexedInstanced(indexCount: number, firstIndex: number, instanceCount: number): void;
 
     // Pass resolution.
     endPass(resolveColorAttachmentTo: GfxTexture | null): void;
@@ -304,10 +310,10 @@ export interface GfxDevice {
     submitPass(o: GfxPass): void;
 
     queryLimits(): GfxDeviceLimits;
-    queryProgram(program: GfxProgram): GfxProgramReflection;
     queryInputState(o: GfxInputState): GfxInputStateReflection;
     queryTextureFormatSupported(format: GfxFormat): boolean;
     queryPipelineReady(o: GfxRenderPipeline): boolean;
+    queryPlatformAvailable(): boolean;
 
     // Debugging and high-level queries.
     setResourceName(o: GfxResource, s: string): void;
@@ -317,4 +323,3 @@ export interface GfxDevice {
 
 export { GfxBuffer, GfxTexture, GfxColorAttachment, GfxDepthStencilAttachment, GfxSampler, GfxProgram, GfxInputLayout, GfxInputState, GfxRenderPipeline, GfxBindings };
 export { GfxFormat };
- 

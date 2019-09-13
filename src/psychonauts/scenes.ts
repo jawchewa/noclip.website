@@ -1,31 +1,32 @@
 
 import * as Viewer from '../viewer';
-import Progressable from '../Progressable';
 import { GfxDevice } from '../gfx/platform/GfxPlatform';
-import { fetchData } from '../fetch';
+import { DataFetcher } from '../DataFetcher';
 import * as PPF from './ppf';
 import { PsychonautsRenderer, SceneRenderer } from './render';
+import { SceneContext } from '../SceneBase';
 
 class PsychonautsSceneDesc implements Viewer.SceneDesc {
     constructor(public id: string, public name: string) {
     }
 
-    private fetchPPF(id: string, hasScene: boolean): Progressable<PPF.PPAK> {
-        return fetchData(`psychonauts/${id}.ppf`).then((buffer) => {
+    private fetchPPF(id: string, dataFetcher: DataFetcher, hasScene: boolean): Promise<PPF.PPAK> {
+        return dataFetcher.fetchData(`psychonauts/${id}.ppf`).then((buffer) => {
             const ppf = PPF.parse(buffer, hasScene);
             return ppf;
         })
     }
 
-    public createScene(device: GfxDevice): Progressable<Viewer.SceneGfx> {
-        return Progressable.all([this.fetchPPF('common', false), this.fetchPPF(this.id, true)]).then(([commonPPF, scenePPF]) => {
-            const renderer = new PsychonautsRenderer();
+    public createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+        const dataFetcher = context.dataFetcher;
+        return Promise.all([this.fetchPPF('common', dataFetcher, false), this.fetchPPF(this.id, dataFetcher, true)]).then(([commonPPF, scenePPF]) => {
+            const renderer = new PsychonautsRenderer(device);
             // TODO(jstpierre): Only translate the textures that are actually used.
             renderer.textureHolder.addTextures(device, commonPPF.textures);
             renderer.textureHolder.addTextures(device, scenePPF.textures);
 
             const sceneRenderer = new SceneRenderer(device, renderer.textureHolder, scenePPF.mainScene);
-            renderer.addSceneRenderer(device, sceneRenderer);
+            renderer.sceneRenderers.push(sceneRenderer);
             return renderer;
         });
     }
@@ -37,17 +38,17 @@ const sceneDescs = [
     new PsychonautsSceneDesc("STMU", "Main Menu"),
     "Whispering Rock Summer Camp",
     new PsychonautsSceneDesc("CARE", "Reception Area and Wilderness"),
-    new PsychonautsSceneDesc("CARE_Night", "Reception Area and Wilderness (Night)"),
+    new PsychonautsSceneDesc("CARE_NIGHT", "Reception Area and Wilderness (Night)"),
     new PsychonautsSceneDesc("CAMA", "Campgrounds Main"),
-    new PsychonautsSceneDesc("CAMA_Night", "Campgrounds Main (Night)"),
+    new PsychonautsSceneDesc("CAMA_NIGHT", "Campgrounds Main (Night)"),
     new PsychonautsSceneDesc("CAKC", "Kids' Cabins"),
-    new PsychonautsSceneDesc("CAKC_Night", "Kids' Cabins (Night)"),
+    new PsychonautsSceneDesc("CAKC_NIGHT", "Kids' Cabins (Night)"),
     new PsychonautsSceneDesc("CABH", "Boathouse and Beach"),
-    new PsychonautsSceneDesc("CABH_Night", "Boathouse and Beach (Night)"),
+    new PsychonautsSceneDesc("CABH_NIGHT", "Boathouse and Beach (Night)"),
     new PsychonautsSceneDesc("CALI", "Lodge"),
-    new PsychonautsSceneDesc("CALI_Night", "Lodge (Night)"),
+    new PsychonautsSceneDesc("CALI_NIGHT", "Lodge (Night)"),
     new PsychonautsSceneDesc("CAGP", "GPC and Wilderness"),
-    new PsychonautsSceneDesc("CAGP_Night", "GPC and Wilderness (Night)"),
+    new PsychonautsSceneDesc("CAGP_NIGHT", "GPC and Wilderness (Night)"),
     new PsychonautsSceneDesc("CAJA", "Ford's Sanctuary"),
     new PsychonautsSceneDesc("CASA", "Sasha's Underground Lab"),
     new PsychonautsSceneDesc("CABU", "Bunkhouse File Select UI"),
