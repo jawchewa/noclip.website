@@ -2,9 +2,11 @@
 import { assert, readString } from '../util';
 import ArrayBufferSlice from '../ArrayBufferSlice';
 import { mat4, vec4 } from 'gl-matrix';
-import { TextureFormat, decodeTexture, computeTextureByteSize } from './pica_texture';
-import { GfxCullMode, GfxBlendMode, GfxBlendFactor, GfxMegaStateDescriptor } from '../gfx/platform/GfxPlatform';
+import { TextureFormat, decodeTexture, computeTextureByteSize, getTextureFormatFromGLFormat } from './pica_texture';
+import { GfxCullMode, GfxBlendMode, GfxBlendFactor, GfxMegaStateDescriptor, GfxCompareMode, GfxColorWriteMask, GfxChannelBlendState } from '../gfx/platform/GfxPlatform';
 import { makeMegaState } from '../gfx/helpers/GfxMegaStateDescriptorHelpers';
+import { Color, colorNewFromRGBA8, colorNew } from '../Color';
+import { reverseDepthForCompareMode } from '../gfx/helpers/ReversedDepthHelpers';
 
 export interface VatrChunk {
     dataBuffer: ArrayBufferSlice;
@@ -49,32 +51,6 @@ export interface Bone {
     translationZ: number;
 }
 
-export function calcModelMtx(dst: mat4, scaleX: number, scaleY: number, scaleZ: number, rotationX: number, rotationY: number, rotationZ: number, translationX: number, translationY: number, translationZ: number): void {
-    const sinX = Math.sin(rotationX), cosX = Math.cos(rotationX);
-    const sinY = Math.sin(rotationY), cosY = Math.cos(rotationY);
-    const sinZ = Math.sin(rotationZ), cosZ = Math.cos(rotationZ);
-
-    dst[0] =  scaleX * (cosY * cosZ);
-    dst[1] =  scaleX * (sinZ * cosY);
-    dst[2] =  scaleX * (-sinY);
-    dst[3] =  0.0;
-
-    dst[4] =  scaleY * (sinX * cosZ * sinY - cosX * sinZ);
-    dst[5] =  scaleY * (sinX * sinZ * sinY + cosX * cosZ);
-    dst[6] =  scaleY * (sinX * cosY);
-    dst[7] =  0.0;
-
-    dst[8] =  scaleZ * (cosX * cosZ * sinY + sinX * sinZ);
-    dst[9] =  scaleZ * (cosX * sinZ * sinY - sinX * cosZ);
-    dst[10] = scaleZ * (cosY * cosX);
-    dst[11] = 0.0;
-
-    dst[12] = translationX;
-    dst[13] = translationY;
-    dst[14] = translationZ;
-    dst[15] = 1.0;
-}
-
 function readSklChunk(cmb: CMB, buffer: ArrayBufferSlice): void {
     const view = buffer.createDataView();
 
@@ -113,7 +89,7 @@ export enum TextureFilter {
     LINEAR = 0x2601,
     NEAREST_MIPMAP_NEAREST = 0x2700,
     LINEAR_MIPMAP_NEAREST = 0x2701,
-    NEAREST_MIPMIP_LINEAR = 0x2702,
+    NEAREST_MIPMAP_LINEAR = 0x2702,
     LINEAR_MIPMAP_LINEAR = 0x2703,
 }
 
@@ -133,40 +109,148 @@ export interface TextureBinding {
     wrapT: TextureWrapMode;
 }
 
+export const enum CombineResultOpDMP {
+    REPLACE                  = 0x1E01,
+    MODULATE                 = 0x2100,
+    ADD                      = 0x0104,
+    ADD_SIGNED               = 0x8574,
+    INTERPOLATE              = 0x8575,
+    SUBTRACT                 = 0x84E7,
+    DOT3_RGB                 = 0x86AE,
+    DOT3_RGBA                = 0x86AF,
+    MULT_ADD                 = 0x6401,
+    ADD_MULT                 = 0x6402,
+};
+
+export const enum CombineScaleDMP {
+    _1                       = 0x01,
+    _2                       = 0x02,
+    _4                       = 0x04,
+};
+
+export const enum CombineBufferInputDMP {
+    PREVIOUS                 = 0x8578,
+    PREVIOUS_BUFFER          = 0x8579,
+};
+
+export const enum CombineSourceDMP {
+    TEXTURE0                 = 0x84C0,
+    TEXTURE1                 = 0x84C1,
+    TEXTURE2                 = 0x84C2,
+    TEXTURE3                 = 0x84C3,
+    CONSTANT                 = 0x8576,
+    PRIMARY_COLOR            = 0x8577,
+    PREVIOUS                 = 0x8578,
+    PREVIOUS_BUFFER          = 0x8579,
+    FRAGMENT_PRIMARY_COLOR   = 0x6210,
+    FRAGMENT_SECONDARY_COLOR = 0x6211,
+};
+
+export const enum CombineOpDMP {
+    SRC_COLOR                = 0x0300,
+    ONE_MINUS_SRC_COLOR      = 0x0301,
+    SRC_ALPHA                = 0x0302,
+    ONE_MINUS_SRC_ALPHA      = 0x0303,
+    SRC_R                    = 0x8580,
+    SRC_G                    = 0x8581,
+    SRC_B                    = 0x8582,
+    ONE_MINUS_SRC_R          = 0x8583,
+    ONE_MINUS_SRC_G          = 0x8584,
+    ONE_MINUS_SRC_B          = 0x8585,
+};
+
+export interface TextureCombiner {
+    combineRGB: CombineResultOpDMP;
+    combineAlpha: CombineResultOpDMP;
+    scaleRGB: CombineScaleDMP;
+    scaleAlpha: CombineScaleDMP;
+    bufferInputRGB: CombineBufferInputDMP;
+    bufferInputAlpha: CombineBufferInputDMP;
+    source0RGB: CombineSourceDMP;
+    source1RGB: CombineSourceDMP;
+    source2RGB: CombineSourceDMP;
+    op0RGB: CombineOpDMP;
+    op1RGB: CombineOpDMP;
+    op2RGB: CombineOpDMP;
+    source0Alpha: CombineSourceDMP;
+    source1Alpha: CombineSourceDMP;
+    source2Alpha: CombineSourceDMP;
+    op0Alpha: CombineOpDMP;
+    op1Alpha: CombineOpDMP;
+    op2Alpha: CombineOpDMP;
+    constantIndex: number;
+}
+
+export interface TextureEnvironment {
+    textureCombiners: TextureCombiner[];
+    combinerBufferColor: Color;
+}
+
 export interface Material {
     index: number;
     textureBindings: TextureBinding[];
     textureMatrices: mat4[];
+    constantColors: Color[];
+    textureEnvironment: TextureEnvironment;
+    alphaTestFunction: GfxCompareMode;
     alphaTestReference: number;
     renderFlags: GfxMegaStateDescriptor;
     isTransparent: boolean;
+    polygonOffset: number;
 }
 
 export function calcTexMtx(dst: mat4, scaleS: number, scaleT: number, rotation: number, translationS: number, translationT: number): void {
-    const sinR = Math.sin(rotation);
-    const cosR = Math.cos(rotation);
+    const theta = rotation * Math.PI;
+    const sinR = Math.sin(theta);
+    const cosR = Math.cos(theta);
 
     mat4.identity(dst);
 
     dst[0]  = scaleS *  cosR;
-    dst[4]  = scaleT * -sinR;
-    dst[12] = translationS;
-
-    dst[1]  = scaleS *  sinR;
+    dst[1]  = scaleT * -sinR;
+    dst[4]  = scaleS *  sinR;
     dst[5]  = scaleT *  cosR;
-    dst[13] = translationT;
+    dst[12] = scaleS * ((-0.5 * cosR) - (0.5 * sinR - 0.5) - translationS);
+    dst[13] = scaleT * ((-0.5 * cosR) + (0.5 * sinR - 0.5) + translationT) + 1;
+}
+
+function translateCullModeFlags(cullModeFlags: number): GfxCullMode {
+    switch (cullModeFlags) {
+    case 0x00:
+        return GfxCullMode.FRONT_AND_BACK;
+    case 0x01:
+        return GfxCullMode.BACK;
+    case 0x02:
+        return GfxCullMode.FRONT;
+    case 0x03:
+        return GfxCullMode.NONE;
+    default:
+        throw "whoops";
+    }
 }
 
 function readMatsChunk(cmb: CMB, buffer: ArrayBufferSlice) {
     const view = buffer.createDataView();
 
     assert(readString(buffer, 0x00, 0x04) === 'mats');
-    const count = view.getUint32(0x08, true);
+    const materialCount = view.getUint32(0x08, true);
+
+    let materialDataSize = 0x15C;
+    if (cmb.version === Version.Majora || cmb.version === Version.LuigisMansion)
+        materialDataSize += 0x10;
 
     let offs = 0x0C;
-    for (let i = 0; i < count; i++) {
-        const numTextureBindings = view.getUint16(offs + 0x0C, true);
-        const numTextureMatrices = view.getUint16(offs + 0x0E, true);
+
+    const textureCombinerSettingsTableOffs = offs + (materialCount * materialDataSize);
+
+    for (let i = 0; i < materialCount; i++) {
+        const cullModeFlags = view.getUint8(offs + 0x04);
+        assert(cullModeFlags >= 0x00 && cullModeFlags <= 0x03);
+        const cullMode = translateCullModeFlags(cullModeFlags);
+
+        const isPolygonOffsetEnabled = view.getUint8(offs + 0x05);
+        const polygonOffsetUnit = view.getInt8(offs + 0x07);
+        const polygonOffset = isPolygonOffsetEnabled ? polygonOffsetUnit / 0x10000 : 0;
 
         let bindingOffs = offs + 0x10;
         const textureBindings: TextureBinding[] = [];
@@ -179,6 +263,12 @@ function readMatsChunk(cmb: CMB, buffer: ArrayBufferSlice) {
             const magFilter = view.getUint16(bindingOffs + 0x06, true);
             const wrapS = view.getUint16(bindingOffs + 0x08, true);
             const wrapT = view.getUint16(bindingOffs + 0x0A, true);
+            const minLod = view.getFloat32(bindingOffs + 0x10, true);
+            const lodBias = view.getFloat32(bindingOffs + 0x14, true);
+            const borderColorR = view.getUint8(bindingOffs + 0x14);
+            const borderColorG = view.getUint8(bindingOffs + 0x15);
+            const borderColorB = view.getUint8(bindingOffs + 0x16);
+            const borderColorA = view.getUint8(bindingOffs + 0x17);
             textureBindings.push({ index: j, textureIdx, minFilter, magFilter, wrapS, wrapT });
             bindingOffs += 0x18;
         }
@@ -193,24 +283,154 @@ function readMatsChunk(cmb: CMB, buffer: ArrayBufferSlice) {
             const translationT = view.getFloat32(matricesOffs + 0x10, true);
             const rotation = view.getFloat32(matricesOffs + 0x14, true);
             const texMtx = mat4.create();
-            calcTexMtx(texMtx, scaleS, scaleT, translationS, translationT, rotation);
+            calcTexMtx(texMtx, scaleS, scaleT, rotation, translationS, translationT);
             textureMatrices.push(texMtx);
             matricesOffs += 0x18;
         }
 
-        const alphaTestEnable = !!view.getUint8(offs + 0x130);
-        const alphaTestReference = alphaTestEnable ? (view.getUint8(offs + 0x131) / 0xFF) : -1;
+        const unkColor0 = view.getUint32(offs + 0xB0, true);
 
-        const blendEnable = !!view.getUint8(offs + 0x138);
-        const isTransparent = blendEnable;
+        const constantColors: Color[] = [];
+        constantColors[0] = colorNewFromRGBA8(view.getUint32(offs + 0xB4, false));
+        constantColors[1] = colorNewFromRGBA8(view.getUint32(offs + 0xB8, false));
+        constantColors[2] = colorNewFromRGBA8(view.getUint32(offs + 0xBC, false));
+        constantColors[3] = colorNewFromRGBA8(view.getUint32(offs + 0xC0, false));
+        constantColors[4] = colorNewFromRGBA8(view.getUint32(offs + 0xC4, false));
+        constantColors[5] = colorNewFromRGBA8(view.getUint32(offs + 0xC8, false));
+
+        const bufferColorR = view.getFloat32(offs + 0xCC, true);
+        const bufferColorG = view.getFloat32(offs + 0xD0, true);
+        const bufferColorB = view.getFloat32(offs + 0xD4, true);
+        const bufferColorA = view.getFloat32(offs + 0xD8, true);
+
+        const bumpTextureIndex = view.getUint16(offs + 0xDC, true);
+        const lightEnvBumpUsage = view.getUint16(offs + 0xDE, true);
+
+        // Fragment lighting table.
+        const reflectanceRSamplerIsAbs = !!view.getUint8(offs + 0xF0);
+        // assert(view.getUint8(offs + 0xF1) === 0xFF); // Padding?
+        const reflectanceRSamplerInput = view.getUint16(offs + 0xF2, true);
+        const reflectanceRSamplerScale = view.getUint32(offs + 0xF4, true);
+
+        const reflectanceGSamplerIsAbs = !!view.getUint8(offs + 0xF8);
+        // assert(view.getUint8(offs + 0xF9) === 0xFF); // Padding?
+        const reflectanceGSamplerInput = view.getUint16(offs + 0xFA, true);
+        const reflectanceGSamplerScale = view.getUint32(offs + 0xFC, true);
+
+        const reflectanceBSamplerIsAbs = !!view.getUint8(offs + 0x100);
+        // assert(view.getUint8(offs + 0x101) === 0xFF); // Padding?
+        const reflectanceBSamplerInput = view.getUint16(offs + 0x102, true);
+        const reflectanceBSamplerScale = view.getUint32(offs + 0x104, true);
+
+        const distibution0SamplerIsAbs = !!view.getUint8(offs + 0x108);
+        // assert(view.getUint8(offs + 0x109) === 0xFF); // Padding?
+        const distibution0SamplerInput = view.getUint16(offs + 0x10A, true);
+        const distibution0SamplerScale = view.getUint32(offs + 0x10C, true);
+
+        const distibution1SamplerIsAbs = !!view.getUint8(offs + 0x110);
+        // assert(view.getUint8(offs + 0x111) === 0xFF); // Padding?
+        const distibution1SamplerInput = view.getUint16(offs + 0x112, true);
+        const distibution1SamplerScale = view.getUint32(offs + 0x114, true);
+
+        const fresnelSamplerIsAbs = !!view.getUint8(offs + 0x118);
+        // assert(view.getUint8(offs + 0x119) === 0xFF); // Padding?
+        const fresnelSamplerInput = view.getUint16(offs + 0x11A, true);
+        const fresnelSamplerScale = view.getUint32(offs + 0x11C, true);
+
+        const textureCombinerTableCount = view.getUint32(offs + 0x120, true);
+        const textureCombiners: TextureCombiner[] = [];
+        let textureCombinerTableIdx = offs + 0x124;
+        for (let i = 0; i < textureCombinerTableCount; i++) {
+            const textureCombinerIndex = view.getUint16(textureCombinerTableIdx + 0x00, true);
+            const cmbOffs = textureCombinerSettingsTableOffs + textureCombinerIndex * 0x28;
+
+            const combineRGB: CombineResultOpDMP          = view.getUint16(cmbOffs + 0x00, true);
+            const combineAlpha: CombineResultOpDMP        = view.getUint16(cmbOffs + 0x02, true);
+            const scaleRGB: CombineScaleDMP               = view.getUint16(cmbOffs + 0x04, true);
+            const scaleAlpha: CombineScaleDMP             = view.getUint16(cmbOffs + 0x06, true);
+            const bufferInputRGB: CombineBufferInputDMP   = view.getUint16(cmbOffs + 0x08, true);
+            const bufferInputAlpha: CombineBufferInputDMP = view.getUint16(cmbOffs + 0x0A, true);
+            const source0RGB: CombineSourceDMP            = view.getUint16(cmbOffs + 0x0C, true);
+            const source1RGB: CombineSourceDMP            = view.getUint16(cmbOffs + 0x0E, true);
+            const source2RGB: CombineSourceDMP            = view.getUint16(cmbOffs + 0x10, true);
+            const op0RGB: CombineOpDMP                    = view.getUint16(cmbOffs + 0x12, true);
+            const op1RGB: CombineOpDMP                    = view.getUint16(cmbOffs + 0x14, true);
+            const op2RGB: CombineOpDMP                    = view.getUint16(cmbOffs + 0x16, true);
+            const source0Alpha: CombineSourceDMP          = view.getUint16(cmbOffs + 0x18, true);
+            const source1Alpha: CombineSourceDMP          = view.getUint16(cmbOffs + 0x1A, true);
+            const source2Alpha: CombineSourceDMP          = view.getUint16(cmbOffs + 0x1C, true);
+            const op0Alpha: CombineOpDMP                  = view.getUint16(cmbOffs + 0x1E, true);
+            const op1Alpha: CombineOpDMP                  = view.getUint16(cmbOffs + 0x20, true);
+            const op2Alpha: CombineOpDMP                  = view.getUint16(cmbOffs + 0x22, true);
+            const constantIndex                           = view.getUint32(cmbOffs + 0x24, true);
+            assert(constantIndex < 6);
+
+            textureCombiners.push({
+                combineRGB, combineAlpha, scaleRGB, scaleAlpha, bufferInputRGB, bufferInputAlpha,
+                source0RGB, source1RGB, source2RGB, op0RGB, op1RGB, op2RGB,
+                source0Alpha, source1Alpha, source2Alpha, op0Alpha, op1Alpha, op2Alpha,
+                constantIndex,
+            });
+
+            textureCombinerTableIdx += 0x02;
+        }
+
+        const alphaTestEnabled = !!view.getUint8(offs + 0x130);
+        const alphaTestReference = (view.getUint8(offs + 0x131) / 0xFF);
+        const alphaTestFunction: GfxCompareMode = alphaTestEnabled ? view.getUint16(offs + 0x132, true) : GfxCompareMode.ALWAYS;
+
+        const depthTestEnabled = !!view.getUint8(offs + 0x134);
+        const depthWriteEnabled = !!view.getUint8(offs + 0x135);
+        const depthTestFunction: GfxCompareMode = depthTestEnabled ? view.getUint16(offs + 0x136, true) : GfxCompareMode.ALWAYS;
+
+        const blendEnabled = !!view.getUint8(offs + 0x138);
+
+        // Making a guess that this is LogicOpEnabled / LogicOp.
+        assert(view.getUint8(offs + 0x139) == 0);
+        assert(view.getUint16(offs + 0x13A, true) == 0);
+
+        const blendSrcFactorRGB: GfxBlendFactor = view.getUint16(offs + 0x13C, true);
+        const blendDstFactorRGB: GfxBlendFactor = view.getUint16(offs + 0x13E, true);
+        const blendFunctionRGB: GfxBlendMode = blendEnabled ? view.getUint16(offs + 0x140, true) : GfxBlendMode.NONE;
+        const rgbBlendState: GfxChannelBlendState = {
+            blendMode: blendFunctionRGB,
+            blendDstFactor: blendDstFactorRGB,
+            blendSrcFactor: blendSrcFactorRGB,
+        };
+        // TODO(jstpierre): What is at 0x142?
+        const blendSrcFactorAlpha: GfxBlendFactor = view.getUint16(offs + 0x144, true);
+        const blendDstFactorAlpha: GfxBlendFactor = view.getUint16(offs + 0x146, true);
+        const blendFunctionAlpha: GfxBlendMode = blendEnabled ? view.getUint16(offs + 0x148, true) : GfxBlendMode.NONE;
+        const alphaBlendState: GfxChannelBlendState = {
+            blendMode: blendFunctionAlpha,
+            blendDstFactor: blendDstFactorAlpha,
+            blendSrcFactor: blendSrcFactorAlpha,
+        };
+        // TODO(jstpierre): Padding here at 0x14A?
+        const blendColorR = view.getFloat32(offs + 0x14C, true);
+        const blendColorG = view.getFloat32(offs + 0x150, true);
+        const blendColorB = view.getFloat32(offs + 0x154, true);
+        const blendColorA = view.getFloat32(offs + 0x158, true);
+        const blendConstant = colorNew(blendColorR, blendColorG, blendColorB, blendColorA);
+
+        const isTransparent = blendEnabled;
         const renderFlags = makeMegaState({
-            blendSrcFactor: view.getUint16(offs + 0x13C, true) as GfxBlendFactor,
-            blendDstFactor: view.getUint16(offs + 0x13E, true) as GfxBlendFactor,
-            blendMode: blendEnable ? view.getUint16(offs + 0x140, true) as GfxBlendMode : GfxBlendMode.NONE,
-            depthWrite: !isTransparent,
-            cullMode: GfxCullMode.BACK,
+            attachmentsState: [
+                {
+                    blendConstant,
+                    colorWriteMask: GfxColorWriteMask.ALL,
+                    rgbBlendState,
+                    alphaBlendState,
+                },
+            ],
+            depthCompare: reverseDepthForCompareMode(depthTestFunction),
+            depthWrite: depthWriteEnabled,
+            cullMode,
         });
-        cmb.materials.push({ index: i, textureBindings, textureMatrices, alphaTestReference, renderFlags, isTransparent });
+
+        const combinerBufferColor = colorNew(bufferColorR, bufferColorG, bufferColorB, bufferColorA);
+        const textureEnvironment = { textureCombiners, combinerBufferColor };
+        cmb.materials.push({ index: i, textureBindings, textureMatrices, constantColors, textureEnvironment, alphaTestFunction, alphaTestReference, renderFlags, isTransparent, polygonOffset });
 
         offs += 0x15C;
 
@@ -232,7 +452,6 @@ export interface Texture {
     height: number;
     format: TextureFormat;
     levels: TextureLevel[];
-    totalTextureSize: number;
 }
 
 export function parseTexChunk(buffer: ArrayBufferSlice, texData: ArrayBufferSlice | null, cmbName: string = ''): Texture[] {
@@ -249,7 +468,7 @@ export function parseTexChunk(buffer: ArrayBufferSlice, texData: ArrayBufferSlic
         const unk06 = view.getUint16(offs + 0x06, true);
         const width = view.getUint16(offs + 0x08, true);
         const height = view.getUint16(offs + 0x0A, true);
-        const format = view.getUint32(offs + 0x0C, true);
+        const glFormat = view.getUint32(offs + 0x0C, true);
         let dataOffs = view.getUint32(offs + 0x10, true);
         const dataEnd = dataOffs + size;
         const texName = readString(buffer, offs + 0x14, 0x10);
@@ -258,6 +477,8 @@ export function parseTexChunk(buffer: ArrayBufferSlice, texData: ArrayBufferSlic
         offs += 0x24;
 
         const levels: TextureLevel[] = [];
+
+        const format = getTextureFormatFromGLFormat(glFormat);
 
         if (texData !== null) {
             let mipWidth = width, mipHeight = height;
@@ -270,7 +491,7 @@ export function parseTexChunk(buffer: ArrayBufferSlice, texData: ArrayBufferSlic
             }
         }
 
-        textures.push({ name, format, width, height, levels, totalTextureSize: size });
+        textures.push({ name, format, width, height, levels });
     }
 
     return textures;
@@ -344,7 +565,7 @@ function readMshsChunk(cmb: CMB, buffer: ArrayBufferSlice): void {
     let idx = 0x10;
     for (let i = 0; i < count; i++) {
         const mesh = new Mesh();
-        mesh.sepdIdx = view.getUint16(idx, true);
+        mesh.sepdIdx = view.getUint16(idx + 0x00, true);
         mesh.matsIdx = view.getUint8(idx + 0x02);
         cmb.meshs.push(mesh);
 
@@ -414,17 +635,17 @@ function readPrmsChunk(cmb: CMB, buffer: ArrayBufferSlice): Prms {
     assert(boneTableCount < 0x10);
     const boneTable = new Uint16Array(boneTableCount);
 
-    // This is likely an array of primitives in the set, but 3DS models are probably
-    // rarely enough to over the bone table limit...
-    const prmOffs = view.getUint32(0x14, true);
-
-    const prm = readPrmChunk(cmb, buffer.slice(prmOffs));
-
     let boneTableIdx = view.getUint32(0x10, true);
     for (let i = 0; i < boneTableCount; i++) {
         boneTable[i] = view.getUint16(boneTableIdx, true);
         boneTableIdx += 0x02;
     }
+
+    // This is likely an array of primitives in the set, but 3DS models are probably
+    // rarely enough to over the bone table limit...
+    const prmOffs = view.getUint32(0x14, true);
+
+    const prm = readPrmChunk(cmb, buffer.slice(prmOffs));
 
     return { prm, skinningMode, boneTable };
 }
@@ -499,7 +720,6 @@ function readSepdChunk(cmb: CMB, buffer: ArrayBufferSlice): Sepd {
 
     // take you to the next dimension, the
     sepd.boneDimension = view.getUint16(sepdArrIdx + 0x00, true);
-
     sepdArrIdx += 0x04;
 
     for (let i = 0; i < count; i++) {

@@ -19,7 +19,7 @@ import ArrayBufferSlice from "../ArrayBufferSlice";
 //       Literal: copy one byte from src to dest.
 
 export function decompressLZ_Normal(srcView: DataView) {
-    let uncompressedSize = srcView.getUint32(0x00, true) >> 8;
+    let uncompressedSize = srcView.getUint32(0x00, true) >>> 8;
     const dstBuffer = new Uint8Array(uncompressedSize);
 
     let srcOffs = 0x04;
@@ -79,8 +79,8 @@ export function decompressLZ_Extended(srcView: DataView) {
             if (commandByte & (1 << i)) {
                 const indicator = srcView.getUint8(srcOffs) >>> 4;
 
-                let windowOffset;
-                let windowLength;
+                let windowOffset = -1;
+                let windowLength = -1;
                 if (indicator > 1) {
                     // Two bytes. AB CD
                     const tmp = srcView.getUint16(srcOffs, false);
@@ -141,5 +141,21 @@ export function decompress(srcBuffer: ArrayBufferSlice): ArrayBufferSlice {
             return decompressLZ_Normal(srcView);
     } else {
         throw new Error("Unsupported CX compression type");
+    }
+}
+
+export function maybeDecompress(srcBuffer: ArrayBufferSlice): ArrayBufferSlice {
+    const srcView = srcBuffer.createDataView();
+
+    const magic = srcView.getUint8(0x00);
+    const compressionType: CompressionType = magic & 0xF0;
+    if (compressionType === CompressionType.LZ) {
+        const extendedFormat = !!(magic & 0x0F);
+        if (extendedFormat)
+            return decompressLZ_Extended(srcView);
+        else
+            return decompressLZ_Normal(srcView);
+    } else {
+        return srcBuffer;
     }
 }

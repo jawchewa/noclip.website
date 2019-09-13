@@ -3,9 +3,10 @@
 
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { assert, readString } from "../util";
-import { parseResDictGeneric, parseResDict, fx16, fx32, calcTexMtx_Maya } from "./nsbmd";
+import { parseResDictGeneric, parseResDict, fx16, fx32, calcTexMtx, TexMtxMode } from "./nsbmd";
 import { mat2d, vec2 } from "gl-matrix";
 import AnimationController from "../AnimationController";
+import { lerp } from "../MathHelpers";
 
 export interface BTA0 {
     srt0: SRT0;
@@ -150,10 +151,6 @@ export function getAnimFrame(anim: AnimationBase, frame: number, loopMode: LoopM
     }
 }
 
-function lerp(k0: number, k1: number, t: number): number {
-    return k0 + (k1 - k0) * t;
-}
-
 function sampleFloatAnimationTrack(track: AnimationTrack, frame: number): number {
     const frames = track.frames;
 
@@ -221,7 +218,7 @@ export class SRT0TexMtxAnimator {
     constructor(public animationController: AnimationController, public srt0: SRT0, public texData: SRT0_TexData) {
     }
 
-    public calcTexMtx(dst: mat2d, texScaleS: number, texScaleT: number, loopMode = LoopMode.REPEAT): void {
+    public calcTexMtx(dst: mat2d, texMtxMode: TexMtxMode, texScaleS: number, texScaleT: number, loopMode = LoopMode.REPEAT): void {
         const texData = this.texData;
 
         const frame = this.animationController.getTimeInFrames();
@@ -232,7 +229,7 @@ export class SRT0TexMtxAnimator {
         sampleRotAnimationTrack(scratchVec2, texData.rot, animFrame);
         const translationS = sampleFloatAnimationTrack(texData.transS, animFrame);
         const translationT = sampleFloatAnimationTrack(texData.transT, animFrame);
-        calcTexMtx_Maya(dst, texScaleS, texScaleT, scaleS, scaleT, scratchVec2[0], scratchVec2[1], translationS, translationT);
+        calcTexMtx(dst, texMtxMode, texScaleS, texScaleT, scaleS, scaleT, scratchVec2[0], scratchVec2[1], translationS, translationT);
     }
 }
 

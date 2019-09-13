@@ -1,35 +1,40 @@
 
-import { fetchData } from '../fetch';
 import { GfxDevice } from '../gfx/platform/GfxPlatform';
-import Progressable from '../Progressable';
 import * as Viewer from '../viewer';
 import { TPLTextureHolder, WorldRenderer } from './render';
 import * as TPL from './tpl';
 import * as World from './world';
-
+import { SceneContext } from '../SceneBase';
+import { DataFetcherFlags } from '../DataFetcher';
 
 class TTYDSceneDesc implements Viewer.SceneDesc {
     constructor(public id: string, public name: string = id) {
     }
 
-    public createScene(device: GfxDevice, abortSignal: AbortSignal): Progressable<Viewer.SceneGfx> {
+    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+        const dataFetcher = context.dataFetcher;
         const pathBase = `ttyd/${this.id}`;
         const bgPath = `ttyd/b/${this.id}.tpl`;
-        return Progressable.all([fetchData(`${pathBase}/d.blob`, abortSignal), fetchData(`${pathBase}/t.blob`, abortSignal), fetchData(bgPath, abortSignal)]).then(([dBuffer, tBuffer, bgBuffer]) => {
-            const d = World.parse(dBuffer);
-            const textureHolder = new TPLTextureHolder();
-            const tpl = TPL.parse(tBuffer, d.textureNameTable);
-            textureHolder.addTPLTextures(device, tpl);
 
-            let backgroundTextureName: string | null = null;
-            if (bgBuffer.byteLength > 0) {
-                backgroundTextureName = `bg_${this.id}`;
-                const bgTpl = TPL.parse(bgBuffer, [backgroundTextureName]);
-                textureHolder.addTPLTextures(device, bgTpl);
-            }
+        const [dBuffer, tBuffer, bgBuffer] = await Promise.all([
+            dataFetcher.fetchData(`${pathBase}/d.blob`),
+            dataFetcher.fetchData(`${pathBase}/t.blob`),
+            dataFetcher.fetchData(bgPath, DataFetcherFlags.ALLOW_404),
+        ]);
 
-            return new WorldRenderer(device, d, textureHolder, backgroundTextureName);
-        });
+        const d = World.parse(dBuffer);
+        const textureHolder = new TPLTextureHolder();
+        const tpl = TPL.parse(tBuffer, d.textureNameTable);
+        textureHolder.addTPLTextures(device, tpl);
+
+        let backgroundTextureName: string | null = null;
+        if (bgBuffer.byteLength > 0) {
+            backgroundTextureName = `bg_${this.id}`;
+            const bgTpl = TPL.parse(bgBuffer, [backgroundTextureName]);
+            textureHolder.addTPLTextures(device, bgTpl);
+        }
+
+        return new WorldRenderer(device, d, textureHolder, backgroundTextureName);
     }
 }
 
@@ -366,6 +371,15 @@ const sceneDescs = [
     new TTYDSceneDesc('stg_03', "Battle Stage: Blue (Unused)"),
     new TTYDSceneDesc('stg_04', "Battle Stage: White (Unused)"),
 
+    new TTYDSceneDesc('tik_09', "Pit of 100 Trials Intermediate Floor #1 (Unused)"),
+    new TTYDSceneDesc('tik_10', "Pit of 100 Trials Intermediate Floor #2 (Unused)"),
+    new TTYDSceneDesc('tik_14', "Pit of 100 Trials Lower Floor (Unused)"),
+
+    new TTYDSceneDesc('rsh_05_b'),
+    new TTYDSceneDesc('rsh_05_c'),
+    new TTYDSceneDesc('rsh_06_b'),
+    new TTYDSceneDesc('rsh_06_c'),
+
     "Battle Backgrounds",
     new TTYDSceneDesc('stg_00_0'),
     new TTYDSceneDesc('stg_00_1'),
@@ -415,10 +429,6 @@ const sceneDescs = [
     new TTYDSceneDesc('stg_08_5'),
     new TTYDSceneDesc('stg_08_6'),
     new TTYDSceneDesc('stg01_1'),
-    new TTYDSceneDesc('rsh_05_b'),
-    new TTYDSceneDesc('rsh_05_c'),
-    new TTYDSceneDesc('rsh_06_b'),
-    new TTYDSceneDesc('rsh_06_c'),
 ];
 
 const id = 'ttyd';

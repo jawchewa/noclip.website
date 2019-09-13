@@ -3,20 +3,24 @@
   "private": true,
   "license": "MIT",
   "devDependencies": {
-    "assemblyscript": "github:AssemblyScript/assemblyscript",
-    "crc-32": "^1.2.0",
-    "gl-matrix": "^3.0.0",
-    "pako": "^1.0.7",
-    "parcel-bundler": "^1.11.0",
-    "typescript": "^3.3.3333"
-  },
-  "dependencies": {
     "@types/gl-matrix": "^2.4.4",
     "@types/node": "^11.9.5",
     "@types/pako": "^1.0.0",
+    "@types/puppeteer": "^1.12.4",
     "@types/systemjs": "^0.20.6",
-    "@types/webassembly-js-api": "0.0.2",
-    "@types/webgl2": "0.0.4"
+    "@types/webassembly-js-api": "0.0.3",
+    "@types/webgl2": "0.0.4",
+    "assemblyscript": "github:AssemblyScript/assemblyscript",
+    "iconv-lite": "^0.4.24",
+    "parcel-bundler": "^1.12.3",
+    "puppeteer": "^1.16.0",
+    "typescript": "^3.3.3333"
+  },
+  "dependencies": {
+    "@sentry/browser": "^5.1.1",
+    "crc-32": "^1.2.0",
+    "gl-matrix": "^3.0.0",
+    "pako": "^1.0.7"
   },
   "scripts": {
     "start": "parcel src/index.html",
@@ -24,6 +28,10 @@
     "asbuild:gx_tex": "npx asc gx_texture_as.ts --baseDir ./src/assembly -O3 --noLib -b gx_texture_as.wasm -t gx_texture_as.wat",
     "asbuild:yaz0": "npx asc Yaz0_as.ts --baseDir ./src/assembly -O3 --noLib -b Yaz0_as.wasm -t Yaz0_as.wat",
     "asbuild": "yarn asbuild:gx_tex && yarn asbuild:yaz0 && node src/build_wat.js",
-    "typecheck": "tsc -w --noEmit"
-  }
+    "typecheck": "tsc -w --noEmit",
+    "strict-null-checks": "tsc -p tsconfig.strictNullChecks.json -w"
+  },
+  "browserslist": [
+    "last 2 Chrome versions"
+  ]
 }

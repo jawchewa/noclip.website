@@ -6,26 +6,18 @@
 import { nArray } from "./util";
 
 // Jenkins One-at-a-Time hash from http://www.burtleburtle.net/bob/hash/doobs.html
-export function hashCodeNumbers(key: number[]): number {
-    const n = key.length;
-    let hash: number = 0;
-    for (let i = 0; i < n; i++) {
-        hash += key[i];
-        hash += hash << 10;
-        hash += hash >>> 6;
-    }
+export function hashCodeNumberUpdate(hash: number, v: number): number {
+    hash += v;
+    hash += hash << 10;
+    hash += hash >>> 6;
+    return hash >>> 0;
+}
+
+export function hashCodeNumberFinish(hash: number): number {
     hash += hash << 3;
     hash ^= hash >>> 11;
     hash += hash << 15;
-    return hash;
-}
-
-export function hashCodeString(key: string): number {
-    const n = key.length;
-    const numbers = Array(n);
-    for (let i = 0; i < n; i++)
-        numbers[i] = key.charCodeAt(i);
-    return hashCodeNumbers(numbers);
+    return hash >>> 0;
 }
 
 // Pass this as a hash function to use a one-bucket HashMap (equivalent to linear search in an array),
@@ -40,22 +32,26 @@ class HashBucket<K, V> {
     public values: V[] = [];
 }
 
-const NUM_BUCKETS = 16;
 export class HashMap<K, V> {
-    public buckets: HashBucket<K, V>[] = nArray(NUM_BUCKETS, () => null);
+    public buckets: (HashBucket<K, V> | null)[];
+    private needsReconfigure: boolean = false;
 
-    constructor(private keyEqualFunc: EqualFunc<K>, private keyHashFunc: HashFunc<K>) {
+    constructor(private keyEqualFunc: EqualFunc<K>, private keyHashFunc: HashFunc<K>, numBuckets = 16, private autoLoadFactor: number | null = null) {
+        if (keyHashFunc === nullHashFunc)
+            numBuckets = 1;
+        this.buckets = nArray(numBuckets, () => null);
     }
 
     private findBucketIndex(bucket: HashBucket<K, V>, k: K): number {
-        for (let i = bucket.keys.length - 1; i >= 0; i--)
+        for (let i = 0; i < bucket.keys.length; i++)
             if (this.keyEqualFunc(k, bucket.keys[i]))
                 return i;
         return -1;
     }
 
-    private findBucket(k: K): HashBucket<K, V> {
-        return this.buckets[this.keyHashFunc(k) % NUM_BUCKETS];
+    private findBucket(k: K): HashBucket<K, V> | null {
+        const bw = this.keyHashFunc(k) % this.buckets.length;
+        return this.buckets[bw];
     }
 
     public get(k: K): V | null {
@@ -66,14 +62,15 @@ export class HashMap<K, V> {
         return bucket.values[bi];
     }
 
-    public insert(k: K, v: V) {
-        const bw = this.keyHashFunc(k) % NUM_BUCKETS;
+    public add(k: K, v: V): void {
+        const bw = this.keyHashFunc(k) % this.buckets.length;
         if (this.buckets[bw] === null) this.buckets[bw] = new HashBucket<K, V>();
-        const bucket = this.buckets[bw];
-        let bi = this.findBucketIndex(bucket, k);
-        if (bi === -1) bi = bucket.keys.length;
-        bucket.keys[bi] = k;
-        bucket.values[bi] = v;
+        const bucket = this.buckets[bw]!;
+        bucket.keys.push(k);
+        bucket.values.push(v);
+
+        if (this.autoLoadFactor !== null)
+            this.checkForReconfigure();
     }
 
     public delete(k: K): void {
@@ -99,7 +96,7 @@ export class HashMap<K, V> {
         for (let i = 0; i < this.buckets.length; i++) {
             const bucket = this.buckets[i];
             if (bucket === null) continue;
-            acc += this.buckets[i].keys.length;
+            acc += bucket.keys.length;
         }
         return acc;
     }
@@ -111,5 +108,47 @@ export class HashMap<K, V> {
             for (let j = bucket.keys.length; j >= 0; j--)
                 yield [bucket.keys[j], bucket.values[j]];
         }
+    }
+
+    public checkForReconfigure(): void {
+        // In order to cut down on rehashing time, we will only reconfigure our HashMap
+        // after a frame delay. This is designed for the case where items are inserted
+        // in a large time block at the beginning of the scene load.
+        if (this.needsReconfigure)
+            return;
+
+        let numBuckets = Math.ceil(this.size() / this.autoLoadFactor);
+        if (numBuckets <= this.buckets.length)
+            return;
+
+        this.needsReconfigure = true;
+        requestAnimationFrame(() => this.manuallyReconfigure());
+    }
+
+    public manuallyReconfigure(): void {
+        let numBuckets = Math.ceil(this.size() / this.autoLoadFactor);
+        if (numBuckets <= this.buckets.length)
+            return;
+
+        // Align to nearest multiple of original numBuckets.
+
+        const newBuckets: (HashBucket<K, V> | null)[] = nArray(numBuckets, () => null);
+        for (let i = 0; i < this.buckets.length; i++) {
+            const bucket = this.buckets[i];
+            if (bucket === null) continue;
+            for (let j = 0; j < bucket.keys.length; j++) {
+                const bw = this.keyHashFunc(bucket.keys[j]) % newBuckets.length;
+                if (newBuckets[bw] === null) newBuckets[bw] = new HashBucket<K, V>();
+                const newBucket = newBuckets[bw]!;
+                newBucket.keys.push(bucket.keys[j]);
+                newBucket.values.push(bucket.values[j]);
+            }
+        }
+        this.buckets = newBuckets;
+        this.needsReconfigure = false;
+    }
+
+    public calcLoadFactor(): number {
+        return this.size() / this.buckets.length;
     }
 }

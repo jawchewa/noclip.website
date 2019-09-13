@@ -1,5 +1,6 @@
 
 import { SaveManager, GlobalSaveManager } from "./SaveManager";
+import { GlobalGrabManager } from './GrabManager';
 
 declare global {
     interface HTMLElement {
@@ -26,18 +27,17 @@ function isModifier(key: string) {
 export type Listener = (inputManager: InputManager) => void;
 
 export default class InputManager {
+    public invertY = false;
+    public invertX = false;
+
     public toplevel: HTMLElement;
     // tristate. non-existent = not pressed, false = pressed but not this frame, true = pressed this frame.
     public keysDown: Map<string, boolean>;
     public dx: number;
     public dy: number;
     public dz: number;
-    public button: number;
-    private lastX: number;
-    private lastY: number;
-    public grabbing: boolean = false;
-    public onisdraggingchanged: () => void | null = null;
-    public invertY: boolean = false;
+    public button: number = -1;
+    public onisdraggingchanged: (() => void) | null = null;
     private listeners: Listener[] = [];
     private scrollListeners: Listener[] = [];
     private usePointerLock: boolean = true;
@@ -54,12 +54,21 @@ export default class InputManager {
         document.addEventListener('keyup', this._onKeyUp, { capture: true });
         window.addEventListener('blur', this._onBlur);
         this.toplevel.addEventListener('wheel', this._onWheel, { passive: false });
-        this.toplevel.addEventListener('mousedown', this._onMouseDown);
+        this.toplevel.addEventListener('mousedown', (e) => {
+            this.button = e.button;
+            GlobalGrabManager.takeGrab(this, e, { takePointerLock: this.usePointerLock });
+            if (this.onisdraggingchanged !== null)
+                this.onisdraggingchanged();
+        });
 
         this.afterFrame();
 
         GlobalSaveManager.addSettingListener('InvertY', (saveManager: SaveManager, key: string) => {
             this.invertY = saveManager.loadSetting<boolean>(key, false);
+        });
+
+        GlobalSaveManager.addSettingListener('InvertX', (saveManager: SaveManager, key: string) => {
+            this.invertX = saveManager.loadSetting<boolean>(key, false);
         });
     }
 
@@ -88,7 +97,7 @@ export default class InputManager {
     }
 
     public isDragging(): boolean {
-        return this.grabbing;
+        return GlobalGrabManager.hasGrabListener(this);
     }
 
     public afterFrame() {
@@ -147,60 +156,14 @@ export default class InputManager {
         this.callScrollListeners();
     };
 
-    private _setGrabbing(v: boolean) {
-        if (this.grabbing === v)
-            return;
-
-        this.grabbing = v;
-        this.toplevel.style.cursor = v ? '-webkit-grabbing' : '-webkit-grab';
-        this.toplevel.style.cursor = v ? 'grabbing' : 'grab';
-
-        if (v) {
-            document.addEventListener('mousemove', this._onMouseMove);
-            document.addEventListener('mouseup', this._onMouseUp);
-        } else {
-            document.removeEventListener('mousemove', this._onMouseMove);
-            document.removeEventListener('mouseup', this._onMouseUp);
-        }
-
-        if (this.onisdraggingchanged)
-            this.onisdraggingchanged();
-    }
-
-    private _onMouseMove = (e: MouseEvent) => {
-        if (!this.grabbing)
-            return;
-        let dx: number, dy: number;
-        if (e.movementX !== undefined) {
-            dx = e.movementX;
-            dy = e.movementY;
-        } else {
-            dx = e.pageX - this.lastX;
-            dy = e.pageY - this.lastY;
-            this.lastX = e.pageX;
-            this.lastY = e.pageY;
-        }
+    public onMotion = (dx: number, dy: number): void => {
         this.dx += dx;
         this.dy += dy;
     };
 
-    private _onMouseUp = (e: MouseEvent) => {
-        this._setGrabbing(false);
-        this.button = 0;
-        if (document.exitPointerLock !== undefined)
-            document.exitPointerLock();
-    };
-
-    private _onMouseDown = (e: MouseEvent) => {
-        this.button = e.button;
-        this.lastX = e.pageX;
-        this.lastY = e.pageY;
-        this._setGrabbing(true);
-        // Needed to make the cursor update in Chrome. See:
-        // https://bugs.chromium.org/p/chromium/issues/detail?id=676644
-        this.toplevel.focus();
-        e.preventDefault();
-        if (this.usePointerLock && this.toplevel.requestPointerLock !== undefined)
-            this.toplevel.requestPointerLock();
+    public onGrabReleased = (): void => {
+        this.button = -1;
+        if (this.onisdraggingchanged !== null)
+            this.onisdraggingchanged();
     };
 }

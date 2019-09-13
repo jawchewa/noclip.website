@@ -1,18 +1,143 @@
 
-// @ts-ignore
-import { readFileSync } from 'fs';
 import * as Viewer from '../viewer';
-import { DeviceProgram, DeviceProgramReflection } from "../Program";
-import { Texture, getFormatString, RSPOutput, Vertex, DrawCall, GeometryMode } from "./f3dex";
-import { GfxDevice, GfxTextureDimension, GfxFormat, GfxTexture, GfxSampler, GfxWrapMode, GfxTexFilterMode, GfxMipFilterMode, GfxBuffer, GfxBufferUsage, GfxInputLayout, GfxInputState, GfxVertexAttributeDescriptor, GfxVertexAttributeFrequency, GfxBindingLayoutDescriptor, GfxBufferFrequencyHint, GfxHostAccessPass, GfxBlendMode, GfxBlendFactor, GfxCullMode } from "../gfx/platform/GfxPlatform";
+import { DeviceProgram } from "../Program";
+import { Texture, getFormatString, RSPOutput, Vertex, DrawCall, GeometryMode, OtherModeH_CycleType } from "./f3dex";
+import { GfxDevice, GfxTextureDimension, GfxFormat, GfxTexture, GfxSampler, GfxWrapMode, GfxTexFilterMode, GfxMipFilterMode, GfxBuffer, GfxBufferUsage, GfxInputLayout, GfxInputState, GfxVertexAttributeDescriptor, GfxVertexAttributeFrequency, GfxBindingLayoutDescriptor, GfxBlendMode, GfxBlendFactor, GfxCullMode, GfxMegaStateDescriptor, GfxProgram } from "../gfx/platform/GfxPlatform";
 import { makeStaticDataBuffer } from '../gfx/helpers/BufferHelpers';
 import { assert, nArray } from '../util';
-import { GfxRenderInstBuilder, GfxRenderInst, GfxRenderInstViewRenderer } from '../gfx/render/GfxRenderer';
-import { GfxRenderBuffer } from '../gfx/render/GfxRenderBuffer';
 import { fillMatrix4x4, fillMatrix4x3, fillMatrix4x2 } from '../gfx/helpers/UniformBufferHelpers';
 import { mat4 } from 'gl-matrix';
 import { computeViewMatrix, computeViewMatrixSkybox } from '../Camera';
 import { TextureMapping } from '../TextureHolder';
+import { interactiveVizSliderSelect } from '../DebugJunk';
+import { GfxRenderInstManager } from '../gfx/render/GfxRenderer';
+
+class F3DEX_Program extends DeviceProgram {
+    public static a_Position = 0;
+    public static a_Color = 1;
+    public static a_TexCoord = 2;
+
+    public static ub_SceneParams = 0;
+    public static ub_DrawParams = 1;
+
+    public both = `
+precision mediump float;
+
+layout(row_major, std140) uniform ub_SceneParams {
+    Mat4x4 u_Projection;
+};
+
+layout(row_major, std140) uniform ub_DrawParams {
+    Mat4x3 u_BoneMatrix[1];
+    Mat4x2 u_TexMatrix[2];
+};
+
+uniform sampler2D u_Texture[2];
+
+varying vec4 v_Color;
+varying vec4 v_TexCoord;
+`;
+
+    public vert = `
+layout(location = 0) in vec3 a_Position;
+layout(location = 1) in vec4 a_Color;
+layout(location = 2) in vec2 a_TexCoord;
+
+vec3 Monochrome(vec3 t_Color) {
+    // NTSC primaries.
+    return vec3(dot(t_Color.rgb, vec3(0.299, 0.587, 0.114)));
+}
+
+void main() {
+    gl_Position = Mul(u_Projection, Mul(_Mat4x4(u_BoneMatrix[0]), vec4(a_Position, 1.0)));
+    v_Color = a_Color;
+
+#ifdef USE_MONOCHROME_VERTEX_COLOR
+    v_Color.rgb = Monochrome(v_Color.rgb);
+#endif
+
+    v_TexCoord.xy = Mul(u_TexMatrix[0], vec4(a_TexCoord, 1.0, 1.0));
+    v_TexCoord.zw = Mul(u_TexMatrix[1], vec4(a_TexCoord, 1.0, 1.0));
+}
+`;
+
+    constructor(private drawCall: DrawCall) {
+        super();
+        this.frag = this.generateFrag();
+    }
+
+    private generateAlphaTest(): string {
+        const alphaCompare = (this.drawCall.DP_OtherModeL >>> 0) & 0x03;
+        if (alphaCompare !== 0x00) {
+            return `
+    if (t_Color.a < 0.0125)
+        discard;
+`;
+        } else {
+            return "";
+        }
+    }
+
+    private generateFrag(): string {
+        const drawCall = this.drawCall;
+        const cycletype: OtherModeH_CycleType = (drawCall.DP_OtherModeH >>> 20) & 0x03;
+
+        const textFilt = (this.drawCall.DP_OtherModeH >>> 12) & 0x03;
+        let texFiltStr: string;
+        if (textFilt === TextFilt.G_TF_POINT)
+            texFiltStr = 'Point';
+        else if (textFilt === TextFilt.G_TF_AVERAGE)
+            texFiltStr = 'Average';
+        else if (textFilt === TextFilt.G_TF_BILERP)
+            texFiltStr = 'Bilerp';
+
+        return `
+vec4 Texture2D_N64_Point(sampler2D t_Texture, vec2 t_TexCoord) {
+    return texture(t_Texture, t_TexCoord);
+}
+
+vec4 Texture2D_N64_Average(sampler2D t_Texture, vec2 t_TexCoord) {
+    // Unimplemented.
+    return texture(t_Texture, t_TexCoord);
+}
+
+// Implements N64-style "triangle bilienar filtering" with three taps.
+// Based on ArthurCarvalho's implementation, modified by NEC and Jasper for noclip.
+vec4 Texture2D_N64_Bilerp(sampler2D t_Texture, vec2 t_TexCoord) {
+    vec2 t_Size = vec2(textureSize(t_Texture, 0));
+    vec2 t_Offs = fract(t_TexCoord*t_Size - vec2(0.5));
+    t_Offs -= step(1.0, t_Offs.x + t_Offs.y);
+    vec4 t_S0 = texture(t_Texture, t_TexCoord - t_Offs / t_Size);
+    vec4 t_S1 = texture(t_Texture, t_TexCoord - vec2(t_Offs.x - sign(t_Offs.x), t_Offs.y) / t_Size);
+    vec4 t_S2 = texture(t_Texture, t_TexCoord - vec2(t_Offs.x, t_Offs.y - sign(t_Offs.y)) / t_Size);
+    return t_S0 + abs(t_Offs.x)*(t_S1-t_S0) + abs(t_Offs.y)*(t_S2-t_S0);
+}
+
+#define Texture2D_N64 Texture2D_N64_${texFiltStr}
+
+void main() {
+    vec4 t_Color = vec4(1.0);
+
+#ifdef USE_TEXTURE
+    t_Color *= Texture2D_N64(u_Texture[0], v_TexCoord.xy);
+#endif
+
+#ifdef USE_VERTEX_COLOR
+    t_Color.rgba *= v_Color.rgba;
+#endif
+
+#ifdef USE_ALPHA_VISUALIZER
+    t_Color.rgb = vec3(v_Color.a);
+    t_Color.a = 1.0;
+#endif
+
+${this.generateAlphaTest()}
+
+    gl_FragColor = t_Color;
+}
+`;
+    }
+}
 
 export function textureToCanvas(texture: Texture): Viewer.Texture {
     const canvas = document.createElement("canvas");
@@ -26,21 +151,8 @@ export function textureToCanvas(texture: Texture): Viewer.Texture {
     ctx.putImageData(imgData, 0, 0);
     const surfaces = [ canvas ];
     const extraInfo = new Map<string, string>();
-    extraInfo.set('Format', getFormatString(texture));
+    extraInfo.set('Format', getFormatString(texture.tile.fmt, texture.tile.siz));
     return { name: texture.name, surfaces, extraInfo };
-}
-
-class F3DEX_Program extends DeviceProgram {
-    public static a_Position = 0;
-    public static a_Color = 1;
-    public static a_TexCoord = 2;
-
-    public static ub_SceneParams = 0;
-    public static ub_DrawParams = 1;
-
-    private static program = readFileSync('src/bk/program.glsl', { encoding: 'utf8' });
-    public static programReflection: DeviceProgramReflection = DeviceProgram.parseReflectionDefinitions(F3DEX_Program.program);
-    public both = F3DEX_Program.program;
 }
 
 const enum TexCM {
@@ -92,8 +204,8 @@ export class N64Data {
 
         const vertexBufferData = makeVertexBufferData(this.rspOutput.vertices);
         this.vertexBuffer = makeStaticDataBuffer(device, GfxBufferUsage.VERTEX, vertexBufferData);
-        assert(this.rspOutput.vertices.length <= 0xFFFF);
-        const indexBufferData = new Uint16Array(this.rspOutput.indices);
+        assert(this.rspOutput.vertices.length <= 0xFFFFFFFF);
+        const indexBufferData = new Uint32Array(this.rspOutput.indices);
         this.indexBuffer = makeStaticDataBuffer(device, GfxBufferUsage.INDEX, indexBufferData.buffer);
 
         const vertexAttributeDescriptors: GfxVertexAttributeDescriptor[] = [
@@ -103,7 +215,7 @@ export class N64Data {
         ];
 
         this.inputLayout = device.createInputLayout({
-            indexBufferFormat: GfxFormat.U16_R,
+            indexBufferFormat: GfxFormat.U32_R,
             vertexAttributeDescriptors,
         });
 
@@ -148,16 +260,16 @@ export class N64Data {
 }
 
 function translateCullMode(m: number): GfxCullMode {
-    const cullFront = !!(m & 0x200);
-    const cullBack = !!(m & 0x400);
+    const cullFront = !!(m & 0x1000);
+    const cullBack = !!(m & 0x2000);
     if (cullFront && cullBack)
-        return GfxCullMode.NONE;
-    else if (cullFront)
-        return GfxCullMode.BACK;
-    else if (cullBack)
-        return GfxCullMode.FRONT;
-    else
         return GfxCullMode.FRONT_AND_BACK;
+    else if (cullFront)
+        return GfxCullMode.FRONT;
+    else if (cullBack)
+        return GfxCullMode.BACK;
+    else
+        return GfxCullMode.NONE;
 }
 
 const enum TextFilt {
@@ -168,42 +280,37 @@ const enum TextFilt {
 
 const modelViewScratch = mat4.create();
 const texMatrixScratch = mat4.create();
-const textureMappings = nArray(2, () => new TextureMapping());
 class DrawCallInstance {
-    private renderInst: GfxRenderInst;
     private textureEntry: Texture[] = [];
     private vertexColorsEnabled = true;
     private texturesEnabled = true;
     private monochromeVertexColorsEnabled = false;
     private alphaVisualizerEnabled = false;
+    private megaStateFlags: Partial<GfxMegaStateDescriptor>;
+    private program!: DeviceProgram;
+    private gfxProgram: GfxProgram | null = null;
+    private textureMappings = nArray(2, () => new TextureMapping());
+    public visible = true;
 
-    constructor(device: GfxDevice, n64Data: N64Data, renderInstBuilder: GfxRenderInstBuilder, private drawCall: DrawCall, private drawIndex: number) {
-        this.renderInst = renderInstBuilder.pushRenderInst();
-        renderInstBuilder.newUniformBufferInstance(this.renderInst, F3DEX_Program.ub_DrawParams);
-
-        for (let i = 0; i < textureMappings.length; i++) {
-            textureMappings[i].reset();
-
+    constructor(n64Data: N64Data, private drawCall: DrawCall) {
+        for (let i = 0; i < this.textureMappings.length; i++) {
             if (i < this.drawCall.textureIndices.length) {
                 const idx = this.drawCall.textureIndices[i];
                 this.textureEntry[i] = n64Data.rspOutput.textures[idx];
-                textureMappings[i].gfxTexture = n64Data.textures[idx];
-                textureMappings[i].gfxSampler = n64Data.samplers[idx];
+                this.textureMappings[i].gfxTexture = n64Data.textures[idx];
+                this.textureMappings[i].gfxSampler = n64Data.samplers[idx];
             }
         }
 
         const zUpd = !!(this.drawCall.DP_OtherModeL & 0x20);
-        this.renderInst.setMegaStateFlags({ depthWrite: zUpd });
+        this.megaStateFlags = { depthWrite: zUpd };
         this.setBackfaceCullingEnabled(true);
         this.createProgram();
-
-        this.renderInst.setSamplerBindingsFromTextureMappings(textureMappings);
-
-        this.renderInst.drawIndexes(drawCall.indexCount, drawCall.firstIndex);
     }
 
     private createProgram(): void {
-        const program = new F3DEX_Program();
+        const program = new F3DEX_Program(this.drawCall);
+
         // TODO(jstpierre): texture combiners.
         if (this.texturesEnabled && this.drawCall.textureIndices.length)
             program.defines.set('USE_TEXTURE', '1');
@@ -218,20 +325,13 @@ class DrawCallInstance {
         if (this.alphaVisualizerEnabled)
             program.defines.set('USE_ALPHA_VISUALIZER', '1');
 
-        const textFilt = (this.drawCall.DP_OtherModeH >>> 12) & 0x03;
-        if (textFilt === TextFilt.G_TF_POINT)
-            program.defines.set(`USE_TEXTFILT_POINT`, '1');
-        else if (textFilt === TextFilt.G_TF_AVERAGE)
-            program.defines.set(`USE_TEXTFILT_AVERAGE`, '1');
-        else if (textFilt === TextFilt.G_TF_BILERP)
-            program.defines.set(`USE_TEXTFILT_BILERP`, '1')
-
-        this.renderInst.setDeviceProgram(program);
+        this.program = program;
+        this.gfxProgram = null;
     }
 
     public setBackfaceCullingEnabled(v: boolean): void {
         const cullMode = v ? translateCullMode(this.drawCall.SP_GeometryMode) : GfxCullMode.NONE;
-        this.renderInst.setMegaStateFlags({ cullMode });
+        this.megaStateFlags.cullMode = cullMode;
     }
 
     public setVertexColorsEnabled(v: boolean): void {
@@ -270,9 +370,21 @@ class DrawCallInstance {
         }
     }
 
-    public prepareToRender(drawParamsBuffer: GfxRenderBuffer, viewerInput: Viewer.ViewerRenderInput, isSkybox: boolean, modelMatrix: mat4): void {
-        let offs = this.renderInst.getUniformBufferOffset(F3DEX_Program.ub_DrawParams);
-        const mappedF32 = drawParamsBuffer.mapBufferF32(offs, 12 + 8*2);
+    public prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, isSkybox: boolean, modelMatrix: mat4): void {
+        if (!this.visible)
+            return;
+
+        if (this.gfxProgram === null)
+            this.gfxProgram = renderInstManager.gfxRenderCache.createProgram(device, this.program);
+
+        const renderInst = renderInstManager.pushRenderInst();
+        renderInst.setGfxProgram(this.gfxProgram);
+        renderInst.setSamplerBindingsFromTextureMappings(this.textureMappings);
+        renderInst.setMegaStateFlags(this.megaStateFlags);
+        renderInst.drawIndexes(this.drawCall.indexCount, this.drawCall.firstIndex);
+
+        let offs = renderInst.allocateUniformBuffer(F3DEX_Program.ub_DrawParams, 12 + 8*2);
+        const mappedF32 = renderInst.mapUniformBufferF32(F3DEX_Program.ub_DrawParams);
         if (isSkybox)
             computeViewMatrixSkybox(modelViewScratch, viewerInput.camera);
         else
@@ -288,7 +400,8 @@ class DrawCallInstance {
     }
 
     public destroy(device: GfxDevice): void {
-        device.destroyProgram(this.renderInst.gfxProgram);
+        if (this.gfxProgram !== null)
+            device.destroyProgram(this.gfxProgram);
     }
 }
 
@@ -297,43 +410,29 @@ export const enum BKPass {
     SKYBOX = 0x02,
 }
 
+const bindingLayouts: GfxBindingLayoutDescriptor[] = [
+    { numUniformBuffers: 2, numSamplers: 2, },
+];
+
 export class N64Renderer {
-    private sceneParamsBuffer: GfxRenderBuffer;
-    private drawParamsBuffer: GfxRenderBuffer;
-    private renderInstBuilder: GfxRenderInstBuilder;
-    private templateRenderInst: GfxRenderInst;
     private drawCallInstances: DrawCallInstance[] = [];
+    private megaStateFlags: Partial<GfxMegaStateDescriptor>;
     public isSkybox = false;
     public modelMatrix = mat4.create();
 
-    constructor(device: GfxDevice, private n64Data: N64Data) {
-        this.sceneParamsBuffer = new GfxRenderBuffer(GfxBufferUsage.UNIFORM, GfxBufferFrequencyHint.DYNAMIC, `ub_SceneParams`);
-        this.drawParamsBuffer = new GfxRenderBuffer(GfxBufferUsage.UNIFORM, GfxBufferFrequencyHint.DYNAMIC, `ub_DrawParams`);
-
-        const bindingLayouts: GfxBindingLayoutDescriptor[] = [
-            { numUniformBuffers: 1, numSamplers: 0, }, // Scene
-            { numUniformBuffers: 1, numSamplers: 2, }, // Mesh
-        ];
-        const uniformBuffers = [ this.sceneParamsBuffer, this.drawParamsBuffer ];
-
-        this.renderInstBuilder = new GfxRenderInstBuilder(device, F3DEX_Program.programReflection, bindingLayouts, uniformBuffers);
-        this.templateRenderInst = this.renderInstBuilder.pushTemplateRenderInst();
-        this.renderInstBuilder.newUniformBufferInstance(this.templateRenderInst, F3DEX_Program.ub_SceneParams);
-
-        this.templateRenderInst.inputState = this.n64Data.inputState;
-        this.templateRenderInst.setMegaStateFlags({
+    constructor(private n64Data: N64Data) {
+        this.megaStateFlags = {
             blendMode: GfxBlendMode.ADD,
             blendSrcFactor: GfxBlendFactor.SRC_ALPHA,
             blendDstFactor: GfxBlendFactor.ONE_MINUS_SRC_ALPHA,
-        });
+        };
 
         for (let i = 0; i < this.n64Data.rspOutput.drawCalls.length; i++)
-            this.drawCallInstances.push(new DrawCallInstance(device, this.n64Data, this.renderInstBuilder, this.n64Data.rspOutput.drawCalls[i], i));
+            this.drawCallInstances.push(new DrawCallInstance(this.n64Data, this.n64Data.rspOutput.drawCalls[i]));
     }
 
-    public addToViewRenderer(device: GfxDevice, viewRenderer: GfxRenderInstViewRenderer): void {
-        this.renderInstBuilder.popTemplateRenderInst();
-        this.renderInstBuilder.finish(device, viewRenderer);
+    public slider(): void {
+        interactiveVizSliderSelect(this.drawCallInstances);
     }
 
     public setBackfaceCullingEnabled(v: boolean): void {
@@ -361,23 +460,23 @@ export class N64Renderer {
             this.drawCallInstances[i].setAlphaVisualizerEnabled(v);
     }
 
-    public prepareToRender(hostAccessPass: GfxHostAccessPass, viewerInput: Viewer.ViewerRenderInput): void {
-        this.templateRenderInst.passMask = this.isSkybox ? BKPass.SKYBOX : BKPass.MAIN;
+    public prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput): void {
+        const template = renderInstManager.pushTemplateRenderInst();
+        template.setBindingLayouts(bindingLayouts);
+        template.setInputLayoutAndState(this.n64Data.inputLayout, this.n64Data.inputState);
+        template.setMegaStateFlags(this.megaStateFlags);
 
-        let offs = this.templateRenderInst.getUniformBufferOffset(F3DEX_Program.ub_SceneParams);
-        const mappedF32 = this.sceneParamsBuffer.mapBufferF32(offs, 16);
+        template.filterKey = this.isSkybox ? BKPass.SKYBOX : BKPass.MAIN;
+
+        let offs = template.allocateUniformBuffer(F3DEX_Program.ub_SceneParams, 16);
+        const mappedF32 = template.mapUniformBufferF32(F3DEX_Program.ub_SceneParams);
         offs += fillMatrix4x4(mappedF32, offs, viewerInput.camera.projectionMatrix);
 
         for (let i = 0; i < this.drawCallInstances.length; i++)
-            this.drawCallInstances[i].prepareToRender(this.drawParamsBuffer, viewerInput, this.isSkybox, this.modelMatrix);
-
-        this.sceneParamsBuffer.prepareToRender(hostAccessPass);
-        this.drawParamsBuffer.prepareToRender(hostAccessPass);
+            this.drawCallInstances[i].prepareToRender(device, renderInstManager, viewerInput, this.isSkybox, this.modelMatrix);
     }
 
     public destroy(device: GfxDevice): void {
-        this.sceneParamsBuffer.destroy(device);
-        this.drawParamsBuffer.destroy(device);
         for (let i = 0; i < this.drawCallInstances.length; i++)
             this.drawCallInstances[i].destroy(device);
     }

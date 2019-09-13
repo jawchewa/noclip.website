@@ -25,21 +25,22 @@ type U8Node = U8File | U8Dir;
 export class U8Archive {
     public root: U8Dir;
 
-    public findDirParts(parts: string[]): U8Dir {
-        let dir = this.root;
-        for (const part of parts) {
-            dir = dir.subdirs.find((subdir) => subdir.name === part || (part === '*' && dir.subdirs.length === 1));
+    public findDirParts(parts: string[]): U8Dir | null {
+        let dir: U8Dir | undefined = this.root;
+        for (let i = 0; i < parts.length; i++) {
+            const part = parts[i];
+            dir = dir.subdirs.find((subdir) => subdir.name === part || (part === '*' && dir!.subdirs.length === 1));
             if (dir === undefined)
                 return null;
         }
         return dir;
     }
 
-    public findDir(path: string): U8Dir {
+    public findDir(path: string): U8Dir | null {
         return this.findDirParts(path.split('/'));
     }
 
-    public findFile(path: string): U8File {
+    public findFile(path: string): U8File | null {
         const parts = path.split('/');
         const filename = parts.pop();
         const dir = this.findDirParts(parts);
@@ -49,6 +50,14 @@ export class U8Archive {
         if (!file)
             return null;
         return file;
+    }
+
+    public findFileData(path: string): ArrayBufferSlice | null {
+        const file = this.findFile(path);
+        if (file !== null)
+            return file.buffer;
+        else
+            return null;
     }
 }
 

@@ -1,16 +1,15 @@
 
-import MemoizeCache from "./MemoizeCache";
 import CodeEditor from "./CodeEditor";
 import { assertExists, leftPad } from "./util";
-import { StructLayout, parseShaderSource } from "./gfx/helpers/UniformBufferHelpers";
 import { GfxDevice } from "./gfx/platform/GfxPlatform";
 import { gfxDeviceGetImpl } from "./gfx/platform/GfxPlatformWebGL2";
+import { IS_DEVELOPMENT } from "./BuildVersion";
 
 interface ProgramWithKey extends WebGLProgram {
     uniqueKey: number;
 }
 
-const DEBUG = true;
+const DEBUG = IS_DEVELOPMENT;
 
 function prependLineNo(str: string, lineStart: number = 1) {
     const lines = str.split('\n');
@@ -54,31 +53,26 @@ function range(start: number, num: number): number[] {
     return L;
 }
 
-export interface DeviceProgramReflection {
-    name: string;
-    uniformBufferLayouts: StructLayout[];
-    samplerBindings: SamplerBindingReflection[];
-    totalSamplerBindingsCount: number;
-    uniqueKey: number;
-}
+function definesEqual(a: DeviceProgram, b: DeviceProgram): boolean {
+    if (a.defines.size !== b.defines.size)
+        return false;
 
-export interface SamplerBindingReflection {
-    name: string;
-    arraySize: number;
+    for (const [k, v] of a.defines.entries())
+        if (b.defines.get(k) !== v)
+            return false;
+
+    return true;
 }
 
 export class DeviceProgram {
     public name: string = '(unnamed)';
 
-    // Reflection.
-    public uniformBufferLayouts: StructLayout[];
-    public samplerBindings: SamplerBindingReflection[];
-    public totalSamplerBindingsCount: number;
     public uniqueKey: number;
 
     // Compiled program.
     public glProgram: ProgramWithKey;
     public compileDirty: boolean = true;
+    private bindDirty: boolean = true;
     private preprocessedVert: string = '';
     private preprocessedFrag: string = '';
 
@@ -88,28 +82,33 @@ export class DeviceProgram {
     public frag: string = '';
     public defines = new Map<string, string>();
 
-    public static equals(device: GfxDevice, a: DeviceProgram, b: DeviceProgram): boolean {
-        a._ensurePreprocessed(device);
-        b._ensurePreprocessed(device);
-        return a.preprocessedVert === b.preprocessedVert && a.preprocessedFrag === b.preprocessedFrag;
+    public static equals(a: DeviceProgram, b: DeviceProgram): boolean {
+        if (a.both !== b.both)
+            return false;
+        if (a.vert !== b.vert)
+            return false;
+        if (a.frag !== b.frag)
+            return false;
+        if (!definesEqual(a, b))
+            return false;
+        return true;
     }
 
-    private _ensurePreprocessed(device: GfxDevice): void {
+    public ensurePreprocessed(device: GfxDevice): void {
         if (this.preprocessedVert === '') {
             this.preprocessedVert = this.preprocessShader(device, this.both + this.vert, 'vert');
             this.preprocessedFrag = this.preprocessShader(device, this.both + this.frag, 'frag');
-            // TODO(jstpierre): Would love a better place to do this.
-            DeviceProgram.parseReflectionDefinitionsInto(this, this.preprocessedVert);
         }
     }
 
     public compile(device: GfxDevice, programCache: ProgramCache): void {
         if (this.compileDirty) {
-            this._ensurePreprocessed(device);
+            this.ensurePreprocessed(device);
             const newProg = programCache.compileProgram(this.preprocessedVert, this.preprocessedFrag);
             if (newProg !== null && newProg !== this.glProgram) {
                 this.glProgram = newProg;
-                this.bind(device, this.glProgram);
+                this.uniqueKey = newProg.uniqueKey;
+                this.bindDirty = true;
             }
 
             this.compileDirty = false;
@@ -121,11 +120,6 @@ export class DeviceProgram {
 
     protected preprocessShader(device: GfxDevice, source: string, type: "vert" | "frag"): string {
         const deviceImpl = gfxDeviceGetImpl(device);
-        const gl = deviceImpl.gl;
-
-        const extensionDefines = assertExists(gl.getSupportedExtensions()).map((s) => {
-            return `#define HAS_${s}`;
-        }).join('\n');
 
         const bugDefines = deviceImpl.programBugDefines;
 
@@ -139,13 +133,12 @@ export class DeviceProgram {
             return !isEmpty;
         });
 
-        const defines = [... this.defines.entries()].map((k, v) => `#define ${k} ${v}`).join('\n');
+        const defines = [... this.defines.entries()].map(([k, v]) => `#define ${k} ${v}`).join('\n');
         const precision = lines.find((line) => line.startsWith('precision')) || 'precision mediump float;';
         const rest = lines.filter((line) => !line.startsWith('precision')).join('\n');
 
         return `
 #version 300 es
-${extensionDefines}
 ${bugDefines}
 ${precision}
 #define ${type.toUpperCase()}
@@ -189,25 +182,33 @@ ${rest}
 `.trim();
     }
 
-    public bind(device: GfxDevice, prog: ProgramWithKey): void {
+    public bind(device: GfxDevice): void {
+        if (!this.bindDirty)
+            return;
+
         const gl = gfxDeviceGetImpl(device).gl;
-        this.uniqueKey = prog.uniqueKey;
+        const prog = this.glProgram;
 
-        for (let i = 0; i < this.uniformBufferLayouts.length; i++) {
-            const uniformBufferLayout = this.uniformBufferLayouts[i];
-            gl.uniformBlockBinding(prog, gl.getUniformBlockIndex(prog, uniformBufferLayout.blockName), i);
+        // TODO(jstpierre): Remove this reflection.
+
+        const uniformBlocks = findall(this.preprocessedVert, /uniform (\w+) {([^]*?)}/g);
+        for (let i = 0; i < uniformBlocks.length; i++) {
+            const [m, blockName, contents] = uniformBlocks[i];
+            gl.uniformBlockBinding(prog, gl.getUniformBlockIndex(prog, blockName), i);
         }
 
+        const samplers = findall(this.preprocessedVert, /^uniform .*sampler\S+ (\w+)(?:\[(\d+)\])?;$/gm);
         let samplerIndex = 0;
-        for (let i = 0; i < this.samplerBindings.length; i++) {
+        for (let i = 0; i < samplers.length; i++) {
+            const [m, name, arraySizeStr] = samplers[i];
+            const arraySize = arraySizeStr ? parseInt(arraySizeStr) : 1;
             // Assign identities in order.
-            // XXX(jstpierre): This will cause a warning in Chrome, but I don't care rn.
-            // It's more expensive to bind this every frame than respect Chrome's validation wishes...
-            const samplerUniformLocation = gl.getUniformLocation(prog, this.samplerBindings[i].name);
-            gl.useProgram(prog);
-            gl.uniform1iv(samplerUniformLocation, range(samplerIndex, this.samplerBindings[i].arraySize));
-            samplerIndex += this.samplerBindings[i].arraySize;
+            const samplerUniformLocation = gl.getUniformLocation(prog, name);
+            gl.uniform1iv(samplerUniformLocation, range(samplerIndex, arraySize));
+            samplerIndex += arraySize;
         }
+
+        this.bindDirty = false;
     }
 
     public destroy(gl: WebGL2RenderingContext) {
@@ -226,6 +227,14 @@ ${rest}
             editor.setValue(shader);
             editor.setFontSize('16px');
             let timeout: number = 0;
+
+            const tryCompile = () => {
+                timeout = 0;
+                this[n] = editor.getValue();
+                this.compileDirty = true;
+                this.preprocessedVert = '';
+            };
+
             editor.onvaluechanged = function() {
                 if (timeout > 0)
                     clearTimeout(timeout);
@@ -235,12 +244,6 @@ ${rest}
                 editor.setSize(document.body.offsetWidth, window.innerHeight);
             };
             onresize();
-            const tryCompile = () => {
-                timeout = 0;
-                this[n] = editor.getValue();
-                this.compileDirty = true;
-                this.preprocessedVert = '';
-            };
             (win as any).editor = editor;
             win.document.body.appendChild(editor.elem);
         };
@@ -261,27 +264,6 @@ ${rest}
     public editf() {
         this._editShader('frag');
     }
-
-    private static parseReflectionDefinitionsInto(refl: DeviceProgramReflection, vert: string): void {
-        refl.uniformBufferLayouts = [];
-        parseShaderSource(refl.uniformBufferLayouts, vert);
-
-        const samplers = findall(vert, /^uniform .*sampler\S+ (\w+)(?:\[(\d+)\])?;$/gm);
-        refl.samplerBindings = [];
-        refl.totalSamplerBindingsCount = 0;
-        for (let i = 0; i < samplers.length; i++) {
-            const [m, name, arraySizeStr] = samplers[i];
-            let arraySize: number = arraySizeStr ? parseInt(arraySizeStr) : 1;
-            refl.samplerBindings.push({ name, arraySize });
-            refl.totalSamplerBindingsCount += arraySize;
-        }
-    }
-
-    public static parseReflectionDefinitions(vert: string): DeviceProgramReflection {
-        const refl: DeviceProgramReflection = {} as DeviceProgramReflection;
-        DeviceProgram.parseReflectionDefinitionsInto(refl, vert);
-        return refl;
-    }
 }
 
 export class FullscreenProgram extends DeviceProgram {
@@ -292,7 +274,7 @@ void main() {
     v_TexCoord.x = (gl_VertexID == 1) ? 2.0 : 0.0;
     v_TexCoord.y = (gl_VertexID == 2) ? 2.0 : 0.0;
     gl_Position.xy = v_TexCoord * vec2(2) - vec2(1);
-    gl_Position.zw = vec2(1);
+    gl_Position.zw = vec2(-1, 1);
 }
 `;
 }
@@ -302,6 +284,29 @@ interface ProgramKey {
     frag: string;
 }
 
+abstract class MemoizeCache<TKey, TRes> {
+    private cache = new Map<string, TRes>();
+
+    protected abstract make(key: TKey): TRes | null;
+    protected abstract makeKey(key: TKey): string;
+
+    public get(key: TKey): TRes | null {
+        const keyStr = this.makeKey(key);
+        if (this.cache.has(keyStr)) {
+            return assertExists(this.cache.get(keyStr));
+        } else {
+            const obj = this.make(key);
+            if (obj !== null)
+                this.cache.set(keyStr, obj);
+            return obj;
+        }
+    }
+
+    public clear(): void {
+        this.cache.clear();
+    }
+}
+
 export class ProgramCache extends MemoizeCache<ProgramKey, ProgramWithKey> {
     private _uniqueKey: number = 0;
 
@@ -309,7 +314,7 @@ export class ProgramCache extends MemoizeCache<ProgramKey, ProgramWithKey> {
         super();
     }
 
-    protected make(key: ProgramKey): ProgramWithKey {
+    protected make(key: ProgramKey): ProgramWithKey | null {
         const gl = this.gl;
         const vertShader = compileShader(gl, key.vert, gl.VERTEX_SHADER);
         const fragShader = compileShader(gl, key.frag, gl.FRAGMENT_SHADER);

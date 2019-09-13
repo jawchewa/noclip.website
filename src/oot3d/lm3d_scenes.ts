@@ -9,13 +9,13 @@ import * as CTXB from './ctxb';
 
 import * as Viewer from '../viewer';
 
-import Progressable from '../Progressable';
-import { CmbRenderer, CmbData } from './render';
+import { CmbInstance, CmbData } from './render';
 import { SceneGroup } from '../viewer';
-import { fetchData } from '../fetch';
 import { leftPad } from '../util';
 import { GfxDevice } from '../gfx/platform/GfxPlatform';
 import { GrezzoTextureHolder, MultiCmbScene } from './scenes';
+import { computeModelMatrixSRT } from '../MathHelpers';
+import { SceneContext } from '../SceneBase';
 
 class SceneDesc implements Viewer.SceneDesc {
     public id: string;
@@ -24,14 +24,15 @@ class SceneDesc implements Viewer.SceneDesc {
         this.id = `map${mapNumber}`;
     }
 
-    public createScene(device: GfxDevice, abortSignal: AbortSignal): Progressable<Viewer.SceneGfx> {
+    public createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
         // Fetch the ZAR & info ZSI.
         const path_gar = `lm3d/map/map${leftPad(''+this.mapNumber, 2, '0')}.gar`;
         const models_path = `lm3d/mapmdl/map${this.mapNumber}`;
 
         const textureHolder = new GrezzoTextureHolder();
+        const dataFetcher = context.dataFetcher;
 
-        return fetchData(path_gar, abortSignal).then((garBuffer) => {
+        return dataFetcher.fetchData(path_gar).then((garBuffer) => {
             const gar = ZAR.parse(garBuffer);
 
             const jmpGarFile = gar.files.find((file) => file.name === 'JMP.gar');
@@ -44,9 +45,9 @@ class SceneDesc implements Viewer.SceneDesc {
             const modelCache = new Map<string, CmbData>();
 
             const renderer = new MultiCmbScene(device, textureHolder);
-            const progressables: Progressable<CmbRenderer>[] = [];
+            const promises: Promise<CmbInstance>[] = [];
             for (let i = 0; i < roomInfo.records.length; i++) {
-                progressables.push(fetchData(`${models_path}/room_${leftPad(''+i, 2, '0')}.gar`, abortSignal).then((outerRoomGarBuf) => {
+                promises.push(dataFetcher.fetchData(`${models_path}/room_${leftPad(''+i, 2, '0')}.gar`).then((outerRoomGarBuf) => {
                     const outerRoomGar = ZAR.parse(outerRoomGarBuf);
                     const roomGarFile = outerRoomGar.files.find((file) => file.name === 'room.gar');
                     if (roomGarFile === undefined)
@@ -65,12 +66,10 @@ class SceneDesc implements Viewer.SceneDesc {
                     }
 
                     const cmbData = new CmbData(device, cmb);
-                    textureHolder.addTextures(device, cmb.textures);
+                    textureHolder.addCMB(device, cmb);
                     renderer.cmbData.push(cmbData);
 
-                    const cmbRenderer = new CmbRenderer(device, textureHolder, cmbData, cmb.name);
-                    cmbRenderer.whichTexture = 1;
-                    cmbRenderer.addToViewRenderer(device, renderer.viewRenderer);
+                    const cmbRenderer = new CmbInstance(device, textureHolder, cmbData, cmb.name);
                     renderer.cmbRenderers.push(cmbRenderer);
 
                     const cmbBasename = firstCMB.name.split('.')[0];
@@ -78,7 +77,7 @@ class SceneDesc implements Viewer.SceneDesc {
                     if (cmabFile) {
                         const cmab = CMAB.parse(CMB.Version.LuigisMansion, cmabFile.buffer);
                         textureHolder.addTextures(device, cmab.textures);
-                        cmbRenderer.bindCMAB(cmab, 1);
+                        cmbRenderer.bindCMAB(cmab);
                     }
 
                     const roomFurnitureEntries: BCSV.Bcsv = BCSV.getEntriesWithField(furnitureInfo, "room_no", i);
@@ -102,9 +101,7 @@ class SceneDesc implements Viewer.SceneDesc {
                             modelCache.set(cmbFilename, cmbData);
                         }
 
-                        const cmbRenderer = new CmbRenderer(device, textureHolder, cmbData, cmb.name);
-                        cmbRenderer.whichTexture = 1;
-                        cmbRenderer.addToViewRenderer(device, renderer.viewRenderer);
+                        const cmbRenderer = new CmbInstance(device, textureHolder, cmbData, cmb.name);
 
                         const rotationX = BCSV.getField<number>(roomFurnitureEntries, record, "dir_x") / 180 * Math.PI;
                         const rotationY = BCSV.getField<number>(roomFurnitureEntries, record, "dir_y") / 180 * Math.PI;
@@ -112,14 +109,14 @@ class SceneDesc implements Viewer.SceneDesc {
                         const translationX = BCSV.getField<number>(roomFurnitureEntries, record, "pos_x");
                         const translationY = BCSV.getField<number>(roomFurnitureEntries, record, "pos_y");
                         const translationZ = BCSV.getField<number>(roomFurnitureEntries, record, "pos_z");
-                        CMB.calcModelMtx(cmbRenderer.modelMatrix, 1, 1, 1, rotationX, rotationY, rotationZ, translationX, translationY, translationZ);
+                        computeModelMatrixSRT(cmbRenderer.modelMatrix, 1, 1, 1, rotationX, rotationY, rotationZ, translationX, translationY, translationZ);
 
                         renderer.cmbRenderers.push(cmbRenderer);
                     }
                 }));
             }
 
-            return Progressable.all(progressables).then(() => {
+            return dataFetcher.waitForLoad().then(() => {
                 return renderer;
             });
         });

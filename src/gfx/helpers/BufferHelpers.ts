@@ -18,8 +18,8 @@ export interface GfxCoalescedBuffers {
 
 export function coalesceBuffer(device: GfxDevice, usage: GfxBufferUsage, datas: ArrayBufferSlice[]): GfxCoalescedBuffer[] {
     let dataLength = 0;
-    for (const data of datas) {
-        dataLength += data.byteLength;
+    for (let i = 0; i < datas.length; i++) {
+        dataLength += datas[i].byteLength;
         dataLength = align(dataLength, 4);
     }
 
@@ -67,6 +67,54 @@ export class GfxBufferCoalescer {
 
         this.coalescedBuffers = coalescedBuffers;
         this.vertexBuffer = this.coalescedBuffers[0].vertexBuffer.buffer;
+        this.indexBuffer = this.coalescedBuffers[0].indexBuffer.buffer;
+    }
+
+    public destroy(device: GfxDevice): void {
+        if (this.vertexBuffer !== null)
+            device.destroyBuffer(this.vertexBuffer);
+        if (this.indexBuffer !== null)
+            device.destroyBuffer(this.indexBuffer);
+    }
+}
+
+export interface GfxCoalescedBuffersCombo {
+    vertexBuffers: GfxCoalescedBuffer[];
+    indexBuffer: GfxCoalescedBuffer;
+}
+
+export class GfxBufferCoalescerCombo {
+    public coalescedBuffers: GfxCoalescedBuffersCombo[];
+    private vertexBuffer: GfxBuffer | null = null;
+    private indexBuffer: GfxBuffer | null = null;
+
+    constructor(device: GfxDevice, vertexDatas: ArrayBufferSlice[][], indexDatas: ArrayBufferSlice[]) {
+        assert(vertexDatas.length === indexDatas.length);
+
+        // Don't do anything if we have no data to care about.
+        if (vertexDatas.length === 0)
+            return;
+
+        const allVertexDatas: ArrayBufferSlice[] = [];
+        for (let i = 0; i < vertexDatas.length; i++)
+            for (let j = 0; j < vertexDatas[i].length; j++)
+                allVertexDatas.push(vertexDatas[i][j]);
+
+        const vertexCoalescedBuffers = coalesceBuffer(device, GfxBufferUsage.VERTEX, allVertexDatas);
+        const indexCoalescedBuffers = coalesceBuffer(device, GfxBufferUsage.INDEX, indexDatas);
+
+        const coalescedBuffers: GfxCoalescedBuffersCombo[] = [];
+        let z = 0;
+        for (let i = 0; i < vertexDatas.length; i++) {
+            const vertexBuffers: GfxCoalescedBuffer[] = [];
+            for (let j = 0; j < vertexDatas[i].length; j++)
+                vertexBuffers.push(vertexCoalescedBuffers[z++]);
+            const indexBuffer = indexCoalescedBuffers[i];
+            coalescedBuffers.push({ vertexBuffers, indexBuffer });
+        }
+
+        this.coalescedBuffers = coalescedBuffers;
+        this.vertexBuffer = this.coalescedBuffers[0].vertexBuffers[0].buffer;
         this.indexBuffer = this.coalescedBuffers[0].indexBuffer.buffer;
     }
 

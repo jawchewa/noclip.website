@@ -1,10 +1,10 @@
 
 import ArrayBufferSlice from "../ArrayBufferSlice";
-import { readString, assert, hexdump, makeTextDecoder } from "../util";
+import { readString, assert, getTextDecoder } from "../util";
 import { vec3 } from "gl-matrix";
 import { AABB } from "../Geometry";
 
-const utf16Decoder = makeTextDecoder('utf-16le');
+const utf16Decoder = getTextDecoder('utf-16le')!;
 
 function readStringUTF16(buffer: ArrayBufferSlice, offs: number): string {
     const arr = buffer.createTypedArray(Uint8Array, offs, Math.min(buffer.byteLength - offs, 0x100));
@@ -59,7 +59,8 @@ export const enum VertexInputSemantic {
     JointWeight = 2,
     Normal      = 3,
     UV          = 5,
-    Bitangent   = 6,
+    Tangent     = 6,
+    Bitangent   = 7,
     Color       = 10,
 }
 

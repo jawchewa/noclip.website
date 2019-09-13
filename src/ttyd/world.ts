@@ -7,17 +7,22 @@ import * as GX_Material from '../gx/gx_material';
 
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { assert, readString, assertExists } from "../util";
-import { GX_VtxAttrFmt, GX_VtxDesc, compileVtxLoader, GX_Array, LoadedVertexData, LoadedVertexLayout, coalesceLoadedDatas } from '../gx/gx_displaylist';
+import { GX_VtxAttrFmt, GX_VtxDesc, compileVtxLoader, GX_Array, LoadedVertexData, LoadedVertexLayout, coalesceLoadedDatas, compileLoadedVertexLayout } from '../gx/gx_displaylist';
 import { mat4 } from 'gl-matrix';
 import { AABB } from '../Geometry';
 import AnimationController from '../AnimationController';
-import { GfxMegaStateDescriptor } from '../gfx/platform/GfxPlatform';
+import { GfxMegaStateDescriptor, GfxFormat } from '../gfx/platform/GfxPlatform';
+import { colorNewFromRGBA8, Color } from '../Color';
+import { computeModelMatrixSRT, MathConstants } from '../MathHelpers';
+import { getPointHermite } from '../Spline';
+import { autoOptimizeMaterial } from '../gx/gx_render';
+import { makeTriangleIndexBuffer, GfxTopology } from '../gfx/helpers/TopologyHelpers';
+import { getSystemEndianness, Endianness } from '../endian';
 
 export interface TTYDWorld {
     information: Information;
     textureNameTable: string[];
     rootNode: SceneGraphNode;
-    sNode: SceneGraphNode;
     materials: Material[];
     animations: AnimationEntry[];
 }
@@ -49,7 +54,7 @@ export interface Material {
     materialLayer: MaterialLayer;
     samplers: Sampler[];
     gxMaterial: GX_Material.GXMaterial;
-    matColorReg: GX_Material.Color;
+    matColorReg: Color;
     texMtx: mat4[];
 }
 
@@ -63,6 +68,10 @@ export interface SceneGraphPart {
     batch: Batch;
 }
 
+export const enum DrawModeFlags {
+    IS_DECAL = 0x10,
+}
+
 export interface SceneGraphNode {
     nameStr: string;
     typeStr: string;
@@ -72,6 +81,7 @@ export interface SceneGraphNode {
     parts: SceneGraphPart[];
     isTranslucent: boolean;
     renderFlags: Partial<GfxMegaStateDescriptor>;
+    drawModeFlags: DrawModeFlags;
     visible?: boolean;
 }
 
@@ -141,43 +151,13 @@ interface MaterialAnimationTrackKeyframe {
     rotation: AnimationTrackComponent;
 }
 
-function calcModelMtx(dst: mat4, scaleX: number, scaleY: number, scaleZ: number, rotationX: number, rotationY: number, rotationZ: number, translationX: number, translationY: number, translationZ: number): void {
-    const rX = Math.PI / 180 * rotationX;
-    const rY = Math.PI / 180 * rotationY;
-    const rZ = Math.PI / 180 * rotationZ;
-
-    const sinX = Math.sin(rX), cosX = Math.cos(rX);
-    const sinY = Math.sin(rY), cosY = Math.cos(rY);
-    const sinZ = Math.sin(rZ), cosZ = Math.cos(rZ);
-
-    dst[0] =  scaleX * (cosY * cosZ);
-    dst[1] =  scaleX * (sinZ * cosY);
-    dst[2] =  scaleX * (-sinY);
-    dst[3] =  0.0;
-
-    dst[4] =  scaleY * (sinX * cosZ * sinY - cosX * sinZ);
-    dst[5] =  scaleY * (sinX * sinZ * sinY + cosX * cosZ);
-    dst[6] =  scaleY * (sinX * cosY);
-    dst[7] =  0.0;
-
-    dst[8] =  scaleZ * (cosX * cosZ * sinY + sinX * sinZ);
-    dst[9] =  scaleZ * (cosX * sinZ * sinY - sinX * cosZ);
-    dst[10] = scaleZ * (cosY * cosX);
-    dst[11] = 0.0;
-
-    dst[12] = translationX;
-    dst[13] = translationY;
-    dst[14] = translationZ;
-    dst[15] = 1.0;
-}
-
 const trans1 = mat4.create(), trans2 = mat4.create(), rot = mat4.create(), scale = mat4.create();
 
 const _t: number[] = [0, 0, 0];
 function calcTexMtx(dst: mat4, translationS: number, translationT: number, scaleS: number, scaleT: number, rotation: number, skewS: number, skewT: number): void {
     function t(x: number, y: number, z: number = 0): number[] { _t[0] = x; _t[1] = y; _t[2] = z; return _t; }
     mat4.fromTranslation(dst, t(0.5 * skewS * scaleS, (0.5 * skewT - 1.0) * scaleT, 0.0));
-    mat4.fromZRotation(rot, (Math.PI / 180) * -rotation);
+    mat4.fromZRotation(rot, MathConstants.DEG_TO_RAD * -rotation);
     mat4.fromTranslation(trans1, t(-0.5 * skewS * scaleS, -(0.5 * skewT - 1.0) * scaleT, 0.0));
     mat4.mul(rot, rot, dst);
     mat4.mul(rot, trans1, rot);
@@ -229,7 +209,10 @@ export function parse(buffer: ArrayBufferSlice): TTYDWorld {
         'texture_table',
         'vcd_table',
     ];
-    assert(namedChunkTableCount === chunkNames.length);
+
+    const isVersion102 = namedChunkTableCount === 8;
+    const isVersion100 = namedChunkTableCount === 7;
+    assert(isVersion100 || isVersion102);
 
     const chunkOffsets: number[] = [];
 
@@ -404,8 +387,7 @@ export function parse(buffer: ArrayBufferSlice): TTYDWorld {
         // Parse material.
         const materialName2 = readString(buffer, mainDataOffs + view.getUint32(materialOffs + 0x00));
         assert(materialName === materialName2);
-        const matColorReg = new GX_Material.Color();
-        matColorReg.copy32(view.getUint32(materialOffs + 0x04));
+        const matColorReg = colorNewFromRGBA8(view.getUint32(materialOffs + 0x04));
         const matColorSrc: GX.ColorSrc = view.getUint8(materialOffs + 0x08);
 
         let materialLayer: MaterialLayer = MaterialLayer.OPAQUE;
@@ -984,6 +966,8 @@ export function parse(buffer: ArrayBufferSlice): TTYDWorld {
                 depthTest: true,
                 depthWrite: false,
             };
+        } else {
+            throw 'whoops';
         }
 
         const gxMaterial: GX_Material.GXMaterial = {
@@ -997,40 +981,25 @@ export function parse(buffer: ArrayBufferSlice): TTYDWorld {
             indTexStages: [],
         };
 
+        autoOptimizeMaterial(gxMaterial);
+
         const material: Material = { index: i, name: materialName, materialLayer, samplers, gxMaterial, matColorReg, texMtx };
         materialMap.set(materialOffs, material);
         materials.push(material);
     }
     //#endregion
 
-    //#region vcd_table
-    const vtxArrays: GX_Array[] = [];
-    // First element of the blocks is item count, so we add 0x04 to skip past it.
-
-    vtxArrays[GX.VertexAttribute.POS] = { buffer, offs: mainDataOffs + view.getUint32(vcd_tableOffs + 0x00) + 0x04 };
-    // NRM, probably?
-    vtxArrays[GX.VertexAttribute.NRM] = { buffer, offs: mainDataOffs + view.getUint32(vcd_tableOffs + 0x04) + 0x04 };
-
-    const clrCount = view.getUint32(vcd_tableOffs + 0x08);
-    assert(clrCount === 0x01);
-
-    vtxArrays[GX.VertexAttribute.CLR0] = { buffer, offs: mainDataOffs + view.getUint32(vcd_tableOffs + 0x0C) + 0x04 };
-    // vtxArrays[GX.VertexAttribute.CLR1] = { buffer, offs: mainDataOffs + view.getUint32(vcd_tableOffs + 0x10) + 0x04 };
-    assert(view.getUint32(vcd_tableOffs + 0x10) === 0);
-
-    const texCoordCount = view.getUint32(vcd_tableOffs + 0x14);
-    assert(texCoordCount <= 0x03);
-    vtxArrays[GX.VertexAttribute.TEX0] = { buffer, offs: mainDataOffs + view.getUint32(vcd_tableOffs + 0x18) + 0x04 };
-    vtxArrays[GX.VertexAttribute.TEX1] = { buffer, offs: mainDataOffs + view.getUint32(vcd_tableOffs + 0x1C) + 0x04 };
-    vtxArrays[GX.VertexAttribute.TEX2] = { buffer, offs: mainDataOffs + view.getUint32(vcd_tableOffs + 0x20) + 0x04 };
-    //#endregion
-
     //#region information
     assert(informationOffs === 0x20);
     const versionStr = readString(buffer, mainDataOffs + view.getUint32(informationOffs + 0x00));
+    if (isVersion100)
+        assert(versionStr === 'ver1.00');
+    else if (isVersion102)
+        assert(versionStr === 'ver1.02');
+
     const sNodeStr = readString(buffer, mainDataOffs + view.getUint32(informationOffs + 0x08));
     const aNodeStr = readString(buffer, mainDataOffs + view.getUint32(informationOffs + 0x0C));
-    const dateStr = readString(buffer, mainDataOffs + view.getUint32(informationOffs + 0x10));
+    const dateStr = isVersion100 ? '' : readString(buffer, mainDataOffs + view.getUint32(informationOffs + 0x10));
 
     // Read meshes.
     const sceneGraphRootOffs = mainDataOffs + view.getUint32(informationOffs + 0x04);
@@ -1050,9 +1019,9 @@ export function parse(buffer: ArrayBufferSlice): TTYDWorld {
         const scaleX = view.getFloat32(offs + 0x18);
         const scaleY = view.getFloat32(offs + 0x1C);
         const scaleZ = view.getFloat32(offs + 0x20);
-        const rotationX = view.getFloat32(offs + 0x24);
-        const rotationY = view.getFloat32(offs + 0x28);
-        const rotationZ = view.getFloat32(offs + 0x2C);
+        const rotationX = view.getFloat32(offs + 0x24) * MathConstants.DEG_TO_RAD;
+        const rotationY = view.getFloat32(offs + 0x28) * MathConstants.DEG_TO_RAD;
+        const rotationZ = view.getFloat32(offs + 0x2C) * MathConstants.DEG_TO_RAD;
         const translationX = view.getFloat32(offs + 0x30);
         const translationY = view.getFloat32(offs + 0x34);
         const translationZ = view.getFloat32(offs + 0x38);
@@ -1065,11 +1034,13 @@ export function parse(buffer: ArrayBufferSlice): TTYDWorld {
 
         const bbox = new AABB(bboxMinX, bboxMinY, bboxMinZ, bboxMaxX, bboxMaxY, bboxMaxZ);
         const modelMatrix = mat4.create();
-        calcModelMtx(modelMatrix, scaleX, scaleY, scaleZ, rotationX, rotationY, rotationZ, translationX, translationY, translationZ);
+        computeModelMatrixSRT(modelMatrix, scaleX, scaleY, scaleZ, rotationX, rotationY, rotationZ, translationX, translationY, translationZ);
 
-        const renderModeStructOffs = mainDataOffs + view.getUint32(offs + 0x58);
+        const drawModeStructOffs = mainDataOffs + view.getUint32(offs + 0x58);
         const cullModes: GX.CullMode[] = [GX.CullMode.FRONT, GX.CullMode.BACK, GX.CullMode.ALL, GX.CullMode.NONE];
-        const cullMode: GX.CullMode = cullModes[view.getUint8(renderModeStructOffs + 0x01)];
+        const cullMode: GX.CullMode = cullModes[view.getUint8(drawModeStructOffs + 0x01)];
+
+        const drawModeFlags: DrawModeFlags = view.getUint8(drawModeStructOffs + 0x02);
 
         const partTableCount = view.getUint32(offs + 0x5C);
         let partTableIdx = offs + 0x60;
@@ -1085,100 +1056,253 @@ export function parse(buffer: ArrayBufferSlice): TTYDWorld {
 
             const meshOffs = mainDataOffs + view.getUint32(partTableIdx + 0x04);
 
-            // Parse mesh.
-            // VAT, perhaps? Doesn't seem like there's enough bits for that...
-            const meshUnk00 = view.getUint32(meshOffs + 0x00);
-            // assert(meshUnk00 === 0x01000001);
-            const displayListTableCount = view.getUint32(meshOffs + 0x04);
-            const vcdBits = view.getUint32(meshOffs + 0x08);
-            const arrayOffs = mainDataOffs + view.getUint32(meshOffs + 0x0C);
-            assert(arrayOffs === vcd_tableOffs);
+            const isPackedDisplayList = !!view.getUint8(meshOffs + 0x03);
+            const modelVcdTableOffs = mainDataOffs + view.getUint32(meshOffs + 0x0C);
 
-            const enum VcdBitFlags {
-                POS  = 1 << 0,
-                NRM  = 1 << 1,
-                CLR0 = 1 << 2,
-                CLR1 = 1 << 3,
-                TEX0 = 1 << 4,
-                TEX1 = 1 << 5,
-                TEX2 = 1 << 6,
-                TEX3 = 1 << 7,
-                TEX4 = 1 << 8,
-                TEX5 = 1 << 9,
-                TEX6 = 1 << 10,
-                TEX7 = 1 << 11,
-            };
+            const vtxArrays: GX_Array[] = [];
+            // First element of the blocks is item count, so we add 0x04 to skip past it.
 
-            let workingBits = vcdBits;
+            vtxArrays[GX.VertexAttribute.POS] = { buffer, offs: mainDataOffs + view.getUint32(modelVcdTableOffs + 0x00) + 0x04 };
+            vtxArrays[GX.VertexAttribute.NRM] = { buffer, offs: mainDataOffs + view.getUint32(modelVcdTableOffs + 0x04) + 0x04 };
 
-            const vat: GX_VtxAttrFmt[] = [];
-            const vcd: GX_VtxDesc[] = [];
+            const clrCount = view.getUint32(modelVcdTableOffs + 0x08);
+            assert(clrCount === 0x01);
 
-            assert((workingBits & VcdBitFlags.POS) !== 0);
-            if ((workingBits & VcdBitFlags.POS) !== 0) {
-                vat[GX.VertexAttribute.POS] = { compType: GX.CompType.S16, compCnt: GX.CompCnt.POS_XYZ, compShift: view.getUint32(vcd_tableOffs + 0x44) };
+            vtxArrays[GX.VertexAttribute.CLR0] = { buffer, offs: mainDataOffs + view.getUint32(modelVcdTableOffs + 0x0C) + 0x04 };
+            // vtxArrays[GX.VertexAttribute.CLR1] = { buffer, offs: mainDataOffs + view.getUint32(modelVcdTableOffs + 0x10) + 0x04 };
+            assert(view.getUint32(modelVcdTableOffs + 0x10) === 0);
+
+            const texCoordCount = view.getUint32(modelVcdTableOffs + 0x14);
+            assert(texCoordCount <= 0x03);
+            vtxArrays[GX.VertexAttribute.TEX0] = { buffer, offs: mainDataOffs + view.getUint32(modelVcdTableOffs + 0x18) + 0x04 };
+            vtxArrays[GX.VertexAttribute.TEX1] = { buffer, offs: mainDataOffs + view.getUint32(modelVcdTableOffs + 0x1C) + 0x04 };
+            vtxArrays[GX.VertexAttribute.TEX2] = { buffer, offs: mainDataOffs + view.getUint32(modelVcdTableOffs + 0x20) + 0x04 };
+
+            if (isPackedDisplayList) {
+                const displayListTableCount = view.getUint32(meshOffs + 0x04);
+                const vcdBits = view.getUint32(meshOffs + 0x08);
+                const modelVcdTableOffs = mainDataOffs + view.getUint32(meshOffs + 0x0C);
+
+                assert(isVersion102);
+                assert(modelVcdTableOffs === vcd_tableOffs);
+
+                const enum VcdBitFlags {
+                    POS  = 1 << 0,
+                    NRM  = 1 << 1,
+                    CLR0 = 1 << 2,
+                    CLR1 = 1 << 3,
+                    TEX0 = 1 << 4,
+                    TEX1 = 1 << 5,
+                    TEX2 = 1 << 6,
+                    TEX3 = 1 << 7,
+                    TEX4 = 1 << 8,
+                    TEX5 = 1 << 9,
+                    TEX6 = 1 << 10,
+                    TEX7 = 1 << 11,
+                };
+
+                let workingBits = vcdBits;
+
+                const vat: GX_VtxAttrFmt[] = [];
+                const vcd: GX_VtxDesc[] = [];
+
+                assert((workingBits & VcdBitFlags.POS) !== 0);
+                if ((workingBits & VcdBitFlags.POS) !== 0) {
+                    vat[GX.VertexAttribute.POS] = { compType: GX.CompType.S16, compCnt: GX.CompCnt.POS_XYZ, compShift: view.getUint32(modelVcdTableOffs + 0x44) };
+                    vcd[GX.VertexAttribute.POS] = { type: GX.AttrType.INDEX16 };
+                    workingBits &= ~VcdBitFlags.POS;
+                }
+
+                if ((workingBits & VcdBitFlags.NRM) !== 0) {
+                    vat[GX.VertexAttribute.NRM] = { compType: GX.CompType.S16, compCnt: GX.CompCnt.NRM_XYZ, compShift: 0 };
+                    vcd[GX.VertexAttribute.NRM] = { type: GX.AttrType.INDEX16 };
+                    workingBits &= ~VcdBitFlags.NRM;
+                }
+
+                if ((workingBits & VcdBitFlags.CLR0) !== 0) {
+                    vat[GX.VertexAttribute.CLR0] = { compType: GX.CompType.RGBA8, compCnt: GX.CompCnt.CLR_RGBA, compShift: 0 };
+                    vcd[GX.VertexAttribute.CLR0] = { type: GX.AttrType.INDEX16 };
+                    workingBits &= ~VcdBitFlags.CLR0;
+                }
+
+                if ((workingBits & VcdBitFlags.TEX0) !== 0) {
+                    vat[GX.VertexAttribute.TEX0] = { compType: GX.CompType.S16, compCnt: GX.CompCnt.TEX_ST, compShift: view.getUint32(modelVcdTableOffs + 0x48) };
+                    vcd[GX.VertexAttribute.TEX0] = { type: GX.AttrType.INDEX16 };
+                    workingBits &= ~VcdBitFlags.TEX0;
+                }
+
+                if ((workingBits & VcdBitFlags.TEX1) !== 0) {
+                    vat[GX.VertexAttribute.TEX1] = { compType: GX.CompType.S16, compCnt: GX.CompCnt.TEX_ST, compShift: view.getUint32(modelVcdTableOffs + 0x4C) };
+                    vcd[GX.VertexAttribute.TEX1] = { type: GX.AttrType.INDEX16 };
+                    workingBits &= ~VcdBitFlags.TEX1;
+                }
+
+                if ((workingBits & VcdBitFlags.TEX2) !== 0) {
+                    vat[GX.VertexAttribute.TEX2] = { compType: GX.CompType.S16, compCnt: GX.CompCnt.TEX_ST, compShift: view.getUint32(modelVcdTableOffs + 0x50) };
+                    vcd[GX.VertexAttribute.TEX2] = { type: GX.AttrType.INDEX16 };
+                    workingBits &= ~VcdBitFlags.TEX2;
+                }
+
+                // No bits leftover.
+                assert(workingBits === 0);
+
+                const vtxLoader = compileVtxLoader(vat, vcd);
+                const loadedVertexLayout = vtxLoader.loadedVertexLayout;
+
+                let displayListTableIdx = meshOffs + 0x10;
+                const loadedDatas: LoadedVertexData[] = [];
+                let vertexId = 0;
+                for (let j = 0; j < displayListTableCount; j++) {
+                    const displayListOffs = mainDataOffs + view.getUint32(displayListTableIdx + 0x00);
+                    const displayListSize = view.getUint32(displayListTableIdx + 0x04);
+                    const loadedVertexData = vtxLoader.runVertices(vtxArrays, buffer.subarray(displayListOffs, displayListSize), { firstVertexId: vertexId });
+                    vertexId = loadedVertexData.vertexId;
+                    loadedDatas.push(loadedVertexData);
+                    displayListTableIdx += 0x08;
+                }
+
+                const loadedVertexData = coalesceLoadedDatas(loadedVertexLayout, loadedDatas);
+                const batch: Batch = { loadedVertexLayout, loadedVertexData };
+
+                parts.push({ material, batch });
+            } else {
+                const littleEndian = (getSystemEndianness() === Endianness.LITTLE_ENDIAN);
+
+                const partTableCount = view.getUint32(meshOffs + 0x04);
+                const partTableCount2 = view.getUint32(meshOffs + 0x08);
+                assert(partTableCount === partTableCount2);
+
+                const vat: GX_VtxAttrFmt[] = [];
+                const vcd: GX_VtxDesc[] = [];
+
+                vat[GX.VertexAttribute.POS] = { compType: GX.CompType.F32, compCnt: GX.CompCnt.POS_XYZ, compShift: view.getUint32(modelVcdTableOffs + 0x44) };
                 vcd[GX.VertexAttribute.POS] = { type: GX.AttrType.INDEX16 };
-                workingBits &= ~VcdBitFlags.POS;
-            }
-
-            if ((workingBits & VcdBitFlags.NRM) !== 0) {
-                vat[GX.VertexAttribute.NRM] = { compType: GX.CompType.S16, compCnt: GX.CompCnt.NRM_XYZ, compShift: 0 };
+                vat[GX.VertexAttribute.NRM] = { compType: GX.CompType.F32, compCnt: GX.CompCnt.NRM_XYZ, compShift: 0 };
                 vcd[GX.VertexAttribute.NRM] = { type: GX.AttrType.INDEX16 };
-                workingBits &= ~VcdBitFlags.NRM;
-            }
-
-            if ((workingBits & VcdBitFlags.CLR0) !== 0) {
                 vat[GX.VertexAttribute.CLR0] = { compType: GX.CompType.RGBA8, compCnt: GX.CompCnt.CLR_RGBA, compShift: 0 };
                 vcd[GX.VertexAttribute.CLR0] = { type: GX.AttrType.INDEX16 };
-                workingBits &= ~VcdBitFlags.CLR0;
-            }
-
-            if ((workingBits & VcdBitFlags.TEX0) !== 0) {
-                vat[GX.VertexAttribute.TEX0] = { compType: GX.CompType.S16, compCnt: GX.CompCnt.TEX_ST, compShift: view.getUint32(vcd_tableOffs + 0x48) };
+                vat[GX.VertexAttribute.TEX0] = { compType: GX.CompType.F32, compCnt: GX.CompCnt.TEX_ST, compShift: view.getUint32(modelVcdTableOffs + 0x48) };
                 vcd[GX.VertexAttribute.TEX0] = { type: GX.AttrType.INDEX16 };
-                workingBits &= ~VcdBitFlags.TEX0;
-            }
-
-            if ((workingBits & VcdBitFlags.TEX1) !== 0) {
-                vat[GX.VertexAttribute.TEX1] = { compType: GX.CompType.S16, compCnt: GX.CompCnt.TEX_ST, compShift: view.getUint32(vcd_tableOffs + 0x4C) };
+                vat[GX.VertexAttribute.TEX1] = { compType: GX.CompType.F32, compCnt: GX.CompCnt.TEX_ST, compShift: view.getUint32(modelVcdTableOffs + 0x4C) };
                 vcd[GX.VertexAttribute.TEX1] = { type: GX.AttrType.INDEX16 };
-                workingBits &= ~VcdBitFlags.TEX1;
-            }
-
-            if ((workingBits & VcdBitFlags.TEX2) !== 0) {
-                vat[GX.VertexAttribute.TEX2] = { compType: GX.CompType.S16, compCnt: GX.CompCnt.TEX_ST, compShift: view.getUint32(vcd_tableOffs + 0x50) };
+                vat[GX.VertexAttribute.TEX2] = { compType: GX.CompType.F32, compCnt: GX.CompCnt.TEX_ST, compShift: view.getUint32(modelVcdTableOffs + 0x50) };
                 vcd[GX.VertexAttribute.TEX2] = { type: GX.AttrType.INDEX16 };
-                workingBits &= ~VcdBitFlags.TEX2;
+
+                const loadedVertexLayout = compileLoadedVertexLayout([vat], vcd);
+
+                let displayListTableIdx = meshOffs + 0x10;
+                const loadedDatas: LoadedVertexData[] = [];
+                let vertexId = 0;
+                for (let j = 0; j < partTableCount; j++) {
+                    const vertexDataOffs = mainDataOffs + view.getUint32(displayListTableIdx + 0x00);
+
+                    const vertexCount = view.getUint32(vertexDataOffs + 0x00);
+                    const vertexData = new ArrayBuffer(loadedVertexLayout.dstVertexSize * vertexCount);
+                    const dstView = new DataView(vertexData);
+                    let rawIdx = vertexDataOffs + 0x04;
+                    let dstIdx = 0x00;
+                    for (let k = 0; k < vertexCount; k++) {
+                        const posIdx = view.getUint16(rawIdx + 0x00);
+                        const nrmIdx = view.getUint16(rawIdx + 0x02);
+                        const clr0Idx = view.getUint16(rawIdx + 0x04);
+                        // const clr1Idx = view.getUint16(rawIdx + 0x06);
+                        const tex0Idx = view.getUint16(rawIdx + 0x08);
+                        const tex1Idx = view.getUint16(rawIdx + 0x0A);
+                        const tex2Idx = view.getUint16(rawIdx + 0x0C);
+                        // const tex3Idx = view.getUint16(rawIdx + 0x0E);
+                        // const tex4Idx = view.getUint16(rawIdx + 0x10);
+                        // const tex5Idx = view.getUint16(rawIdx + 0x12);
+                        // const tex6Idx = view.getUint16(rawIdx + 0x14);
+                        // const tex7Idx = view.getUint16(rawIdx + 0x16);
+
+                        assert(posIdx !== 0xFFFF);
+                        const posAttr = loadedVertexLayout.dstVertexAttributeLayouts[0];
+                        const posOffs = vtxArrays[GX.VertexAttribute.POS].offs + (posIdx * 0x0C);
+                        const posX = view.getFloat32(posOffs + 0x00);
+                        const posY = view.getFloat32(posOffs + 0x04);
+                        const posZ = view.getFloat32(posOffs + 0x08);
+                        dstView.setFloat32(dstIdx + posAttr.bufferOffset + 0x00, posX, littleEndian);
+                        dstView.setFloat32(dstIdx + posAttr.bufferOffset + 0x04, posY, littleEndian);
+                        dstView.setFloat32(dstIdx + posAttr.bufferOffset + 0x08, posZ, littleEndian);
+
+                        if (nrmIdx !== 0xFFFF) {
+                            const nrmAttr = loadedVertexLayout.dstVertexAttributeLayouts[1];
+                            const nrmOffs = vtxArrays[GX.VertexAttribute.NRM].offs + (nrmIdx * 0x0C);
+                            const nrmX = view.getFloat32(nrmOffs + 0x00);
+                            const nrmY = view.getFloat32(nrmOffs + 0x04);
+                            const nrmZ = view.getFloat32(nrmOffs + 0x08);
+                            dstView.setFloat32(dstIdx + nrmAttr.bufferOffset + 0x00, nrmX, littleEndian);
+                            dstView.setFloat32(dstIdx + nrmAttr.bufferOffset + 0x04, nrmY, littleEndian);
+                            dstView.setFloat32(dstIdx + nrmAttr.bufferOffset + 0x08, nrmZ, littleEndian);
+                        }
+
+                        if (clr0Idx !== 0xFFFF) {
+                            const clr0Attr = loadedVertexLayout.dstVertexAttributeLayouts[2];
+                            const clr0Offs = vtxArrays[GX.VertexAttribute.CLR0].offs + (clr0Idx * 0x04);
+                            const clr0R = view.getUint8(clr0Offs + 0x00);
+                            const clr0G = view.getUint8(clr0Offs + 0x01);
+                            const clr0B = view.getUint8(clr0Offs + 0x02);
+                            const clr0A = view.getUint8(clr0Offs + 0x03);
+                            dstView.setUint8(dstIdx + clr0Attr.bufferOffset + 0x00, clr0R);
+                            dstView.setUint8(dstIdx + clr0Attr.bufferOffset + 0x01, clr0G);
+                            dstView.setUint8(dstIdx + clr0Attr.bufferOffset + 0x02, clr0B);
+                            dstView.setUint8(dstIdx + clr0Attr.bufferOffset + 0x03, clr0A);
+                        }
+
+                        if (tex0Idx !== 0xFFFF) {
+                            const tex0Attr = loadedVertexLayout.dstVertexAttributeLayouts[3];
+                            const tex0Offs = vtxArrays[GX.VertexAttribute.TEX0].offs + (tex0Idx * 0x08);
+                            const tex0S = view.getFloat32(tex0Offs + 0x00);
+                            const tex0T = view.getFloat32(tex0Offs + 0x04);
+                            dstView.setFloat32(dstIdx + tex0Attr.bufferOffset + 0x00, tex0S, littleEndian);
+                            dstView.setFloat32(dstIdx + tex0Attr.bufferOffset + 0x04, tex0T, littleEndian);
+                        }
+
+                        if (tex1Idx !== 0xFFFF) {
+                            const tex1Attr = loadedVertexLayout.dstVertexAttributeLayouts[4];
+                            const tex1Offs = vtxArrays[GX.VertexAttribute.TEX1].offs + (tex1Idx * 0x08);
+                            const tex1S = view.getFloat32(tex1Offs + 0x00);
+                            const tex1T = view.getFloat32(tex1Offs + 0x04);
+                            dstView.setFloat32(dstIdx + tex1Attr.bufferOffset + 0x00, tex1S, littleEndian);
+                            dstView.setFloat32(dstIdx + tex1Attr.bufferOffset + 0x04, tex1T, littleEndian);
+                        }
+
+                        if (tex2Idx !== 0xFFFF) {
+                            const tex2Attr = loadedVertexLayout.dstVertexAttributeLayouts[5];
+                            const tex2Offs = vtxArrays[GX.VertexAttribute.TEX2].offs + (tex2Idx * 0x08);
+                            const tex2S = view.getFloat32(tex2Offs + 0x00);
+                            const tex2T = view.getFloat32(tex2Offs + 0x04);
+                            dstView.setFloat32(dstIdx + tex2Attr.bufferOffset + 0x00, tex2S, littleEndian);
+                            dstView.setFloat32(dstIdx + tex2Attr.bufferOffset + 0x04, tex2T, littleEndian);
+                        }
+
+                        rawIdx += 0x18;
+                        dstIdx += loadedVertexLayout.dstVertexSize;
+                    }
+
+                    const indexBuffer = makeTriangleIndexBuffer(GfxTopology.TRISTRIP, vertexId, vertexCount);
+                    vertexId += vertexCount;
+                    const totalIndexCount = indexBuffer.length;
+                    const indexData = indexBuffer.buffer;
+                    const totalVertexCount = vertexCount;
+                    const vertexBuffers: ArrayBuffer[] = [ vertexData ];
+                    const vertexBufferStrides: number[] = [ loadedVertexLayout.dstVertexSize ];
+                    loadedDatas.push({ indexData, indexFormat: GfxFormat.U16_R, packets: [], totalIndexCount, totalVertexCount, vertexBuffers, vertexBufferStrides, vertexId });
+                    displayListTableIdx += 0x04;
+                }
+
+                const loadedVertexData = coalesceLoadedDatas(loadedVertexLayout, loadedDatas);
+                const batch: Batch = { loadedVertexLayout, loadedVertexData };
+
+                parts.push({ material, batch });
             }
 
-            // No bits leftover.
-            assert(workingBits === 0);
-
-            const vtxLoader = compileVtxLoader(vat, vcd);
-            const loadedVertexLayout = vtxLoader.loadedVertexLayout;
-
-            let displayListTableIdx = meshOffs + 0x10;
-            const loadedDatas: LoadedVertexData[] = [];
-            let vertexId = 0;
-            for (let i = 0; i < displayListTableCount; i++) {
-                const displayListOffs = mainDataOffs + view.getUint32(displayListTableIdx + 0x00);
-                const displayListSize = view.getUint32(displayListTableIdx + 0x04);
-                const loadedVertexData = vtxLoader.runVertices(vtxArrays, buffer.subarray(displayListOffs, displayListSize), { firstVertexId: vertexId });
-                vertexId = loadedVertexData.vertexId;
-                loadedDatas.push(loadedVertexData);
-                displayListTableIdx += 0x08;
-            }
-
-            const loadedVertexData = coalesceLoadedDatas(loadedDatas);
-            const batch: Batch = { loadedVertexLayout, loadedVertexData };
-
-            parts.push({ material, batch });
             partTableIdx += 0x08;
         }
 
         const children: SceneGraphNode[] = [];
         if (firstChildOffs !== 0) {
-            let child = readSceneGraph(mainDataOffs + firstChildOffs);
+            let child: SceneGraphNodeInternal | null = readSceneGraph(mainDataOffs + firstChildOffs);
             while (child !== null) {
                 children.unshift(child);
                 child = child.nextSibling;
@@ -1190,7 +1314,7 @@ export function parse(buffer: ArrayBufferSlice): TTYDWorld {
             nextSibling = readSceneGraph(mainDataOffs + nextSiblingOffs);
 
         const renderFlags: Partial<GfxMegaStateDescriptor> = { cullMode: GX_Material.translateCullMode(cullMode) };
-        return { nameStr, typeStr, modelMatrix, bbox, children, parts, isTranslucent, renderFlags, nextSibling };
+        return { nameStr, typeStr, modelMatrix, bbox, children, parts, isTranslucent, renderFlags, drawModeFlags, nextSibling };
     }
 
     const rootNode = readSceneGraph(sceneGraphRootOffs);
@@ -1199,12 +1323,11 @@ export function parse(buffer: ArrayBufferSlice): TTYDWorld {
     // The root node contains (at least) two nodes, the "A" node and the "S" node (possibly "animated" and "static").
     // The "S" nodes appear to be the visual models we want, while "A" appear to mostly be collision meshes. Any
     // other nodes at the root appear to be unused (!). We only want the visual stuff, so we only take "S".
-    const sNode = rootNode.children.find((child) => child.nameStr === sNodeStr);
 
     const information = { versionStr, aNodeStr, sNodeStr, dateStr };
     //#endregion
 
-    return { information, textureNameTable, rootNode, sNode, materials, animations };
+    return { information, textureNameTable, rootNode, materials, animations };
 }
 
 export const enum LoopMode {
@@ -1234,10 +1357,6 @@ function getAnimFrame(anim: AnimationEntry, frame: number): number {
     return animFrame;
 }
 
-function cubicEval(cf0: number, cf1: number, cf2: number, cf3: number, t: number): number {
-    return (((cf0 * t + cf1) * t + cf2) * t + cf3);
-}
-
 function interpKeyframes(k0: AnimationTrackComponent, k1: AnimationTrackComponent, t: number, d: number): number {
     if (k0.step)
         return k0.value;
@@ -1246,11 +1365,7 @@ function interpKeyframes(k0: AnimationTrackComponent, k1: AnimationTrackComponen
     const p1 = k1.value;
     const s0 = k0.tangentOut * d;
     const s1 = k1.tangentIn * d;
-    const cf0 = (p0 *  2) + (p1 * -2) + (s0 *  1) +  (s1 *  1);
-    const cf1 = (p0 * -3) + (p1 *  3) + (s0 * -2) +  (s1 * -1);
-    const cf2 = (p0 *  0) + (p1 *  0) + (s0 *  1) +  (s1 *  0);
-    const cf3 = (p0 *  1) + (p1 *  0) + (s0 *  0) +  (s1 *  0);
-    return cubicEval(cf0, cf1, cf2, cf3, t);
+    return getPointHermite(p0, p1, s0, s1, t);
 }
 
 export class MeshAnimator {
@@ -1282,13 +1397,13 @@ export class MeshAnimator {
         const translationX = interpKeyframes(k0.translationX, k1.translationX, t, d) - this.track.translationOffsetX;
         const translationY = interpKeyframes(k0.translationY, k1.translationY, t, d) - this.track.translationOffsetY;
         const translationZ = interpKeyframes(k0.translationZ, k1.translationZ, t, d) - this.track.translationOffsetZ;
-        const rotationX = interpKeyframes(k0.rotationX, k1.rotationX, t, d) - this.track.rotationOffsetX;
-        const rotationY = interpKeyframes(k0.rotationY, k1.rotationY, t, d) - this.track.rotationOffsetY;
-        const rotationZ = interpKeyframes(k0.rotationZ, k1.rotationZ, t, d) - this.track.rotationOffsetZ;
+        const rotationX = (interpKeyframes(k0.rotationX, k1.rotationX, t, d) - this.track.rotationOffsetX) * MathConstants.DEG_TO_RAD;
+        const rotationY = (interpKeyframes(k0.rotationY, k1.rotationY, t, d) - this.track.rotationOffsetY) * MathConstants.DEG_TO_RAD;
+        const rotationZ = (interpKeyframes(k0.rotationZ, k1.rotationZ, t, d) - this.track.rotationOffsetZ) * MathConstants.DEG_TO_RAD;
         const scaleX = interpKeyframes(k0.scaleX, k1.scaleX, t, d) / this.track.scaleDividerX;
         const scaleY = interpKeyframes(k0.scaleY, k1.scaleY, t, d) / this.track.scaleDividerY;
         const scaleZ = interpKeyframes(k0.scaleZ, k1.scaleZ, t, d) / this.track.scaleDividerZ;
-        calcModelMtx(dst, scaleX, scaleY, scaleZ, rotationX, rotationY, rotationZ, translationX, translationY, translationZ);
+        computeModelMatrixSRT(dst, scaleX, scaleY, scaleZ, rotationX, rotationY, rotationZ, translationX, translationY, translationZ);
     }
 }
 

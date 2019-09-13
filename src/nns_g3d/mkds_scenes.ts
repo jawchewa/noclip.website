@@ -9,64 +9,75 @@ import * as NSBTA from './nsbta';
 import * as NSBTP from './nsbtp';
 import * as NSBTX from './nsbtx';
 
-import { fetchData } from '../fetch';
-import Progressable from '../Progressable';
+import { DataFetcher } from '../DataFetcher';
 import ArrayBufferSlice from '../ArrayBufferSlice';
 import { GfxDevice, GfxHostAccessPass, GfxRenderPass } from '../gfx/platform/GfxPlatform';
 import { MDL0Renderer, G3DPass } from './render';
 import { assert, readString, assertExists } from '../util';
-import { GfxRenderInstViewRenderer } from '../gfx/render/GfxRenderer';
 import { BasicRenderTarget, standardFullClearRenderPassDescriptor, depthClearRenderPassDescriptor } from '../gfx/helpers/RenderTargetHelpers';
 import { FakeTextureHolder } from '../TextureHolder';
 import { mat4 } from 'gl-matrix';
-import { calcModelMtx } from '../oot3d/cmb';
 import AnimationController from '../AnimationController';
+import { computeModelMatrixSRT, MathConstants } from '../MathHelpers';
+import { GfxRenderInstManager } from '../gfx/render/GfxRenderer';
+import { GfxRenderDynamicUniformBuffer } from '../gfx/render/GfxRenderDynamicUniformBuffer';
+import { SceneContext } from '../SceneBase';
 
 export class MKDSRenderer implements Viewer.SceneGfx {
-    public viewRenderer = new GfxRenderInstViewRenderer();
     public renderTarget = new BasicRenderTarget();
+    public renderInstManager = new GfxRenderInstManager();
+    public uniformBuffer: GfxRenderDynamicUniformBuffer;
+
     public textureHolder: FakeTextureHolder;
     public objectRenderers: MDL0Renderer[] = [];
 
     constructor(device: GfxDevice, public courseRenderer: MDL0Renderer, public skyboxRenderer: MDL0Renderer | null) {
+        this.uniformBuffer = new GfxRenderDynamicUniformBuffer(device);
         this.textureHolder = new FakeTextureHolder(this.courseRenderer.viewerTextures);
-        this.courseRenderer.addToViewRenderer(device, this.viewRenderer);
-        if (this.skyboxRenderer !== null)
-            this.skyboxRenderer.addToViewRenderer(device, this.viewRenderer);
     }
 
-    public prepareToRender(hostAccessPass: GfxHostAccessPass, viewerInput: Viewer.ViewerRenderInput): void {
-        this.courseRenderer.prepareToRender(hostAccessPass, viewerInput);
+    private prepareToRender(device: GfxDevice, hostAccessPass: GfxHostAccessPass, viewerInput: Viewer.ViewerRenderInput): void {
+        const template = this.renderInstManager.pushTemplateRenderInst();
+        template.setUniformBuffer(this.uniformBuffer);
+        this.courseRenderer.prepareToRender(this.renderInstManager, viewerInput);
         if (this.skyboxRenderer !== null)
-            this.skyboxRenderer.prepareToRender(hostAccessPass, viewerInput);
+            this.skyboxRenderer.prepareToRender(this.renderInstManager, viewerInput);
         for (let i = 0; i < this.objectRenderers.length; i++)
-            this.objectRenderers[i].prepareToRender(hostAccessPass, viewerInput);
+            this.objectRenderers[i].prepareToRender(this.renderInstManager, viewerInput);
+        this.renderInstManager.popTemplateRenderInst();
+
+        this.uniformBuffer.prepareToRender(device, hostAccessPass);
     }
 
     public render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput): GfxRenderPass {
         const hostAccessPass = device.createHostAccessPass();
-        this.prepareToRender(hostAccessPass, viewerInput);
+        this.prepareToRender(device, hostAccessPass, viewerInput);
         device.submitPass(hostAccessPass);
 
-        this.viewRenderer.prepareToRender(device);
-
         this.renderTarget.setParameters(device, viewerInput.viewportWidth, viewerInput.viewportHeight);
-        this.viewRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
 
         // First, render the skybox.
         const skyboxPassRenderer = this.renderTarget.createRenderPass(device, standardFullClearRenderPassDescriptor);
-        this.viewRenderer.executeOnPass(device, skyboxPassRenderer, G3DPass.SKYBOX);
+        skyboxPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        this.renderInstManager.setVisibleByFilterKeyExact(G3DPass.SKYBOX);
+        this.renderInstManager.drawOnPassRenderer(device, skyboxPassRenderer);
         skyboxPassRenderer.endPass(null);
         device.submitPass(skyboxPassRenderer);
         // Now do main pass.
         const mainPassRenderer = this.renderTarget.createRenderPass(device, depthClearRenderPassDescriptor);
-        this.viewRenderer.executeOnPass(device, mainPassRenderer, G3DPass.MAIN);
+        mainPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        this.renderInstManager.setVisibleByFilterKeyExact(G3DPass.MAIN);
+        this.renderInstManager.drawOnPassRenderer(device, mainPassRenderer);
+
+        this.renderInstManager.resetRenderInsts();
+
         return mainPassRenderer;
     }
 
-    public destroy(device: GfxDevice): void {
-        this.viewRenderer.destroy(device);
+    public destroy(device: GfxDevice) {
+        this.renderInstManager.destroy(device);
         this.renderTarget.destroy(device);
+        this.uniformBuffer.destroy(device);
 
         this.courseRenderer.destroy(device);
         if (this.skyboxRenderer !== null)
@@ -118,9 +129,9 @@ function parseNKM(buffer: ArrayBufferSlice): NKM {
         const translationX = NSBMD.fx32(view.getInt32(objiTableIdx + 0x00, true)) / 16;
         const translationY = NSBMD.fx32(view.getInt32(objiTableIdx + 0x04, true)) / 16;
         const translationZ = NSBMD.fx32(view.getInt32(objiTableIdx + 0x08, true)) / 16;
-        const rotationX = NSBMD.fx32(view.getInt32(objiTableIdx + 0x0C, true)) * Math.PI / 180;
-        const rotationY = NSBMD.fx32(view.getInt32(objiTableIdx + 0x10, true)) * Math.PI / 180;
-        const rotationZ = NSBMD.fx32(view.getInt32(objiTableIdx + 0x14, true)) * Math.PI / 180;
+        const rotationX = NSBMD.fx32(view.getInt32(objiTableIdx + 0x0C, true)) * MathConstants.DEG_TO_RAD;
+        const rotationY = NSBMD.fx32(view.getInt32(objiTableIdx + 0x10, true)) * MathConstants.DEG_TO_RAD;
+        const rotationZ = NSBMD.fx32(view.getInt32(objiTableIdx + 0x14, true)) * MathConstants.DEG_TO_RAD;
         const scaleX = NSBMD.fx32(view.getInt32(objiTableIdx + 0x18, true));
         const scaleY = NSBMD.fx32(view.getInt32(objiTableIdx + 0x1C, true));
         const scaleZ = NSBMD.fx32(view.getInt32(objiTableIdx + 0x20, true));
@@ -147,8 +158,8 @@ const scratchMatrix = mat4.create();
 class MarioKartDSSceneDesc implements Viewer.SceneDesc {
     constructor(public id: string, public name: string) {}
 
-    private fetchCARC(path: string, abortSignal: AbortSignal): Progressable<NARC.NitroFS> {
-        return fetchData(path, abortSignal).then((buffer: ArrayBufferSlice) => {
+    private fetchCARC(path: string, dataFetcher: DataFetcher): Promise<NARC.NitroFS> {
+        return dataFetcher.fetchData(path).then((buffer: ArrayBufferSlice) => {
             return NARC.parse(CX.decompress(buffer));
         });
     }
@@ -160,7 +171,7 @@ class MarioKartDSSceneDesc implements Viewer.SceneDesc {
 
         function setModelMtx(mdl0Renderer: MDL0Renderer, bby: boolean = false): void {
             const rotationY = bby ? 0 : obji.rotationY;
-            calcModelMtx(scratchMatrix, obji.scaleX, obji.scaleY, obji.scaleZ, obji.rotationX, rotationY, obji.rotationZ, obji.translationX, obji.translationY, obji.translationZ);
+            computeModelMatrixSRT(scratchMatrix, obji.scaleX, obji.scaleY, obji.scaleZ, obji.rotationX, rotationY, obji.rotationZ, obji.translationX, obji.translationY, obji.translationZ);
             const posScale = 50;
             mat4.fromScaling(mdl0Renderer.modelMatrix, [posScale, posScale, posScale]);
             mat4.mul(mdl0Renderer.modelMatrix, mdl0Renderer.modelMatrix, scratchMatrix);
@@ -171,7 +182,6 @@ class MarioKartDSSceneDesc implements Viewer.SceneDesc {
             assert(bmd.models.length === 1);
             const mdl0Renderer = new MDL0Renderer(device, bmd.models[0], bmd.tex0);
             setModelMtx(mdl0Renderer);
-            mdl0Renderer.addToViewRenderer(device, renderer.viewRenderer);
             renderer.objectRenderers.push(mdl0Renderer);
             return mdl0Renderer;
         }
@@ -227,6 +237,8 @@ class MarioKartDSSceneDesc implements Viewer.SceneDesc {
             spawnModel(`/MapObj/rotary_room.nsbmd`);
         } else if (obji.objectId === 0x00D1) { // rotary_bridge
             spawnModel(`/MapObj/rotary_bridge.nsbmd`);
+        } else if (obji.objectId === 0x00D2) { // dram
+            spawnModel(`/MapObj/dram.nsbmd`);
         } else if (obji.objectId === 0x012E) { // BeachTree1
             spawnModel(`/MapObj/BeachTree1.nsbmd`);
         } else if (obji.objectId === 0x012F) { // earthen_pipe
@@ -244,7 +256,9 @@ class MarioKartDSSceneDesc implements Viewer.SceneDesc {
         } else if (obji.objectId === 0x0133) { // of6yoshi1
             spawnModel(`/MapObj/of6yoshi1.nsbmd`);
         } else if (obji.objectId === 0x0134) { // cow
-            spawnModel(`/MapObj/cow.nsbmd`).bindPAT0(device, parseBTP(`/MapObj/cow.nsbtp`));
+            const b = spawnModel(`/MapObj/cow.nsbmd`);
+            // TODO(jstpierre): How does the game decide the BTP frame?
+            // b.bindPAT0(device, parseBTP(`/MapObj/cow.nsbtp`));
         } else if (obji.objectId === 0x0136) { // mini_dokan
             const b = spawnModel(`/MapObj/mini_dokan.nsbmd`);
             setModelMtx(b, true);
@@ -309,10 +323,11 @@ class MarioKartDSSceneDesc implements Viewer.SceneDesc {
         }
     }
 
-    public createScene(device: GfxDevice, abortSignal: AbortSignal): Progressable<Viewer.SceneGfx> {
-        return Progressable.all([
-            this.fetchCARC(`mkds/Course/${this.id}.carc`, abortSignal),
-            this.fetchCARC(`mkds/Course/${this.id}Tex.carc`, abortSignal),
+    public createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+        const dataFetcher = context.dataFetcher;
+        return Promise.all([
+            this.fetchCARC(`mkds/Course/${this.id}.carc`, dataFetcher),
+            this.fetchCARC(`mkds/Course/${this.id}Tex.carc`, dataFetcher),
         ]).then(([courseNARC, textureNARC]) => {
             const courseBmdFile = courseNARC.files.find((file) => file.path === '/course_model.nsbmd');
             const courseBmd = NSBMD.parse(courseBmdFile.buffer);
@@ -426,9 +441,13 @@ const sceneDescs = [
     "Unused Test Courses",
     new MarioKartDSSceneDesc("dokan_course", "dokan_course"),
     new MarioKartDSSceneDesc("wario_course", "wario_course"),
-    new MarioKartDSSceneDesc("donkey_course", "donkey_course"),
-    new MarioKartDSSceneDesc("luigi_course", "luigi_course"),
-    new MarioKartDSSceneDesc("test1_course", "test1_course"),
+
+    // These try to reference items that aren't in the archive, so we crash.
+    // TODO(jstpierre): Put these back and don't crash on the missing items.
+    // new MarioKartDSSceneDesc("donkey_course", "donkey_course"),
+    // new MarioKartDSSceneDesc("luigi_course", "luigi_course"),
+    // new MarioKartDSSceneDesc("test1_course", "test1_course"),
+
     new MarioKartDSSceneDesc("test_circle", "test_circle"),
     new MarioKartDSSceneDesc("mini_block_course", "mini_block_course"),
     new MarioKartDSSceneDesc("nokonoko_course", "nokonoko_course"),

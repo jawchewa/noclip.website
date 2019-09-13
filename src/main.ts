@@ -11,53 +11,57 @@ if (module.hot) {
     });
 }
 
-import { SceneDesc, SceneGroup, Viewer, SceneGfx, getSceneDescs, InitErrorCode, initializeViewer, makeErrorUI, makeErrorMessageUI } from './viewer';
+import { Viewer, SceneGfx, InitErrorCode, initializeViewer, makeErrorUI } from './viewer';
 
 import ArrayBufferSlice from './ArrayBufferSlice';
-import Progressable from './Progressable';
 
-import * as BK from './bk/scenes';
-import * as THUG2 from './thug2/scenes';
-import * as ZTP from './j3d/ztp_scenes';
-import * as MKDD from './j3d/mkdd_scenes';
-import * as ZWW from './j3d/zww_scenes';
-import * as SMS from './j3d/sms_scenes';
-import * as PIK2 from './j3d/pik2_scenes';
-import * as SMG1 from './j3d/smg1_scenes';
-import * as SMG2 from './j3d/smg2_scenes';
-import * as SM64DS from './sm64ds/scenes';
-import * as MDL0 from './mdl0/scenes';
-import * as OOT3D from './oot3d/oot3d_scenes';
-import * as MM3D from './oot3d/mm3d_scenes';
-import * as LM3D from './oot3d/lm3d_scenes';
-import * as Grezzo3DS from './oot3d/scenes';
-import * as FRES from './fres/scenes';
-import * as SPL from './fres/splatoon_scenes';
-import * as DKSIV from './dksiv/scenes';
-import * as MP1 from './metroid_prime/scenes';
-import * as DKCR from './metroid_prime/dkcr_scenes';
-import * as LM from './luigis_mansion/scenes';
-import * as ZSS from './rres/zss_scenes';
-import * as ELB from './rres/elb_scenes';
-import * as MKWII from './rres/mkwii_scenes';
-import * as TTYD from './ttyd/scenes';
-import * as SPM from './ttyd/spm_scenes';
-import * as MKDS from './nns_g3d/mkds_scenes';
-import * as NSMBDS from './nns_g3d/nsmbds_scenes';
-import * as NNS_G3D from './nns_g3d/scenes';
-import * as Z_BOTW from './z_botw/scenes';
-import * as SMO from './fres_nx/smo_scenes';
-import * as PSY from './psychonauts/scenes';
-import * as DKS from './dks/scenes';
-import * as J3D from './j3d/scenes';
+import * as Scenes_BanjoKazooie from './bk/scenes';
+import * as Scenes_Zelda_TwilightPrincess from './j3d/ztp_scenes';
+import * as Scenes_MarioKartDoubleDash from './j3d/mkdd_scenes';
+import * as Scenes_Zelda_TheWindWaker from './j3d/WindWaker/zww_scenes';
+import * as Scenes_SuperMarioSunshine from './j3d/sms_scenes';
+import * as Scenes_Pikmin2 from './j3d/pik2_scenes';
+import * as Scenes_SuperMarioGalaxy1 from './j3d/smg/smg1_scenes';
+import * as Scenes_SuperMarioGalaxy2 from './j3d/smg/smg2_scenes';
+import * as Scenes_SuperMario64DS from './sm64ds/scenes';
+import * as Scenes_SonicMania from './sonic_mania/scenes';
+import * as Scenes_Zelda_OcarinaOfTime3D from './oot3d/oot3d_scenes';
+import * as Scenes_Zelda_MajorasMask3D from './oot3d/mm3d_scenes';
+import * as Scenes_LuigisMansion3D from './oot3d/lm3d_scenes';
+import * as Scenes_DarkSoulsCollision from './dksiv/scenes';
+import * as Scenes_MetroidPrime from './metroid_prime/scenes';
+import * as Scenes_DonkeyKongCountryReturns from './metroid_prime/dkcr_scenes';
+import * as Scenes_LuigisMansion from './luigis_mansion/scenes';
+import * as Scenes_PaperMario_TheThousandYearDoor from './ttyd/scenes';
+import * as Scenes_SuperPaperMario from './ttyd/spm_scenes';
+import * as Scenes_MarioKartDS from './nns_g3d/mkds_scenes';
+import * as Scenes_NewSuperMarioBrosDS from './nns_g3d/nsmbds_scenes';
+import * as Scenes_KingdomHearts from './kh/scenes';
+import * as Scenes_KingdomHeartsIIFinalMix from './kh2fm/scenes';
+import * as Scenes_Psychonauts from './psychonauts/scenes';
+import * as Scenes_DarkSouls from './dks/scenes';
+import * as Scenes_KatamariDamacy from './katamari_damacy/scenes';
+import * as Scenes_PaperMario64 from './pm64/scenes';
+import * as Scenes_Elebits from './rres/Scenes_Elebits';
+import * as Scenes_KirbysReturnToDreamLand from './rres/Scenes_KirbysReturnToDreamLand';
+import * as Scenes_Klonoa from './rres/Scenes_Klonoa';
+import * as Scenes_MarioAndSonicAtThe2012OlympicGames from './rres/Scenes_MarioAndSonicAtTheOlympicGames2012';
+import * as Scenes_MarioKartWii from './rres/Scenes_MarioKartWii';
+import * as Scenes_Okami from './rres/Scenes_Okami';
+import * as Scenes_SonicColors from './rres/Scenes_SonicColors';
+import * as Scenes_SuperSmashBrosBrawl from './rres/Scenes_SuperSmashBrosBrawl';
+import * as Scenes_Test from './Scenes_Test';
+import * as Scenes_WiiSportsResort from './rres/Scenes_WiiSportsResort';
+import * as Scenes_Zelda_SkywardSword from './rres/Scenes_Zelda_SkywardSword';
+import * as Scenes_InteractiveExamples from './interactive_examples/Scenes';
 
-import { UI, SaveStatesAction } from './ui';
+import { DroppedFileSceneDesc } from './Scenes_FileDrops';
+
+import { UI, SaveStatesAction, Panel } from './ui';
 import { serializeCamera, deserializeCamera, FPSCameraController } from './Camera';
 import { hexdump } from './util';
-import { downloadBlob, downloadBufferSlice, downloadBuffer } from './fetch';
-import { GfxDevice } from './gfx/platform/GfxPlatform';
+import { DataFetcher } from './DataFetcher';
 import { ZipFileEntry, makeZipFile } from './ZipFile';
-import { TextureHolder } from './TextureHolder';
 import { atob, btoa } from './Ascii85';
 import { vec3, mat4 } from 'gl-matrix';
 import { GlobalSaveManager, SaveStateLocation } from './SaveManager';
@@ -66,140 +70,66 @@ import { gfxDeviceGetImpl } from './gfx/platform/GfxPlatformWebGL2';
 import { Color } from './Color';
 import { standardFullClearRenderPassDescriptor } from './gfx/helpers/RenderTargetHelpers';
 
+import * as Sentry from '@sentry/browser';
+import { GIT_REVISION, IS_DEVELOPMENT } from './BuildVersion';
+import { SceneDesc, SceneGroup, SceneContext, getSceneDescs, Destroyable } from './SceneBase';
+import { prepareFrameDebugOverlayCanvas2D } from './DebugJunk';
+import { downloadBlob, downloadBufferSlice, downloadBuffer } from './DownloadUtils';
+
 const sceneGroups = [
     "Wii",
-    MKWII.sceneGroup,
-    SMG1.sceneGroup,
-    SMG2.sceneGroup,
-    SPM.sceneGroup,
-    ZSS.sceneGroup,
-    ELB.sceneGroup,
+    Scenes_MarioKartWii.sceneGroup,
+    Scenes_KirbysReturnToDreamLand.sceneGroup,
+    Scenes_Klonoa.sceneGroup,
+    Scenes_Zelda_SkywardSword.sceneGroup,
+    Scenes_Okami.sceneGroup,
+    Scenes_SuperMarioGalaxy1.sceneGroup,
+    Scenes_SuperMarioGalaxy2.sceneGroup,
+    Scenes_SuperPaperMario.sceneGroup,
+    Scenes_SuperSmashBrosBrawl.sceneGroup,
+    Scenes_WiiSportsResort.sceneGroup,
     "GameCube",
-    LM.sceneGroup,
-    MKDD.sceneGroup,
-    MP1.sceneGroup,
-    TTYD.sceneGroup,
-    PIK2.sceneGroup,
-    SMS.sceneGroup,
-    ZTP.sceneGroup,
-    ZWW.sceneGroup,
-    "Nintendo DS",
-    MKDS.sceneGroup,
-    SM64DS.sceneGroup,
-    NSMBDS.sceneGroup,
+    Scenes_LuigisMansion.sceneGroup,
+    Scenes_MarioKartDoubleDash.sceneGroup,
+    Scenes_MetroidPrime.sceneGroupMP1,
+    Scenes_MetroidPrime.sceneGroupMP2,
+    Scenes_PaperMario_TheThousandYearDoor.sceneGroup,
+    Scenes_Pikmin2.sceneGroup,
+    Scenes_SuperMarioSunshine.sceneGroup,
+    Scenes_Zelda_TwilightPrincess.sceneGroup,
+    Scenes_Zelda_TheWindWaker.sceneGroup,
     "Nintendo 3DS",
-    LM3D.sceneGroup,
-    MM3D.sceneGroup,
-    OOT3D.sceneGroup,
+    Scenes_LuigisMansion3D.sceneGroup,
+    Scenes_Zelda_MajorasMask3D.sceneGroup,
+    Scenes_Zelda_OcarinaOfTime3D.sceneGroup,
+    "Nintendo DS",
+    Scenes_MarioKartDS.sceneGroup,
+    Scenes_NewSuperMarioBrosDS.sceneGroup,
+    Scenes_SuperMario64DS.sceneGroup,
+    "Nintendo 64",
+    Scenes_BanjoKazooie.sceneGroup,
+    Scenes_PaperMario64.sceneGroup,
+    "PlayStation 2",
+    Scenes_KatamariDamacy.sceneGroup,
+    Scenes_KingdomHearts.sceneGroup,
+    Scenes_KingdomHeartsIIFinalMix.sceneGroup,
     "Other",
-    DKSIV.sceneGroup,
-    MDL0.sceneGroup,
-    BK.sceneGroup,
+    Scenes_DarkSoulsCollision.sceneGroup,
+    Scenes_SonicMania.sceneGroup,
     "Experimental",
-    PSY.sceneGroup,
-    DKCR.sceneGroup,
-    SMO.sceneGroup,
-    SPL.sceneGroup,
-    Z_BOTW.sceneGroup,
-    DKS.sceneGroup,
-    THUG2.sceneGroup,
+    Scenes_DarkSouls.sceneGroup,
+    Scenes_DonkeyKongCountryReturns.sceneGroup,
+    Scenes_Elebits.sceneGroup,
+    Scenes_MarioAndSonicAtThe2012OlympicGames.sceneGroup,
+    Scenes_MetroidPrime.sceneGroupMP3,
+    Scenes_Psychonauts.sceneGroup,
+    Scenes_SonicColors.sceneGroup,
+    Scenes_Test.sceneGroup,
+    Scenes_InteractiveExamples.sceneGroup,
 ];
-
-function loadFileAsPromise(file: File): Progressable<ArrayBufferSlice> {
-    const request = new FileReader();
-    request.readAsArrayBuffer(file);
-
-    const p = new Promise<ArrayBufferSlice>((resolve, reject) => {
-        request.onload = () => {
-            const buffer: ArrayBuffer = request.result as ArrayBuffer;
-            const slice = new ArrayBufferSlice(buffer);
-            resolve(slice);
-        };
-        request.onerror = () => {
-            reject();
-        };
-        request.onprogress = (e) => {
-            if (e.lengthComputable)
-                pr.setProgress(e.loaded / e.total);
-        };
-    });
-    const pr = new Progressable<ArrayBufferSlice>(p);
-    return pr;
-}
 
 function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
     return new Response(blob).arrayBuffer();
-}
-
-class DroppedFileSceneDesc implements SceneDesc {
-    public id: string;
-    public name: string;
-    public file: File;
-
-    constructor(file: File) {
-        this.file = file;
-        this.id = file.name;
-        this.name = file.name;
-    }
-
-    public createScene(device: GfxDevice): Progressable<SceneGfx> {
-        const file = this.file;
-
-        if (file.name.endsWith('.zar') || file.name.endsWith('.gar'))
-            return loadFileAsPromise(file).then((buffer) => Grezzo3DS.createSceneFromZARBuffer(device, buffer));
-
-        if (file.name.endsWith('.arc') || file.name.endsWith('.carc'))
-            return loadFileAsPromise(file).then((buffer) => ELB.createBasicRRESRendererFromU8Archive(device, buffer));
-
-        if (file.name.endsWith('.brres'))
-            return loadFileAsPromise(file).then((buffer) => ELB.createBasicRRESRendererFromBRRES(device, buffer));
-
-        if (file.name.endsWith('.bfres'))
-            return loadFileAsPromise(file).then((buffer) => FRES.createSceneFromFRESBuffer(device, buffer));
-
-        if (file.name.endsWith('.szs') || file.name.endsWith('.rarc') || file.name.endsWith('.bmd') || file.name.endsWith('.bdl'))
-            return loadFileAsPromise(file).then((buffer) => J3D.createMultiSceneFromBuffer(device, buffer));
-
-        if (file.name.endsWith('.nsbmd'))
-            return loadFileAsPromise(file).then((buffer) => NNS_G3D.createBasicNSBMDRendererFromNSBMD(device, buffer));
-
-        return null;
-    }
-}
-
-class SceneLoader {
-    public loadingSceneDesc: SceneDesc = null;
-    public abortController: AbortController | null = null;
-
-    constructor(public viewer: Viewer) {
-    }
-
-    public loadSceneDesc(sceneDesc: SceneDesc): Progressable<SceneGfx> {
-        this.viewer.setScene(null);
-        gfxDeviceGetImpl(this.viewer.gfxDevice).checkForLeaks();
-
-        if (this.abortController !== null)
-            this.abortController.abort();
-        this.abortController = new AbortController();
-
-        this.loadingSceneDesc = sceneDesc;
-
-        if (sceneDesc.createScene !== undefined) {
-            const progressable = sceneDesc.createScene(this.viewer.gfxDevice, this.abortController.signal);
-            if (progressable !== null) {
-                progressable.then((scene: SceneGfx) => {
-                    if (this.loadingSceneDesc === sceneDesc) {
-                        this.loadingSceneDesc = null;
-                        this.viewer.setScene(scene);
-                    }
-                });
-                return progressable;
-            }
-        }
-
-        console.error(`Cannot create scene. Probably an unsupported file extension.`);
-        throw "whoops";
-    }
 }
 
 function convertCanvasToPNG(canvas: HTMLCanvasElement): Promise<Blob> {
@@ -232,12 +162,12 @@ class Main {
 
     private droppedFileGroup: SceneGroup;
 
-    private uiContainers: HTMLElement;
-    private dragHighlight: HTMLElement;
     private currentSceneGroup: SceneGroup;
     private currentSceneDesc: SceneDesc;
 
-    private sceneLoader: SceneLoader;
+    private loadingSceneDesc: SceneDesc = null;
+    private abortController: AbortController | null = null;
+    private destroyablePool: Destroyable[] = [];
 
     constructor() {
         this.toplevel = document.createElement('div');
@@ -245,21 +175,18 @@ class Main {
 
         this.canvas = document.createElement('canvas');
 
-        this.uiContainers = document.createElement('div');
-        this.toplevel.appendChild(this.uiContainers);
-
         const errorCode = initializeViewer(this, this.canvas);
         if (errorCode !== InitErrorCode.SUCCESS) {
-            this.uiContainers.appendChild(makeErrorUI(errorCode));
+            this.toplevel.appendChild(makeErrorUI(errorCode));
             return;
         }
 
         this.toplevel.ondragover = (e) => {
-            this.dragHighlight.style.display = 'block';
+            this.ui.dragHighlight.style.display = 'block';
             e.preventDefault();
         };
         this.toplevel.ondragleave = (e) => {
-            this.dragHighlight.style.display = 'none';
+            this.ui.dragHighlight.style.display = 'none';
             e.preventDefault();
         };
         this.toplevel.ondrop = this._onDrop.bind(this);
@@ -278,8 +205,6 @@ class Main {
             this.ui.setIsDragging(this.viewer.inputManager.isDragging());
         };
 
-        this.sceneLoader = new SceneLoader(this.viewer);
-
         this._makeUI();
 
         this.groups = sceneGroups;
@@ -290,14 +215,10 @@ class Main {
 
         this._loadSceneGroups();
 
-        if (this.currentSceneDesc === undefined) {
-            // Load the state from the hash, remove the extra character at the end.
-            const hash = window.location.hash;
-            if (hash.startsWith('#'))
-                this._loadState(decodeURIComponent(hash.slice(1)));
-            // Wipe out the hash from the URL.
-            window.history.replaceState('', '', '/');
-        }
+        window.onhashchange = this._onHashChange.bind(this);
+
+        if (this.currentSceneDesc === undefined)
+            this._onHashChange();
 
         if (this.currentSceneDesc === undefined) {
             // Load the state from session storage.
@@ -315,7 +236,37 @@ class Main {
             this.ui.sceneSelect.setExpanded(true);
         }
 
-        this._updateLoop(0);
+        this._updateLoop(window.performance.now());
+
+        if (!IS_DEVELOPMENT) {
+            Sentry.init({
+                dsn: 'https://a3b5f6c50bc04555835f9a83d6e76b23@sentry.io/1448331',
+                beforeSend: (event) => {
+                    // Filter out aborted XHRs.
+                    if (event.exception.values.length) {
+                        const exc = event.exception.values[0];
+                        if (exc.type === 'AbortedError')
+                            return null;
+                    }
+
+                    return event;
+                },
+            });
+
+            Sentry.configureScope((scope) => {
+                scope.setExtra('git-revision', GIT_REVISION);
+            });
+        }
+    }
+
+    private _onHashChange(): void {
+        // Load the state from the hash, remove the extra character at the end.
+        const hash = window.location.hash;
+        if (hash.startsWith('#')) {
+            this._loadState(decodeURIComponent(hash.slice(1)));
+            // Wipe out the hash from the URL.
+            window.history.replaceState('', '', '/');
+        }
     }
 
     private _exportSaveData() {
@@ -346,31 +297,43 @@ class Main {
         if (inputManager.isKeyDownEventTriggered('Numpad3'))
             this._exportSaveData();
         if (inputManager.isKeyDownEventTriggered('Period'))
-            this.viewer.isSceneTimeRunning = !this.viewer.isSceneTimeRunning;
+            this.ui.timePanel.togglePausePlay();
+        if (inputManager.isKeyDownEventTriggered('Comma'))
+            this.viewer.sceneTime = 0;
     }
 
     private _updateLoop = (time: number) => {
         this.checkKeyShortcuts();
 
+        prepareFrameDebugOverlayCanvas2D();
+
         // Needs to be called before this.viewer.update
         const shouldTakeScreenshot = this.viewer.inputManager.isKeyDownEventTriggered('Numpad7');
 
+        let sceneTimeScale = this.ui.timePanel.getTimeScale();
+
+        this.viewer.sceneTimeScale = sceneTimeScale;
         this.viewer.update(time);
 
         if (shouldTakeScreenshot)
             this._takeScreenshot();
 
+        this.ui.timePanel.update(this.viewer.sceneTime, 1.0);
+
         window.requestAnimationFrame(this._updateLoop);
     };
 
     private _onDrop(e: DragEvent) {
-        this.dragHighlight.style.display = 'none';
+        this.ui.dragHighlight.style.display = 'none';
         e.preventDefault();
         const transfer = e.dataTransfer;
         if (transfer.files.length === 0)
             return;
         const file = transfer.files[0];
-        const sceneDesc = new DroppedFileSceneDesc(file);
+        const files: File[] = [];
+        for (let i = 0; i < transfer.files.length; i++)
+            files.push(transfer.files[i]);
+        const sceneDesc = new DroppedFileSceneDesc(file, files);
         this.droppedFileGroup.sceneDescs.push(sceneDesc);
         this._loadSceneGroups();
         this._loadSceneDesc(this.droppedFileGroup, sceneDesc);
@@ -395,12 +358,12 @@ class Main {
         if (this.viewer.scene !== null && this.viewer.scene.serializeSaveState)
             offs = this.viewer.scene.serializeSaveState(this._saveStateTmp.buffer, offs);
 
-        const s = atob(this._saveStateTmp, offs);
+        const s = btoa(this._saveStateTmp, offs);
         return s + '=';
     }
 
     private _loadSceneSaveStateVersion2(state: string): boolean {
-        const byteLength = btoa(this._saveStateTmp, 0, state);
+        const byteLength = atob(this._saveStateTmp, 0, state);
         if (byteLength < 4)
             return false;
 
@@ -457,7 +420,7 @@ class Main {
             return this._loadSceneSaveStateVersion1(state);
     }
 
-    private _loadSceneDescById(id: string, sceneState: string | null): Progressable<SceneGfx> | null {
+    private _loadSceneDescById(id: string, sceneState: string | null): void {
         const [groupId, ...sceneRest] = id.split('/');
         let sceneId = decodeURIComponent(sceneRest.join('/'));
 
@@ -469,7 +432,7 @@ class Main {
             sceneId = group.sceneIdMap.get(sceneId);
 
         const desc = getSceneDescs(group).find((d) => d.id === sceneId);
-        return this._loadSceneDesc(group, desc, sceneState);
+        this._loadSceneDesc(group, desc, sceneState);
     }
 
     private _loadState(state: string) {
@@ -513,21 +476,17 @@ class Main {
             this._saveState();
         };
 
-        if (scene.createPanels !== undefined)
-            this.ui.setScenePanels(scene.createPanels());
-        else
-            this.ui.setScenePanels([]);
+        let scenePanels: Panel[] = [];
+        if (scene.createPanels)
+            scenePanels = scene.createPanels();
+        this.ui.setScenePanels(scenePanels);
 
         const sceneDescId = this._getCurrentSceneDescId();
         this.saveManager.setCurrentSceneDescId(sceneDescId);
         this.ui.saveStatesPanel.setCurrentSceneDescId(sceneDescId);
 
-        // Set camera controller.
-        if (scene.defaultCameraController !== undefined) {
-            const controller = new scene.defaultCameraController();
-            this.viewer.setCameraController(controller);
-        }
-
+        if (scene.createCameraController !== undefined)
+            this.viewer.setCameraController(scene.createCameraController());
         if (this.viewer.cameraController === null)
             this.viewer.setCameraController(new FPSCameraController());
 
@@ -536,7 +495,7 @@ class Main {
 
             const key = this.saveManager.getSaveStateSlotKey(sceneDescId, 1);
             const didLoadCameraState = this._loadSceneSaveState(this.saveManager.loadState(key));
-    
+
             if (!didLoadCameraState)
                 mat4.identity(camera.worldMatrix);
         }
@@ -562,40 +521,83 @@ class Main {
         }
     }
 
-    private _sendAnalytics(): void {
-        const groupId = this.currentSceneGroup.id;
-        const sceneId = this.currentSceneDesc.id;
-
-        if (typeof gtag !== 'undefined') {
-            gtag("event", "loadScene", {
-                'event_category': "Scenes",
-                'event_label': `${groupId}/${sceneId}`,
-            });
+    private _loadSceneDesc(sceneGroup: SceneGroup, sceneDesc: SceneDesc, sceneStateStr: string | null = null): void {
+        if (this.currentSceneDesc === sceneDesc) {
+            this._loadSceneSaveState(sceneStateStr);
+            return;
         }
-    }
 
-    private _loadSceneDesc(sceneGroup: SceneGroup, sceneDesc: SceneDesc, sceneStateStr: string | null = null): Progressable<SceneGfx> {
-        if (this.currentSceneDesc === sceneDesc)
-            return Progressable.resolve(null);
+        const device = this.viewer.gfxDevice;
+
+        // Tear down old scene.
+        if (this.abortController !== null)
+            this.abortController.abort();
+        this.ui.destroyScene();
+        if (this.viewer.scene && !this.destroyablePool.includes(this.viewer.scene))
+            this.destroyablePool.push(this.viewer.scene);
+        this.viewer.setScene(null);
+        for (let i = 0; i < this.destroyablePool.length; i++)
+            this.destroyablePool[i].destroy(device);
+        this.abortController = new AbortController();
+        gfxDeviceGetImpl(this.viewer.gfxDevice).checkForLeaks();
+
+        // Unhide any hidden scene groups upon being loaded.
+        if (sceneGroup.hidden)
+            sceneGroup.hidden = false;
 
         this.currentSceneGroup = sceneGroup;
         this.currentSceneDesc = sceneDesc;
         this.ui.sceneSelect.setCurrentDesc(this.currentSceneGroup, this.currentSceneDesc);
 
-        const progressable = this.sceneLoader.loadSceneDesc(sceneDesc).then((scene) => {
-            this._onSceneChanged(scene, sceneStateStr);
-            return scene;
-        });
-        this.ui.sceneSelect.setLoadProgress(progressable.progress);
-        progressable.onProgress = () => {
-            this.ui.sceneSelect.setLoadProgress(progressable.progress);
+        this.ui.sceneSelect.setProgress(0);
+
+        const abortSignal = this.abortController.signal;
+        const progressMeter = this.ui.sceneSelect;
+        const dataFetcher = new DataFetcher(abortSignal, progressMeter);
+        const uiContainer: HTMLElement = document.createElement('div');
+        this.ui.sceneUIContainer.appendChild(uiContainer);
+        const destroyablePool: Destroyable[] = this.destroyablePool;
+        const context: SceneContext = {
+            device, dataFetcher, uiContainer, destroyablePool,
         };
+
+        this.loadingSceneDesc = sceneDesc;
+        const promise = sceneDesc.createScene(device, context);
+
+        if (promise === null) {
+            console.error(`Cannot load ${sceneDesc.id}. Probably an unsupported file extension.`);
+            throw "whoops";
+        }
+
+        promise.then((scene: SceneGfx) => {
+            if (this.loadingSceneDesc === sceneDesc) {
+                this.loadingSceneDesc = null;
+                this.abortController = null;
+                this.viewer.setScene(scene);
+                this._onSceneChanged(scene, sceneStateStr);
+            }
+        });
 
         // Set window title.
         document.title = `${sceneDesc.name} - ${sceneGroup.name} - noclip`;
 
-        this._sendAnalytics();
-        return progressable;
+        const sceneDescId = this._getCurrentSceneDescId();
+
+        if (typeof gtag !== 'undefined') {
+            gtag("event", "loadScene", {
+                'event_category': "Scenes",
+                'event_label': sceneDescId,
+            });
+        }
+
+        Sentry.addBreadcrumb({
+            category: 'loadScene',
+            message: sceneDescId,
+        });
+
+        Sentry.configureScope((scope) => {
+            scope.setExtra('sceneDescId', sceneDescId);
+        });
     }
 
     private _loadSceneGroups() {
@@ -604,27 +606,22 @@ class Main {
 
     private _makeUI() {
         this.ui = new UI(this.viewer);
-        this.uiContainers.appendChild(this.ui.elem);
+        this.toplevel.appendChild(this.ui.elem);
         this.ui.sceneSelect.onscenedescselected = this._onSceneDescSelected.bind(this);
         this.ui.saveStatesPanel.onsavestatesaction = (action: SaveStatesAction, key: string) => {
             this.doSaveStatesAction(action, key);
         };
-
-        this.dragHighlight = document.createElement('div');
-        this.uiContainers.appendChild(this.dragHighlight);
-        this.dragHighlight.style.position = 'absolute';
-        this.dragHighlight.style.left = '0';
-        this.dragHighlight.style.right = '0';
-        this.dragHighlight.style.top = '0';
-        this.dragHighlight.style.bottom = '0';
-        this.dragHighlight.style.backgroundColor = 'rgba(255, 255, 255, 0.5)';
-        this.dragHighlight.style.boxShadow = '0 0 40px 5px white inset';
-        this.dragHighlight.style.display = 'none';
-        this.dragHighlight.style.pointerEvents = 'none';
+        this.ui.timePanel.ontimescrub = (adj: number) => {
+            this.viewer.setSceneTime(Math.max(this.viewer.sceneTime + adj, 0));
+        };
+        this.ui.timePanel.onrewind = () => {
+            this.viewer.setSceneTime(0);
+            this._saveState();
+        };
     }
 
     private _toggleUI() {
-        this.uiContainers.style.display = this.uiContainers.style.display === 'none' ? '' : 'none';
+        this.ui.elem.style.display = this.ui.elem.style.display === 'none' ? '' : 'none';
     }
 
     private _getSceneDownloadPrefix() {
@@ -640,11 +637,13 @@ class Main {
         convertCanvasToPNG(canvas).then((blob) => downloadBlob(filename, blob));
     }
 
-    private _makeZipFileFromTextureHolder(textureHolder: TextureHolder<any>): Promise<ZipFileEntry[]> {
+    private async _makeTextureZipFile(): Promise<ZipFileEntry[]> {
+        const viewerTextures = await this.ui.textureViewer.getViewerTextureList();
+
         const zipFileEntries: ZipFileEntry[] = [];
         const promises: Promise<void>[] = [];
-        for (let i = 0; i < textureHolder.viewerTextures.length; i++) {
-            const tex = textureHolder.viewerTextures[i];
+        for (let i = 0; i < viewerTextures.length; i++) {
+            const tex = viewerTextures[i];
             for (let j = 0; j < tex.surfaces.length; j++) {
                 const filename = `${tex.name}_${j}.png`;
                 promises.push(convertCanvasToPNG(tex.surfaces[j]).then((blob) => blobToArrayBuffer(blob)).then((data) => {
@@ -652,19 +651,20 @@ class Main {
                 }));
             }
         }
+        await Promise.all(promises);
 
-        return Promise.all(promises).then(() => zipFileEntries);
+        return zipFileEntries;
     }
 
     private _downloadTextures() {
-        const textureHolder = this.viewer.getCurrentTextureHolder();
-        if (textureHolder) {
-            this._makeZipFileFromTextureHolder(textureHolder).then((zipFileEntries) => {
-                const zipBuffer = makeZipFile(zipFileEntries);
-                const filename = `${this._getSceneDownloadPrefix()}_Textures.zip`;
-                downloadBufferSlice(filename, new ArrayBufferSlice(zipBuffer), 'application/zip');
-            });
-        }
+        this._makeTextureZipFile().then((zipFileEntries) => {
+            if (zipFileEntries.length === 0)
+                return;
+
+            const zipBuffer = makeZipFile(zipFileEntries);
+            const filename = `${this._getSceneDownloadPrefix()}_Textures.zip`;
+            downloadBuffer(filename, zipBuffer, 'application/zip');
+        });
     }
 
     // Hooks for people who want to mess with stuff.
@@ -691,7 +691,16 @@ declare global {
         hexdump: any;
         downloadBuffer: any;
         debug: any;
+        debugObj: any;
+        gl: any;
     }
 }
 window.hexdump = hexdump;
-window.downloadBuffer = downloadBuffer;
+window.downloadBuffer = (name: any, buffer: any) => {
+    if (buffer instanceof ArrayBufferSlice)
+        downloadBufferSlice(name, buffer);
+    else if (name.name && name.buffer)
+        window.downloadBuffer(name.name, name.buffer);
+    else if (buffer instanceof ArrayBuffer) 
+        downloadBuffer(name, buffer);
+};

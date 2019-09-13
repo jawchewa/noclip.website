@@ -4,8 +4,8 @@ import ArrayBufferSlice from "../ArrayBufferSlice";
 import { readString, assert } from "../util";
 import { mat4 } from "gl-matrix";
 import { Color, colorFromRGBA } from "../Color";
-import { Texture, TextureLevel, Version, calcTexMtx, Material, CMB } from "./cmb";
-import { decodeTexture, computeTextureByteSize } from "./pica_texture";
+import { Texture, TextureLevel, Version, calcTexMtx } from "./cmb";
+import { decodeTexture, computeTextureByteSize, getTextureFormatFromGLFormat } from "./pica_texture";
 import { getPointHermite } from "../Spline";
 import { TextureMapping } from "../TextureHolder";
 import { CtrTextureHolder } from "./render";
@@ -151,7 +151,7 @@ function parseTxpt(buffer: ArrayBufferSlice, texData: ArrayBufferSlice | null, s
         const unk06 = view.getUint16(txptTableIdx + 0x06, true);
         const width = view.getUint16(txptTableIdx + 0x08, true);
         const height = view.getUint16(txptTableIdx + 0x0A, true);
-        const format = view.getUint32(txptTableIdx + 0x0C, true);
+        const glFormat = view.getUint32(txptTableIdx + 0x0C, true);
         let dataOffs = view.getUint32(txptTableIdx + 0x10, true);
         const nameStringIndex = view.getUint32(txptTableIdx + 0x14, true);
         const rawName = stringTable[nameStringIndex];
@@ -159,6 +159,8 @@ function parseTxpt(buffer: ArrayBufferSlice, texData: ArrayBufferSlice | null, s
         const dataEnd = dataOffs + size;
 
         const levels: TextureLevel[] = [];
+
+        const format = getTextureFormatFromGLFormat(glFormat);
 
         if (texData !== null) {
             let mipWidth = width, mipHeight = height;
@@ -171,7 +173,7 @@ function parseTxpt(buffer: ArrayBufferSlice, texData: ArrayBufferSlice | null, s
             }
         }
 
-        textures.push({ name, format, width, height, levels, totalTextureSize: size });
+        textures.push({ name, format, width, height, levels });
 
         txptTableIdx += 0x18;
     }
@@ -421,7 +423,7 @@ export class ColorAnimator {
         assert(animEntry.animationType === AnimationType.COLOR);
     }
 
-    public calcMaterialColor(dst: Color): void {
+    public calcColor(dst: Color): void {
         const animFrame = getAnimFrame(this.cmab, this.animationController.getTimeInFrames());
         const r = this.animEntry.tracks[0] !== undefined ? sampleAnimationTrack(this.animEntry.tracks[0], animFrame) : 1;
         const g = this.animEntry.tracks[1] !== undefined ? sampleAnimationTrack(this.animEntry.tracks[1], animFrame) : 1;
@@ -429,13 +431,6 @@ export class ColorAnimator {
         const a = this.animEntry.tracks[3] !== undefined ? sampleAnimationTrack(this.animEntry.tracks[3], animFrame) : 1;
         colorFromRGBA(dst, r, g, b, a);
     }
-}
-
-export function getTextureName(animationController: AnimationController, cmb: CMB, cmab: CMAB | null, material: Material, bindingIndex: number): string {
-    if (cmab !== null) {
-    }
-
-    return cmb.textures[material.textureBindings[bindingIndex].textureIdx].name;
 }
 
 export class TexturePaletteAnimator {
