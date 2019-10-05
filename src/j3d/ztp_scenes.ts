@@ -5,18 +5,17 @@ import * as Viewer from '../viewer';
 import * as Yaz0 from '../compression/Yaz0';
 import * as UI from '../ui';
 
-import { BMD, BMT, BTK, BTI, TEX1_TextureData, BRK, BCK, LoopMode, BTI_Texture } from './j3d';
+import { BMD, BMT, BTK, BTI, BRK, BCK, LoopMode, BTI_Texture } from './j3d';
 import * as RARC from './rarc';
 import { BMDModel, BMDModelInstance, BTIData } from './render';
 import { EFB_WIDTH, EFB_HEIGHT, GXMaterialHacks } from '../gx/gx_material';
-import { readString, assertExists, hexzero, leftPad, assert } from '../util';
+import { readString, assertExists, leftPad, assert } from '../util';
 import { GfxDevice, GfxHostAccessPass, GfxRenderPass } from '../gfx/platform/GfxPlatform';
 import { GXRenderHelperGfx, fillSceneParamsDataOnTemplate } from '../gx/gx_render';
 import { GfxRendererLayer } from '../gfx/render/GfxRenderer';
 import { BasicRenderTarget, ColorTexture, standardFullClearRenderPassDescriptor, depthClearRenderPassDescriptor, noClearRenderPassDescriptor } from '../gfx/helpers/RenderTargetHelpers';
 import { mat4 } from 'gl-matrix';
 import { BMDObjectRenderer, ObjectRenderer } from './ztp_actors';
-import AnimationController from '../AnimationController';
 import { TextureMapping } from '../TextureHolder';
 import { GfxRenderCache } from '../gfx/render/GfxRenderCache';
 import { SceneContext } from '../SceneBase';
@@ -507,28 +506,7 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
             return objectRenderer;
         }
 
-        function buildChildModelBMT(rarc: RARC.RARC, modelPath: string, bmtPath: string): BMDObjectRenderer {
-            const bmd = BMD.parse(rarc.findFileData(modelPath));
-            const bmt = BMT.parse(rarc.findFileData(bmtPath));
-            const model = new BMDModel(device, cache, bmd, bmt);
-            modelCache.extraModels.push(model);
-            const modelInstance = new BMDModelInstance(model);
-            modelInstance.name = name;
-            modelInstance.setSortKeyLayer(GfxRendererLayer.OPAQUE + 1);
-            return new BMDObjectRenderer(modelInstance);
-        }
-
-        function buildModelBMT(rarc: RARC.RARC, modelPath: string, bmtPath: string): BMDObjectRenderer {
-            const objectRenderer = buildChildModelBMT(rarc, modelPath, bmtPath);
-            setModelMatrix(objectRenderer.modelMatrix);
-            renderer.objectRenderers.push(objectRenderer);
-            return objectRenderer;
-        }
-
         function parseBCK(rarc: RARC.RARC, path: string) { const g = BCK.parse(rarc.findFileData(path)).ank1; g.loopMode = LoopMode.REPEAT; return g; }
-        function parseBRK(rarc: RARC.RARC, path: string) { return BRK.parse(rarc.findFileData(path)).trk1; }
-        function parseBTK(rarc: RARC.RARC, path: string) { return BTK.parse(rarc.findFileData(path)).ttk1; }
-        function animFrame(frame: number): AnimationController { const a = new AnimationController(); a.setTimeInFrames(frame); return a; }
 
         //Goat
         if (name === 'Cow') fetchArchive(`Cow.arc`).then((rarc: RARC.RARC) => {
@@ -828,7 +806,7 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
         //Soal
         else if (name === 'shoe') fetchArchive(`shoe.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/shoe.bmd`);
-            m.bindANK1(parseBCK(rarc, `bck/shoe_talk_a.bck`));//fix
+            // m.bindANK1(parseBCK(rarc, `bck/shoe_talk_a.bck`));//fix
         });
         //Dr. Borville
         else if (name === 'Doc') fetchArchive(`Doc.arc`).then((rarc: RARC.RARC) => {
@@ -843,30 +821,30 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
         //Purlo
         else if (name === 'chin') fetchArchive(`chin_mdl.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/chin.bmd`);
-            fetchArchive(`Chin.arc`).then((animrarc: RARC.RARC) => {
-                m.bindANK1(parseBCK(animrarc, `bck/chin_wait_a.bck`));//fix
-            });
+            // fetchArchive(`Chin.arc`).then((animrarc: RARC.RARC) => {
+            //     m.bindANK1(parseBCK(animrarc, `bck/chin_wait_a.bck`));//fix
+            // });
         });
         //Hannah
         else if (name === 'km_Hana') fetchArchive(`kasi_hana.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/hana.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
-                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));//fix
-            });
+            // fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
+            //     m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));//fix
+            // });
         });
         //Kili
         else if (name === 'km_Kyu') fetchArchive(`kasi_kyu.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/kyu.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
-                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));//fix
-            });
+            // fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
+            //     m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));//fix
+            // });
         });
         //Misha
         else if (name === 'km_Mich') fetchArchive(`kasi_mich.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mich.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
-                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));//fix
-            });
+            // fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
+            //     m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));//fix
+            // });
         });
         //Random Castle Town NPCs
         else if (name === 'WAD_a') fetchArchive(`WAD_a.arc`).then((rarc: RARC.RARC) => {
@@ -895,39 +873,39 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
         });
         else if (name === 'WAN_b') fetchArchive(`WAN_b.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/wan_b.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
-                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
-            });
+            // fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
+            //     m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
+            // }); //fix
         });
         else if (name === 'WAN_b2') fetchArchive(`WAN_b2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/wan_b2.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
-                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
-            });
+            // fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
+            //     m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
+            // }); //fix
         });
         else if (name === 'WGN_a') fetchArchive(`WGN_a.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/wgn_a.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
-                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
-            });
+            // fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
+            //     m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
+            // }); //fix
         });
         else if (name === 'WGN_a2') fetchArchive(`WGN_a2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/wgn_a2.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
-                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
-            });
+            // fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
+            //     m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
+            // }); //fix
         });
         else if (name === 'WCN_a') fetchArchive(`WCN_a.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/wcn_a.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
-                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
-            });//fix
+            // fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
+            //     m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
+            // });//fix
         });
         else if (name === 'WCN_a2') fetchArchive(`WCN_a2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/wcn_a2.bmd`);
-            fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
-                m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
-            });//fix
+            // fetchArchive(`Wgeneral.arc`).then((animrarc: RARC.RARC) => {
+            //     m.bindANK1(parseBCK(animrarc, `bck/w_wait_a.bck`));
+            // });//fix
         });
         else if (name === 'WON_a2') fetchArchive(`WON_a2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/won_a2.bmd`);
@@ -955,15 +933,15 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
         });
         else if (name === 'MCN_a') fetchArchive(`MCN_a.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mcn_a.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
-                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
-            });//fix
+            // fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
+            //     m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            // });//fix
         });
         else if (name === 'MCN_a2') fetchArchive(`MCN_a2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mcn_a2.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
-                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
-            });//fix
+            // fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
+            //     m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            // });//fix
         });
         else if (name === 'MAN_b') fetchArchive(`MAN_b.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/man_b.bmd`);
@@ -997,15 +975,15 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
         });
         else if (name === 'MAD_a') fetchArchive(`MAD_a.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mad_a.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
-                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
-            });//fix
+            // fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
+            //     m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            // });//fix
         });
         else if (name === 'MAD_a2') fetchArchive(`MAD_a2.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mad_a2.bmd`);
-            fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
-                m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
-            });//fix
+            // fetchArchive(`Mgeneral.arc`).then((animrarc: RARC.RARC) => {
+            //     m.bindANK1(parseBCK(animrarc, `bck/m_wait_a.bck`));
+            // });//fix
         });
         else if (name === 'MBN_a') fetchArchive(`MBN_a.arc`).then((rarc: RARC.RARC) => {
             const m = buildModel(rarc, `bmdr/mbn_a.bmd`);
@@ -1139,11 +1117,6 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
         });
     }
 
-    // private fetchRarc(path: string): Progressable<RARC.RARC | null> {
-    //     return fetchData(path).then((buffer: ArrayBufferSlice) => {
-    //         if (buffer.byteLength === 0) return null;
-    //         return Yaz0.decompress(buffer).then((buffer: ArrayBufferSlice) => buffer && RARC.parse(buffer)).catch((e)=>null);
-    //     });
     private async fetchRarc(path: string, dataFetcher: DataFetcher): Promise<RARC.RARC | null> {
         const buffer = await dataFetcher.fetchData(path, DataFetcherFlags.ALLOW_404);
         if (buffer.byteLength === 0)
