@@ -6,13 +6,13 @@ import { TTK1, bindTTK1Animator, TRK1, bindTRK1Animator, TRK1Animator, ANK1 } fr
 
 import * as GX from '../gx/gx_enum';
 import * as GX_Material from '../gx/gx_material';
-import { PacketParams, ColorKind, translateTexFilterGfx, translateWrapModeGfx, ub_MaterialParams, loadTextureFromMipChain, loadedDataCoalescerComboGfx, MaterialParams, fillIndTexMtx, fillMaterialParamsDataWithOptimizations } from '../gx/gx_render';
+import { PacketParams, ColorKind, translateTexFilterGfx, translateWrapModeGfx, ub_MaterialParams, loadTextureFromMipChain, loadedDataCoalescerComboGfx, MaterialParams, fillIndTexMtx } from '../gx/gx_render';
 import { GXShapeHelperGfx, GXMaterialHelperGfx } from '../gx/gx_render';
 
 import { computeViewMatrix, Camera, computeViewSpaceDepthFromWorldSpaceAABB, texProjCamera } from '../Camera';
 import { TextureMapping } from '../TextureHolder';
 import AnimationController from '../AnimationController';
-import { nArray, assert } from '../util';
+import { nArray, assert, assertExists } from '../util';
 import { AABB } from '../Geometry';
 import { GfxDevice, GfxSampler, GfxTexture } from '../gfx/platform/GfxPlatform';
 import { GfxCoalescedBuffersCombo, GfxBufferCoalescerCombo } from '../gfx/helpers/BufferHelpers';
@@ -146,7 +146,7 @@ export class ShapeInstance {
             return;
 
         const shape = this.shapeData.shape;
-        const materialJointMatrix = shapeInstanceState.jointToWorldMatrixArray[materialInstance.materialData.jointData.jointIndex];
+        const materialJointMatrix = shapeInstanceState.jointToWorldMatrixArray[materialInstance.materialData.jointData!.jointIndex];
 
         packetParams.clear();
 
@@ -309,7 +309,7 @@ export class MaterialInstance {
     public visible: boolean = true;
     public sortKey: number = 0;
 
-    constructor(public materialData: MaterialData, materialHacks: GX_Material.GXMaterialHacks) {
+    constructor(public materialData: MaterialData, materialHacks?: GX_Material.GXMaterialHacks) {
         const material = this.materialData.material;
         this.materialHelper = new GXMaterialHelperGfx(material.gxMaterial, materialHacks);
         this.name = material.name;
@@ -372,7 +372,7 @@ export class MaterialInstance {
 
     private calcColor(dst: Color, i: ColorKind, materialInstanceState: MaterialInstanceState, fallbackColor: Color, clampTo8Bit: boolean): void {
         if (this.trk1Animators[i]) {
-            this.trk1Animators[i].calcColor(dst);
+            this.trk1Animators[i]!.calcColor(dst);
         } else if (materialInstanceState.colorOverrides[i] !== undefined) {
             if (materialInstanceState.alphaOverrides[i])
                 colorCopy(dst, materialInstanceState.colorOverrides[i]);
@@ -460,10 +460,10 @@ export class MaterialInstance {
     }
 
     public calcTexSRT(dst: mat4, i: number): void {
-        const texMtx = this.materialData.material.texMatrices[i];
+        const texMtx = this.materialData.material.texMatrices[i]!;
         const isMaya = !!(texMtx.info >>> 7);
         if (this.ttk1Animators[i]) {
-            this.ttk1Animators[i].calcTexMtx(dst, isMaya);
+            this.ttk1Animators[i]!.calcTexMtx(dst, isMaya);
         } else {
             mat4.copy(dst, texMtx.matrix);
         }
@@ -669,8 +669,9 @@ export class MaterialInstance {
             m.reset();
 
             let samplerIndex: number;
-            if (this.tpt1Animators[i])
-                samplerIndex = this.tpt1Animators[i].calcTextureIndex();
+            const animator = this.tpt1Animators[i];
+            if (animator)
+                samplerIndex = animator.calcTextureIndex();
             else
                 samplerIndex = material.textureIndexes[i];
 
@@ -709,9 +710,8 @@ export class MaterialInstance {
         if (this.materialData.fillMaterialParamsCallback !== null)
             this.materialData.fillMaterialParamsCallback(materialParams, this, viewMatrix, modelMatrix, camera, packetParams);
 
-        let offs = renderInst.allocateUniformBuffer(ub_MaterialParams, this.materialHelper.materialParamsBufferSize);
-        const d = renderInst.mapUniformBufferF32(ub_MaterialParams);
-        fillMaterialParamsDataWithOptimizations(this.materialHelper.material, d, offs, materialParams);
+        const offs = renderInst.allocateUniformBuffer(ub_MaterialParams, this.materialHelper.materialParamsBufferSize);
+        this.materialHelper.fillMaterialParamsDataOnInst(renderInst, offs, materialParams);
 
         renderInst.setSamplerBindingsFromTextureMappings(materialParams.m_TextureMapping);
     }
@@ -726,11 +726,11 @@ interface TEX1_SamplerSub {
     maxLOD: number;
 }
 
-function translateSampler(device: GfxDevice, sampler: TEX1_SamplerSub): GfxSampler {
+function translateSampler(device: GfxDevice, cache: GfxRenderCache, sampler: TEX1_SamplerSub): GfxSampler {
     const [minFilter, mipFilter] = translateTexFilterGfx(sampler.minFilter);
     const [magFilter]            = translateTexFilterGfx(sampler.magFilter);
 
-    const gfxSampler = device.createSampler({
+    const gfxSampler = cache.createSampler(device, {
         wrapS: translateWrapModeGfx(sampler.wrapS),
         wrapT: translateWrapModeGfx(sampler.wrapT),
         minFilter, mipFilter, magFilter,
@@ -748,8 +748,8 @@ export class BTIData {
     private gfxTexture: GfxTexture;
     public viewerTexture: Texture;
 
-    constructor(device: GfxDevice, public btiTexture: BTI_Texture) {
-        this.gfxSampler = translateSampler(device, btiTexture);
+    constructor(device: GfxDevice, cache: GfxRenderCache, public btiTexture: BTI_Texture) {
+        this.gfxSampler = translateSampler(device, cache, btiTexture);
         const mipChain = calcMipChain(this.btiTexture, this.btiTexture.mipCount);
         const { viewerTexture, gfxTexture } = loadTextureFromMipChain(device, mipChain);
         this.gfxTexture = gfxTexture;
@@ -766,7 +766,6 @@ export class BTIData {
     }
 
     public destroy(device: GfxDevice): void {
-        device.destroySampler(this.gfxSampler);
         device.destroyTexture(this.gfxTexture);
     }
 }
@@ -776,10 +775,10 @@ export class TEX1Data {
     private gfxTextures: (GfxTexture | null)[] = [];
     public viewerTextures: (Texture | null)[] = [];
 
-    constructor(device: GfxDevice, public tex1: TEX1) {
+    constructor(device: GfxDevice, cache: GfxRenderCache, public tex1: TEX1) {
         for (let i = 0; i < this.tex1.samplers.length; i++) {
             const tex1Sampler = this.tex1.samplers[i];
-            this.gfxSamplers.push(translateSampler(device, tex1Sampler));
+            this.gfxSamplers.push(translateSampler(device, cache, tex1Sampler));
         }
 
         for (let i = 0; i < this.tex1.textureDatas.length; i++) {
@@ -804,22 +803,19 @@ export class TEX1Data {
             return false;
         }
 
+        const textureData = this.tex1.textureDatas[sampler.textureDataIndex];
         m.gfxTexture = this.gfxTextures[sampler.textureDataIndex];
         m.gfxSampler = this.gfxSamplers[sampler.index];
         m.lodBias = sampler.lodBias;
-        const textureData = this.tex1.textureDatas[sampler.textureDataIndex];
         m.width = textureData.width;
         m.height = textureData.height;
-
         return true;
     }
 
     public destroy(device: GfxDevice): void {
-        for (let i = 0; i < this.gfxSamplers.length; i++)
-            device.destroySampler(this.gfxSamplers[i]);
         for (let i = 0; i < this.gfxTextures.length; i++)
             if (this.gfxTextures[i] !== null)
-                device.destroyTexture(this.gfxTextures[i]);
+                device.destroyTexture(this.gfxTextures[i]!);
     }
 }
 
@@ -845,7 +841,7 @@ export class BMDModel {
     ) {
         const mat3 = (bmt !== null && bmt.mat3 !== null) ? bmt.mat3 : bmd.mat3;
         const tex1 = (bmt !== null && bmt.tex1 !== null) ? bmt.tex1 : bmd.tex1;
-        this.tex1Data = new TEX1Data(device, tex1);
+        this.tex1Data = new TEX1Data(device, cache, tex1);
 
         // Load shape data.
         const loadedVertexDatas = [];
@@ -957,7 +953,7 @@ export class BMDModelInstance {
     public vaf1Animator: VAF1Animator | null = null;
 
     public materialInstanceState = new MaterialInstanceState();
-    private materialInstances: MaterialInstance[] = [];
+    public materialInstances: MaterialInstance[] = [];
     private shapeInstances: ShapeInstance[] = [];
     private shapeInstanceState = new ShapeInstanceState();
 
@@ -1076,12 +1072,12 @@ export class BMDModelInstance {
     }
 
     /**
-     * Sets whether a certain material with name {@param name} should be shown ({@param v} is
+     * Sets whether a certain material with name {@param materialName} should be shown ({@param v} is
      * {@constant true}), or hidden ({@param v} is {@constant false}). All materials are shown
      * by default.
      */
-    public setMaterialVisible(name: string, v: boolean): void {
-        const materialInstance = this.materialInstances.find((matInst) => matInst.name === name);
+    public setMaterialVisible(materialName: string, v: boolean): void {
+        const materialInstance = assertExists(this.materialInstances.find((matInst) => matInst.name === materialName));
         materialInstance.visible = v;
     }
 
@@ -1094,7 +1090,8 @@ export class BMDModelInstance {
      * eyes so it can draw them on top of the hair.
      */
     public setMaterialColorWriteEnabled(materialName: string, colorWrite: boolean): void {
-        this.materialInstances.find((m) => m.name === materialName).setColorWriteEnabled(colorWrite);
+        const materialInstance = assertExists(this.materialInstances.find((matInst) => matInst.name === materialName));
+        materialInstance.setColorWriteEnabled(colorWrite);
     }
 
     /**
@@ -1112,7 +1109,10 @@ export class BMDModelInstance {
      * To unset a color override, pass {@constant undefined} as for {@param color}.
      */
     public setColorOverride(colorKind: ColorKind, color: Color | undefined, useAlpha: boolean = false): void {
-        this.materialInstanceState.colorOverrides[colorKind] = color;
+        if (color !== undefined)
+            this.materialInstanceState.colorOverrides[colorKind] = color;
+        else
+            delete this.materialInstanceState.colorOverrides[colorKind];
         this.materialInstanceState.alphaOverrides[colorKind] = useAlpha;
     }
 

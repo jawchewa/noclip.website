@@ -12,6 +12,7 @@ import { colorNewCopy, White, colorCopy, Color } from "../../Color";
 import { computeModelMatrixR } from "../../MathHelpers";
 import { DrawType } from "./NameObj";
 import { LiveActor } from './LiveActor';
+import { TextureMapping } from '../../TextureHolder';
 
 export class ParticleResourceHolder {
     private effectNames: string[];
@@ -21,13 +22,13 @@ export class ParticleResourceHolder {
     public autoEffectList: JMapInfoIter;
 
     constructor(effectArc: RARC.RARC) {
-        const effectNames = createCsvParser(effectArc.findFileData(`ParticleNames.bcsv`));
+        const effectNames = createCsvParser(effectArc.findFileData(`ParticleNames.bcsv`)!);
         this.effectNames = effectNames.mapRecords((iter) => {
-            return iter.getValueString('name');
+            return assertExists(iter.getValueString('name'));
         });
-        this.autoEffectList = createCsvParser(effectArc.findFileData(`AutoEffectList.bcsv`));
+        this.autoEffectList = createCsvParser(effectArc.findFileData(`AutoEffectList.bcsv`)!);
 
-        const jpacData = effectArc.findFileData(`Particles.jpc`);
+        const jpacData = effectArc.findFileData(`Particles.jpc`)!;
         this.jpac = JPA.parse(jpacData);
         this.jpacData = new JPA.JPACData(this.jpac);
     }
@@ -45,31 +46,35 @@ export class ParticleResourceHolder {
         if (idx < 0)
             return null;
 
-        const device = sceneObjHolder.modelCache.device;
         if (!this.resourceDatas.has(idx)) {
-            const resData = new JPA.JPAResourceData(device, this.jpacData, this.jpac.effects[idx]);
+            const device = sceneObjHolder.modelCache.device;
+            const cache = sceneObjHolder.modelCache.cache;
+            const resData = new JPA.JPAResourceData(device, cache, this.jpacData, this.jpac.effects[idx]);
             resData.name = name;
             this.resourceDatas.set(idx, resData);
         }
-        return this.resourceDatas.get(idx);
+        return this.resourceDatas.get(idx)!;
+    }
+
+    public getTextureMappingReference(name: string): TextureMapping | null {
+        return this.jpacData.getTextureMappingReference(name);
     }
 
     public destroy(device: GfxDevice): void {
         this.jpacData.destroy(device);
-        for (const [, resourceData] of this.resourceDatas.entries())
-            resourceData.destroy(device);
     }
 }
 
-function parseColor(dst: Color, s: string): void {
+function parseColor(dst: Color, s: string): boolean {
     if (s === '')
-        return;
+        return false;
 
     assert(s.length === 7);
     dst.r = parseInt(s.slice(1, 3), 16) / 255;
     dst.g = parseInt(s.slice(3, 5), 16) / 255;
     dst.b = parseInt(s.slice(5, 7), 16) / 255;
     dst.a = 1.0;
+    return true;
 }
 
 function isDigitStringTail(s: string): boolean {
@@ -93,10 +98,12 @@ function parseSRTFlags(value: string): SRTFlags {
 
 class ParticleEmitter {
     public baseEmitter: JPA.JPABaseEmitter | null = null;
+    public didInit = false;
 
     public init(baseEmitter: JPA.JPABaseEmitter): void {
         this.baseEmitter = baseEmitter;
         this.baseEmitter.flags |= JPA.BaseEmitterFlags.DO_NOT_TERMINATE;
+        this.didInit = false;
     }
 
     public invalidate(): void {
@@ -136,7 +143,7 @@ class SingleEmitter {
 
     public deleteEmitter(): void {
         if (this.isValid())
-            deleteParticleEmitter(this.particleEmitter);
+            deleteParticleEmitter(this.particleEmitter!);
     }
 
     public isValid(): boolean {
@@ -152,7 +159,7 @@ class SingleEmitter {
 
     public link(particleEmitter: ParticleEmitter): void {
         this.particleEmitter = particleEmitter;
-        this.particleEmitter.baseEmitter.userData = this;
+        this.particleEmitter.baseEmitter!.userData = this;
     }
 
     public unlink(): void {
@@ -165,25 +172,27 @@ class SingleEmitter {
 
     public setDrawParticle(v: boolean) {
         if (this.isValid())
-            this.particleEmitter.baseEmitter.setDrawParticle(v && this.visibleForce);
+            this.particleEmitter!.baseEmitter!.setDrawParticle(v && this.visibleForce);
     }
 }
 
+const scratchColor = colorNewCopy(White);
 export function setupMultiEmitter(m: MultiEmitter, autoEffectIter: JMapInfoIter): void {
-    vec3.set(m.offset,
+    vec3.set(m.emitterCallBack.offset,
         autoEffectIter.getValueNumber('OffsetX', 0),
         autoEffectIter.getValueNumber('OffsetY', 0),
         autoEffectIter.getValueNumber('OffsetZ', 0),
     );
-    m.scaleValue = autoEffectIter.getValueNumber('ScaleValue', 1.0);
-    m.jointName = autoEffectIter.getValueString('JointName');
-    if (m.jointName === '')
-        m.jointName = null;
-    m.affectFlags = parseSRTFlags(autoEffectIter.getValueString('Affect'));
-    m.followFlags = parseSRTFlags(autoEffectIter.getValueString('Follow'));
+    const scaleValue = autoEffectIter.getValueNumber('ScaleValue', 1.0);
+    if (scaleValue !== 1.0)
+        m.emitterCallBack.setBaseScale(scaleValue);
+    m.emitterCallBack.affectFlags = parseSRTFlags(assertExists(autoEffectIter.getValueString('Affect')));
+    m.emitterCallBack.followFlags = parseSRTFlags(assertExists(autoEffectIter.getValueString('Follow')));
 
-    parseColor(m.globalPrmColor, autoEffectIter.getValueString('PrmColor'));
-    parseColor(m.globalEnvColor, autoEffectIter.getValueString('EnvColor'));
+    if (parseColor(scratchColor, assertExists(autoEffectIter.getValueString('PrmColor'))))
+        m.setGlobalPrmColor(scratchColor);
+    if (parseColor(scratchColor, assertExists(autoEffectIter.getValueString('EnvColor'))))
+        m.setGlobalEnvColor(scratchColor);
 
     const drawOrder = autoEffectIter.getValueString('DrawOrder');
     if (drawOrder === 'AFTER_INDIRECT')
@@ -201,11 +210,11 @@ export function setupMultiEmitter(m: MultiEmitter, autoEffectIter: JMapInfoIter)
         m.setDrawOrder(DrawType.EFFECT_DRAW_3D);
     }
 
-    const animName = autoEffectIter.getValueString('AnimName');
+    const animName = assertExists(autoEffectIter.getValueString('AnimName'));
     if (animName !== '') {
         m.animNames = animName.toLowerCase().split(' ');
-        m.startFrame = autoEffectIter.getValueNumber('StartFrame');
-        m.endFrame = autoEffectIter.getValueNumber('EndFrame');
+        m.startFrame = assertExists(autoEffectIter.getValueNumber('StartFrame'));
+        m.endFrame = assertExists(autoEffectIter.getValueNumber('EndFrame'));
     } else {
         m.animNames = [];
         m.startFrame = 0;
@@ -215,33 +224,166 @@ export function setupMultiEmitter(m: MultiEmitter, autoEffectIter: JMapInfoIter)
     m.continueAnimEnd = !!autoEffectIter.getValueNumber('ContinueAnimEnd', 0);
 }
 
+class MultiEmitterCallBack implements JPA.JPAEmitterCallBack {
+    public globalColorPrm: Color = colorNewCopy(White);
+    public globalColorEnv: Color = colorNewCopy(White);
+    public offset = vec3.create();
+    public baseScale: number | null = null;
+    public affectFlags: SRTFlags = 0;
+    public followFlags: SRTFlags = 0;
+
+    public hostMtx: mat4 | null = null;
+    public hostTranslation: vec3 | null = null;
+    public hostRotation: vec3 | null = null;
+    public hostScale: vec3 | null = null;
+
+    private setEffectSRT(emitter: JPA.JPABaseEmitter, scale: vec3 | null, rot: mat4 | null, trans: vec3 | null, srtFlags: SRTFlags, isInit: boolean): void {
+        if (!!(srtFlags & SRTFlags.T)) {
+            // Bizarrely enough, whether rotation for offset is respect seems to differ between setSRTFromHostMtx
+            // and setSRTFromHostSRT. It's always applied in setSRTFromHostMtx, regardless of FlagSRT, and but it
+            // checks FlagSRT in setSRTFromHostSRT... Here, we emulate that by checking whether rot is non-null.
+            if (rot !== null)
+                vec3.transformMat4(scratchVec3c, this.offset, rot!);
+            else
+                vec3.copy(scratchVec3c, this.offset);
+
+            if (!!(srtFlags & SRTFlags.S))
+                vec3.mul(scratchVec3c, scratchVec3c, scale!);
+
+            vec3.add(emitter.globalTranslation, trans!, scratchVec3c);
+        }
+
+        if (!!(srtFlags & SRTFlags.R)) {
+            mat4.copy(emitter.globalRotation, rot!);
+        }
+
+        // setScaleFromHostScale
+        if (!!(srtFlags & SRTFlags.S)) {
+            if (this.hostScale !== null)
+                vec3.copy(scratchVec3c, this.hostScale!);
+            else
+                vec3.copy(scratchVec3c, scale!);
+            if (this.baseScale !== null)
+                vec3.scale(scratchVec3c, scratchVec3c, this.baseScale);
+            emitter.setGlobalScale(scratchVec3c);
+        } else {
+            if (isInit && this.baseScale !== null) {
+                vec3.set(scratchVec3c, this.baseScale, this.baseScale, this.baseScale);
+                emitter.setGlobalScale(scratchVec3c);
+            }
+        }
+    }
+
+    private setSRTFromHostMtx(emitter: JPA.JPABaseEmitter, mtx: mat4, srtFlags: SRTFlags, isInit: boolean): void {
+        const scale = scratchVec3a;
+        const rot = scratchMatrix;
+        const trans = scratchVec3b;
+        JPA.JPASetRMtxSTVecFromMtx(scale, rot, trans, mtx);
+        this.setEffectSRT(emitter, scale, rot, trans, srtFlags, isInit);
+    }
+
+    private setSRTFromHostSRT(emitter: JPA.JPABaseEmitter, scale: vec3 | null, rot: vec3 | null, trans: vec3 | null, srtFlags: SRTFlags, isInit: boolean): void {
+        let rotMatrix: mat4 | null;
+        if (!!(srtFlags & SRTFlags.R)) {
+            rotMatrix = scratchMatrix;
+            computeModelMatrixR(rotMatrix, rot![0], rot![1], rot![2]);
+        } else {
+            rotMatrix = null;
+        }
+        this.setEffectSRT(emitter, scale, rotMatrix, trans, srtFlags, isInit);
+    }
+
+    private isFollowSRT(isInit: boolean): SRTFlags {
+        let srtFlags = isInit ? this.affectFlags : this.followFlags;
+
+        // TODO(jstpierre): forceFollowOff
+
+        if (this.hostMtx === null && this.hostTranslation === null) {
+            srtFlags &= ~SRTFlags.T;
+        } else {
+            // TODO(jstpierre): forceFollowOn
+        }
+
+        if (this.hostMtx === null && this.hostRotation === null) {
+            srtFlags &= ~SRTFlags.R;
+        } else {
+            // TODO(jstpierre): forceRotateOn??? (flag is never set anywhere)
+        }
+
+        if (this.hostMtx === null && this.hostScale === null) {
+            srtFlags &= ~SRTFlags.S;
+        } else {
+            // TODO(jstpierre): forceScaleOn
+        }
+
+        return srtFlags;
+    }
+
+    private followSRT(emitter: JPA.JPABaseEmitter, isInit: boolean): void {
+        const srtFlags = this.isFollowSRT(isInit);
+
+        if (this.hostMtx !== null)
+            this.setSRTFromHostMtx(emitter, this.hostMtx, srtFlags, isInit);
+        else
+            this.setSRTFromHostSRT(emitter, this.hostScale, this.hostRotation, this.hostTranslation, srtFlags, isInit);
+    }
+
+    private setColor(emitter: JPA.JPABaseEmitter): void {
+        colorCopy(emitter.globalColorEnv, this.globalColorEnv);
+        colorCopy(emitter.globalColorPrm, this.globalColorPrm);
+    }
+
+    public execute(emitter: JPA.JPABaseEmitter): void {
+        this.followSRT(emitter, false);
+        // this.effectLight(emitter);
+        this.setColor(emitter);
+    }
+
+    public init(emitter: JPA.JPABaseEmitter): void {
+        this.followSRT(emitter, true);
+    }
+
+    public setHostMtx(hostMtx: mat4, hostScale: vec3 | null = null): void {
+        this.hostScale = hostScale;
+        this.hostRotation = null;
+        this.hostTranslation = null;
+        this.hostMtx = hostMtx;
+    }
+
+    public setHostSRT(hostTranslation: vec3 | null, hostRotation: vec3 | null, hostScale: vec3 | null): void {
+        this.hostTranslation = hostTranslation;
+        this.hostRotation = hostRotation;
+        this.hostScale = hostScale;
+        this.hostMtx = null;
+    }
+
+    public setBaseScale(baseScale: number): void {
+        this.baseScale = baseScale;
+    }
+}
+
 const scratchMatrix = mat4.create();
 const scratchVec3a = vec3.create();
 const scratchVec3b = vec3.create();
 const scratchVec3c = vec3.create();
 export class MultiEmitter {
     private singleEmitters: SingleEmitter[] = [];
+    public childEmitters: MultiEmitter[] = [];
     public name: string;
-    public offset = vec3.create();
-    public scaleValue: number = 0;
     public drawType: DrawType;
-    public globalPrmColor = colorNewCopy(White);
-    public globalEnvColor = colorNewCopy(White);
-    public affectFlags: SRTFlags = 0;
-    public followFlags: SRTFlags = 0;
-    public jointName: string;
     public animNames: string[];
     public startFrame: number;
     public endFrame: number;
     public continueAnimEnd: boolean;
     public bckName: string | null = null;
+    public emitterCallBack = new MultiEmitterCallBack();
 
     constructor(sceneObjHolder: SceneObjHolder, effectName: string) {
         this.allocateEmitter(sceneObjHolder, effectName);
     }
 
     private allocateEmitter(sceneObjHolder: SceneObjHolder, effectName: string): void {
-        const particleResourceHolder = sceneObjHolder.effectSystem.particleResourceHolder;
+        const particleResourceHolder = sceneObjHolder.effectSystem!.particleResourceHolder;
 
         let qualifiedEffectNames: string[] = [];
 
@@ -263,7 +405,7 @@ export class MultiEmitter {
         }
 
         for (let i = 0; i < qualifiedEffectNames.length; i++) {
-            const resData = particleResourceHolder.getResourceData(sceneObjHolder, qualifiedEffectNames[i]);
+            const resData = assertExists(particleResourceHolder.getResourceData(sceneObjHolder, qualifiedEffectNames[i]));
             const singleEmitter = new SingleEmitter();
             singleEmitter.init(resData);
             this.singleEmitters.push(singleEmitter);
@@ -277,33 +419,43 @@ export class MultiEmitter {
 
     public createEmitter(effectSystem: EffectSystem): void {
         for (let i = 0; i < this.singleEmitters.length; i++)
-            effectSystem.createSingleEmitter(this.singleEmitters[i]);
-        this.setColors();
+            effectSystem.createSingleEmitter(this.singleEmitters[i], this.emitterCallBack);
+        for (let i = 0; i < this.childEmitters.length; i++)
+            this.childEmitters[i].createEmitter(effectSystem);
     }
 
     public createOneTimeEmitter(effectSystem: EffectSystem): void {
         for (let i = 0; i < this.singleEmitters.length; i++)
             if (this.singleEmitters[i].isOneTime())
-                effectSystem.createSingleEmitter(this.singleEmitters[i]);
-        this.setColors();
+                effectSystem.createSingleEmitter(this.singleEmitters[i], this.emitterCallBack);
     }
 
     public createForeverEmitter(effectSystem: EffectSystem): void {
         for (let i = 0; i < this.singleEmitters.length; i++)
             if (!this.singleEmitters[i].isOneTime())
-                effectSystem.createSingleEmitter(this.singleEmitters[i]);
-        this.setColors();
+                effectSystem.createSingleEmitter(this.singleEmitters[i], this.emitterCallBack);
     }
 
     public deleteEmitter(): void {
         for (let i = 0; i < this.singleEmitters.length; i++)
             this.singleEmitters[i].deleteEmitter();
+        for (let i = 0; i < this.childEmitters.length; i++)
+            this.childEmitters[i].deleteEmitter();
+    }
+
+    public forceDeleteEmitter(effectSystem: EffectSystem): void {
+        for (let i = 0; i < this.singleEmitters.length; i++)
+            effectSystem.forceDeleteSingleEmitter(this.singleEmitters[i]);
+        for (let i = 0; i < this.childEmitters.length; i++)
+            this.childEmitters[i].forceDeleteEmitter(effectSystem);
     }
 
     public deleteForeverEmitter(): void {
         for (let i = 0; i < this.singleEmitters.length; i++)
             if (!this.singleEmitters[i].isOneTime())
                 this.singleEmitters[i].deleteEmitter();
+        for (let i = 0; i < this.childEmitters.length; i++)
+            this.childEmitters[i].deleteForeverEmitter();
     }
 
     public setName(name: string): void {
@@ -319,89 +471,42 @@ export class MultiEmitter {
         }
     }
 
-    private setSRT(scale: vec3 | null, rotation: mat4 | null, translation: vec3 | null): void {
-        for (let i = 0; i < this.singleEmitters.length; i++) {
-            const emitter = this.singleEmitters[i];
-            if (!emitter.isValid())
-                continue;
-            const baseEmitter = emitter.particleEmitter.baseEmitter;
-
-            if (scale !== null)
-                baseEmitter.setGlobalScale(scale);
-            if (translation !== null)
-                vec3.copy(baseEmitter.globalTranslation, translation);
-            if (rotation !== null)
-                mat4.copy(baseEmitter.globalRotation, rotation);
-        }
-    }
-
-    private followSRT(scale: vec3, rot: mat4, trans: vec3, isFollow: boolean): void {
-        const srtFlags = isFollow ? this.followFlags : this.affectFlags;
-
-        if (!!(srtFlags & SRTFlags.T)) {
-            vec3.transformMat4(scratchVec3c, this.offset, rot);
-
-            if (!!(srtFlags & SRTFlags.S))
-                vec3.mul(scratchVec3c, scratchVec3c, scale);
-
-            vec3.add(trans, trans, scratchVec3c);
-        } else if (!isFollow) {
-            vec3.copy(scale, this.offset);
+    public setGlobalPrmColor(color: Color, emitterIndex: number = -1): void {
+        if (emitterIndex === -1) {
+            colorCopy(this.emitterCallBack.globalColorPrm, color);
+            for (let i = 0; i < this.singleEmitters.length; i++) {
+                const emitter = this.singleEmitters[i];
+                if (emitter.isValid())
+                    emitter.particleEmitter!.setGlobalPrmColor(color);
+            }
         } else {
-            trans = null;
+            const emitter = this.singleEmitters[emitterIndex];
+            if (emitter.isValid())
+                emitter.particleEmitter!.setGlobalPrmColor(color);
         }
-
-        if (!!(srtFlags & SRTFlags.R)) {
-            // TODO(jstpierre): isEffect2D branch
-        } else {
-            rot = null;
-        }
-
-        if (!!(srtFlags & SRTFlags.S)) {
-            vec3.scale(scale, scale, this.scaleValue);
-        } else if (!isFollow) {
-            vec3.set(scale, this.scaleValue, this.scaleValue, this.scaleValue);
-        } else {
-            scale = null;
-        }
-
-        this.setSRT(scale, rot, trans);
-    }
-
-    private setColors(): void {
-        for (let i = 0; i < this.singleEmitters.length; i++) {
-            const emitter = this.singleEmitters[i];
-            if (!emitter.isValid())
-                continue;
-            emitter.particleEmitter.setGlobalPrmColor(this.globalPrmColor);
-            emitter.particleEmitter.setGlobalEnvColor(this.globalEnvColor);
-        }
-    }
-
-    public setSRTFromHostMtx(mtx: mat4, isFollow: boolean): void {
-        const scale = scratchVec3a;
-        const rot = scratchMatrix;
-        const trans = scratchVec3b;
-        JPA.JPASetRMtxSTVecFromMtx(scale, rot, trans, mtx);
-        this.followSRT(scale, rot, trans, isFollow);
-    }
-
-    public setSRTFromHostSRT(scaleIn: vec3, rotIn: vec3, transIn: vec3, isFollow: boolean): void {
-        const scale = scratchVec3a;
-        const rot = scratchMatrix;
-        const trans = scratchVec3b;
-        vec3.copy(scale, scaleIn);
-        computeModelMatrixR(rot, rotIn[0], rotIn[1], rotIn[2]);
-        vec3.copy(trans, transIn);
-        this.followSRT(scale, rot, trans, isFollow);
     }
 
     public setGlobalEnvColor(color: Color, emitterIndex: number = -1): void {
-        for (let i = 0; i < this.singleEmitters.length; i++) {
-            const emitter = this.singleEmitters[i];
-            if (emitter.isValid() && emitterIndex < 0 || i === emitterIndex)
-                emitter.particleEmitter.setGlobalEnvColor(color);
+        if (emitterIndex === -1) {
+            colorCopy(this.emitterCallBack.globalColorEnv, color);
+            for (let i = 0; i < this.singleEmitters.length; i++) {
+                const emitter = this.singleEmitters[i];
+                if (emitter.isValid())
+                    emitter.particleEmitter!.setGlobalEnvColor(color);
+            }
+        } else {
+            const emitter = this.singleEmitters[emitterIndex];
+            if (emitter.isValid())
+                emitter.particleEmitter!.setGlobalEnvColor(color);
         }
+    }
+
+    public setHostSRT(translation: vec3 | null, rotation: vec3 | null, scale: vec3 | null): void {
+        this.emitterCallBack.setHostSRT(translation, rotation, scale);
+    }
+
+    public setHostMtx(hostMtx: mat4): void {
+        this.emitterCallBack.setHostMtx(hostMtx);
     }
 }
 
@@ -444,7 +549,6 @@ function isDelete(multiEmitter: MultiEmitter, currentBckName: string, frame: num
 
 export class EffectKeeper {
     public multiEmitters: MultiEmitter[] = [];
-    private autoFollow: boolean = true;
     private currentBckName: string | null = null;
     private visibleScenario: boolean = true;
     private visibleDrawParticle: boolean = true;
@@ -454,10 +558,34 @@ export class EffectKeeper {
     }
 
     public addAutoEffect(sceneObjHolder: SceneObjHolder, autoEffectInfo: JMapInfoIter): void {
-        const m = new MultiEmitter(sceneObjHolder, autoEffectInfo.getValueString('EffectName'));
-        m.setName(autoEffectInfo.getValueString('UniqueName'));
+        const m = new MultiEmitter(sceneObjHolder, assertExists(autoEffectInfo.getValueString('EffectName')));
+        m.setName(assertExists(autoEffectInfo.getValueString('UniqueName')));
+
+        let jointName = autoEffectInfo.getValueString('JointName');
+        if (jointName === '')
+            jointName = null;
+    
+        // registerEmitter
+        if (jointName !== null) {
+            const jointMtx = assertExists(this.actor.getJointMtx(jointName));
+            m.emitterCallBack.setHostMtx(jointMtx);
+        } else {
+            const baseMtx = this.actor.getBaseMtx();
+            if (baseMtx !== null) {
+                m.emitterCallBack.setHostMtx(baseMtx, this.actor.scale);
+            } else {
+                m.emitterCallBack.setHostSRT(this.actor.translation, this.actor.rotation, this.actor.scale);
+            }
+        }
 
         setupMultiEmitter(m, autoEffectInfo);
+
+        const parentName = autoEffectInfo.getValueString('ParentName', '');
+        if (parentName !== '') {
+            const parentEmitter = assertExists(this.getEmitter(parentName));
+            parentEmitter.childEmitters.push(m);
+        }
+
         this.multiEmitters.push(m);
     }
 
@@ -474,51 +602,26 @@ export class EffectKeeper {
 
     public createEmitter(sceneObjHolder: SceneObjHolder, name: string): MultiEmitter | null {
         const multiEmitter = this.getEmitter(name);
-        if (multiEmitter !== null) {
-            multiEmitter.createEmitter(sceneObjHolder.effectSystem);
-            this.setHostSRT(multiEmitter, false);
-        }
+        if (multiEmitter !== null)
+            multiEmitter.createEmitter(sceneObjHolder.effectSystem!);
         return multiEmitter;
     }
 
-    public deleteEmitter(name: string): void {
+    public deleteEmitter(sceneObjHolder: SceneObjHolder, name: string): void {
         const multiEmitter = this.getEmitter(name);
         if (multiEmitter !== null)
             multiEmitter.deleteEmitter();
     }
 
+    public forceDeleteEmitter(sceneObjHolder: SceneObjHolder, name: string): void {
+        const multiEmitter = this.getEmitter(name);
+        if (multiEmitter !== null)
+            multiEmitter.forceDeleteEmitter(sceneObjHolder.effectSystem!);
+    }
+
     public deleteEmitterAll(): void {
         for (let i = 0; i < this.multiEmitters.length; i++)
             this.multiEmitters[i].deleteEmitter();
-    }
-
-    private setHostSRT(multiEmitter: MultiEmitter, isFollow: boolean): void {
-        if (multiEmitter.jointName !== null) {
-            const jointMtx = this.actor.getJointMtx(multiEmitter.jointName);
-            multiEmitter.setSRTFromHostMtx(jointMtx, isFollow);
-        } else {
-            const baseMtx = this.actor.getBaseMtx();
-            if (baseMtx !== null) {
-                multiEmitter.setSRTFromHostMtx(baseMtx, isFollow);
-            } else {
-                multiEmitter.setSRTFromHostSRT(this.actor.scale, this.actor.rotation, this.actor.translation, isFollow);
-            }
-        }
-    }
-
-    public setSRTFromHostMtx(mtx: mat4): void {
-        this.autoFollow = false;
-
-        for (let i = 0; i < this.multiEmitters.length; i++)
-            this.multiEmitters[i].setSRTFromHostMtx(mtx, true);
-    }
-
-    public followSRT(): void {
-        if (!this.autoFollow)
-            return;
-
-        for (let i = 0; i < this.multiEmitters.length; i++)
-            this.setHostSRT(this.multiEmitters[i], true);
     }
 
     public changeBck(bckName: string): void {
@@ -529,7 +632,7 @@ export class EffectKeeper {
         if (this.currentBckName === null)
             return;
 
-        if (this.actor.modelInstance.ank1Animator === null)
+        if (this.actor.modelInstance === null || this.actor.modelInstance.ank1Animator === null)
             return;
 
         const timeInFrames = this.actor.modelInstance.ank1Animator.animationController.getTimeInFrames();
@@ -545,10 +648,8 @@ export class EffectKeeper {
                 multiEmitter.createForeverEmitter(effectSystem);
                 created = true;
             }
-            if (created) {
+            if (created)
                 multiEmitter.bckName = this.currentBckName;
-                this.setHostSRT(multiEmitter, false);
-            }
             if (isDelete(multiEmitter, this.currentBckName, timeInFrames)) {
                 multiEmitter.deleteEmitter();
                 multiEmitter.bckName = null;
@@ -595,9 +696,15 @@ export class ParticleEmitterHolder {
                 continue;
 
             if (!!(baseEmitter.flags & JPA.BaseEmitterFlags.TERMINATED) &&
-                baseEmitter.aliveParticlesBase.length === 0 &&
-                baseEmitter.aliveParticlesChild.length === 0)
+                baseEmitter.aliveParticlesBase.length === 0 && baseEmitter.aliveParticlesChild.length === 0) {
                 this.effectSystem.forceDeleteEmitter(emitter);
+            } else {
+                if (!emitter.didInit) {
+                    if (baseEmitter.emitterCallBack !== null)
+                        (baseEmitter.emitterCallBack as MultiEmitterCallBack).init(baseEmitter);
+                    emitter.didInit = true;
+                }
+            }
         }
     }
 }
@@ -625,8 +732,8 @@ export class EffectSystem {
         if (!autoEffectInfo.findRecord((eff) => eff.getValueString('UniqueName') === uniqueName))
             return null;
 
-        const m = new MultiEmitter(sceneObjHolder, autoEffectInfo.getValueString('EffectName'));
-        m.setName(autoEffectInfo.getValueString('UniqueName'));
+        const m = new MultiEmitter(sceneObjHolder, assertExists(autoEffectInfo.getValueString('EffectName')));
+        m.setName(assertExists(autoEffectInfo.getValueString('UniqueName')));
         setupMultiEmitter(m, autoEffectInfo);
         return m;
     }
@@ -650,35 +757,48 @@ export class EffectSystem {
         const particleEmitter = this.particleEmitterHolder.findAvailableParticleEmitter();
         if (particleEmitter === null)
             return null;
-        const baseEmitter = this.emitterManager.createEmitter(resData);
+        const baseEmitter = assertExists(this.emitterManager.createEmitter(resData));
         baseEmitter.drawGroupId = groupID;
         particleEmitter.init(baseEmitter);
         return particleEmitter;
     }
 
-    public createSingleEmitter(singleEmitter: SingleEmitter): void {
+    public createSingleEmitter(singleEmitter: SingleEmitter, emitterCallBack: JPA.JPAEmitterCallBack): void {
         if (singleEmitter.isValid()) {
             if (!singleEmitter.isOneTime())
                 return;
             singleEmitter.unlink();
         }
     
-        const emitter = this.createEmitter(singleEmitter.resource, singleEmitter.groupID);
+        const emitter = this.createEmitter(singleEmitter.resource!, singleEmitter.groupID);
 
         if (emitter !== null) {
             singleEmitter.link(emitter);
             // Install MultiEmitterCallBack.
+            const baseEmitter = emitter.baseEmitter!;
+
+            if (emitterCallBack !== null)
+                baseEmitter.emitterCallBack = emitterCallBack;
         }
     }
 
     public forceDeleteEmitter(emitter: ParticleEmitter): void {
-        if (emitter.baseEmitter.userData !== null) {
-            const singleEmitter = emitter.baseEmitter.userData as SingleEmitter;
+        if (emitter.baseEmitter!.userData !== null) {
+            const singleEmitter = emitter.baseEmitter!.userData as SingleEmitter;
             singleEmitter.particleEmitter = null;
         }
 
-        this.emitterManager.forceDeleteEmitter(emitter.baseEmitter);
+        this.emitterManager.forceDeleteEmitter(emitter.baseEmitter!);
         emitter.invalidate();
+    }
+
+    public forceDeleteSingleEmitter(singleEmitter: SingleEmitter): void {
+        const emitter = singleEmitter.particleEmitter;
+        if (emitter !== null) {
+            singleEmitter.particleEmitter = null;
+            this.emitterManager.forceDeleteEmitter(emitter.baseEmitter!);
+            emitter.invalidate();
+        }
     }
 
     public destroy(device: GfxDevice): void {

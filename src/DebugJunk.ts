@@ -162,7 +162,7 @@ function transformToClipSpace(ctx: CanvasRenderingContext2D, camera: Camera, nPo
 }
 
 function shouldCull(p: vec4): boolean {
-    return p[0] < -1 || p[0] > 1 || p[1] < -1 || p[1] > 1 || p[2] < -1 || p[2] > 1;
+    return p[0] < -1 || p[0] > 1 || p[1] < -1 || p[1] > 1 || p[2] < 0 || p[2] > 1;
 }
 
 function drawLine(ctx: CanvasRenderingContext2D, p0: vec4, p1: vec4): void {
@@ -322,11 +322,11 @@ export function interactiveVisTestBisect(items: VisTestItem[]): void {
 }
 
 export function interactiveSliderSelect(items: any[], testItem: (itemIndex: number, v: boolean) => void, done: (itemIndex: number) => void): void {
-    const ui: UI = window.main.ui;
+    const ui: UI = (window as any).main.ui;
     const debugFloater = ui.makeFloatingPanel('SliderSelect');
     const slider = new Slider();
     // Revert to default style for clarity
-    slider.elem.querySelector('input').classList.remove('Slider');
+    slider.elem.querySelector('input')!.classList.remove('Slider');
     debugFloater.contents.append(slider.elem);
 
     const doneButton = document.createElement('div');

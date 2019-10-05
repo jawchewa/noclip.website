@@ -11,7 +11,7 @@ import { DataFetcher, DataFetcherFlags } from '../DataFetcher';
 import ArrayBufferSlice from '../ArrayBufferSlice';
 import { GfxDevice, GfxHostAccessPass, GfxRenderPass } from '../gfx/platform/GfxPlatform';
 import { MDL0Renderer, G3DPass } from './render';
-import { assert } from '../util';
+import { assert, assertExists } from '../util';
 import { mat4 } from 'gl-matrix';
 import { BasicRenderTarget, depthClearRenderPassDescriptor, transparentBlackFullClearRenderPassDescriptor } from '../gfx/helpers/RenderTargetHelpers';
 import { FakeTextureHolder } from '../TextureHolder';
@@ -120,7 +120,7 @@ class NewSuperMarioBrosDSSceneDesc implements Viewer.SceneDesc {
         });
     }
 
-    private async fetchObjectData(path: string, dataFetcher: DataFetcher): Promise<ObjectData> {
+    private async fetchObjectData(path: string, dataFetcher: DataFetcher): Promise<ObjectData | null> {
         const [_bmd, _btx, _bta, _btp] = await Promise.all<any>([
             this.fetchBMD(path + `.nsbmd`, dataFetcher),
             this.fetchBTX(path + `.nsbtx`, dataFetcher),
@@ -128,13 +128,13 @@ class NewSuperMarioBrosDSSceneDesc implements Viewer.SceneDesc {
             this.fetchBTP(path + `.nsbtp`, dataFetcher),
         ]);
 
-        const bmd = _bmd as NSBMD.BMD0 | null;
+        if (_bmd === null)
+            return null;
+
+        const bmd = assertExists(_bmd as NSBMD.BMD0 | null);
         const btx = _btx as NSBTX.BTX0 | null;
         const bta = _bta as NSBTA.BTA0 | null;
         const btp = _btp as NSBTP.BTP0 | null;
-
-        if (bmd === null)
-            return null;
         assert(bmd.models.length === 1);
 
         return new ObjectData(bmd, btx, bta, btp);
@@ -142,7 +142,7 @@ class NewSuperMarioBrosDSSceneDesc implements Viewer.SceneDesc {
 
     private createRendererFromData(device: GfxDevice, objectData: ObjectData, position: number[] | null = null): MDL0Renderer {
         const scaleFactor = 1/16;
-        const renderer = new MDL0Renderer(device, objectData.bmd.models[0], objectData.btx !== null ? objectData.btx.tex0 : objectData.bmd.tex0);
+        const renderer = new MDL0Renderer(device, objectData.bmd.models[0], objectData.btx !== null ? assertExists(objectData.btx.tex0) : assertExists(objectData.bmd.tex0));
         if (position !== null)
             mat4.translate(renderer.modelMatrix, renderer.modelMatrix, position);
         mat4.scale(renderer.modelMatrix, renderer.modelMatrix, [scaleFactor, scaleFactor, scaleFactor]);
@@ -166,22 +166,22 @@ class NewSuperMarioBrosDSSceneDesc implements Viewer.SceneDesc {
             this.fetchObjectData(`${basePath}/map/map_point`, dataFetcher),
         ]).then(([mainObjData, treeObjData, castleObjData, bigCastleObjData, towerObjData, mapPointObjData]) => {
             // Adjust the nodes/bones to emulate the flag animations.
-            mat4.fromTranslation(castleObjData.bmd.models[0].nodes[3].jointMatrix, [0, 88, 0]);
-            mat4.fromTranslation(castleObjData.bmd.models[0].nodes[4].jointMatrix, [12, 88, 0]);
-            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[5].jointMatrix, [-40, 0, -19]);
-            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[6].jointMatrix, [-40, 84, -19]);
-            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[7].jointMatrix, [-26, 84, -19]);
-            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[8].jointMatrix, [40, 0, -19]);
-            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[9].jointMatrix, [40, 84, -19]);
-            mat4.fromTranslation(bigCastleObjData.bmd.models[0].nodes[10].jointMatrix, [54, 84, -19]);
-            mat4.fromTranslation(towerObjData.bmd.models[0].nodes[2].jointMatrix, [0, 88, 0]);
-            mat4.fromTranslation(towerObjData.bmd.models[0].nodes[3].jointMatrix, [12, 88, 0]);
+            mat4.fromTranslation(castleObjData!.bmd.models[0].nodes[3].jointMatrix, [0, 88, 0]);
+            mat4.fromTranslation(castleObjData!.bmd.models[0].nodes[4].jointMatrix, [12, 88, 0]);
+            mat4.fromTranslation(bigCastleObjData!.bmd.models[0].nodes[5].jointMatrix, [-40, 0, -19]);
+            mat4.fromTranslation(bigCastleObjData!.bmd.models[0].nodes[6].jointMatrix, [-40, 84, -19]);
+            mat4.fromTranslation(bigCastleObjData!.bmd.models[0].nodes[7].jointMatrix, [-26, 84, -19]);
+            mat4.fromTranslation(bigCastleObjData!.bmd.models[0].nodes[8].jointMatrix, [40, 0, -19]);
+            mat4.fromTranslation(bigCastleObjData!.bmd.models[0].nodes[9].jointMatrix, [40, 84, -19]);
+            mat4.fromTranslation(bigCastleObjData!.bmd.models[0].nodes[10].jointMatrix, [54, 84, -19]);
+            mat4.fromTranslation(towerObjData!.bmd.models[0].nodes[2].jointMatrix, [0, 88, 0]);
+            mat4.fromTranslation(towerObjData!.bmd.models[0].nodes[3].jointMatrix, [12, 88, 0]);
 
             const objects = worldMapDescs[this.worldNumber - 1];
 
             const renderers: MDL0Renderer[] = [];
 
-            const mainObj = this.createRendererFromData(device, mainObjData);
+            const mainObj = this.createRendererFromData(device, assertExists(mainObjData));
             renderers.push(mainObj);
 
             let treeObj: MDL0Renderer | null = null;
@@ -193,19 +193,19 @@ class NewSuperMarioBrosDSSceneDesc implements Viewer.SceneDesc {
             for (let i = 0; i < objects.length; i++) {
                 const element = objects[i];
                 if (element.type == WorldMapObjType.ROUTE_POINT) {
-                    const obj = this.createRendererFromData(device, mapPointObjData, element.position);
-                    obj.bindPAT0(device, mapPointObjData.btp.pat0[3]);
+                    const obj = this.createRendererFromData(device, mapPointObjData!, element.position);
+                    obj.bindPAT0(device, assertExists(mapPointObjData!.btp).pat0[3]);
                     renderers.push(obj);
                 } else if (element.type == WorldMapObjType.START_POINT) {
-                    const obj = this.createRendererFromData(device, mapPointObjData, element.position);
-                    obj.bindPAT0(device, mapPointObjData.btp.pat0[2]);
+                    const obj = this.createRendererFromData(device, mapPointObjData!, element.position);
+                    obj.bindPAT0(device, assertExists(mapPointObjData!.btp).pat0[2]);
                     renderers.push(obj);
                 } else if (element.type == WorldMapObjType.TOWER) {
-                    renderers.push(this.createRendererFromData(device, towerObjData, element.position));
+                    renderers.push(this.createRendererFromData(device, towerObjData!, element.position));
                 } else if (element.type == WorldMapObjType.CASTLE) {
-                    renderers.push(this.createRendererFromData(device, castleObjData, element.position));
+                    renderers.push(this.createRendererFromData(device, castleObjData!, element.position));
                 } else if (element.type == WorldMapObjType.BIG_CASTLE) {
-                    renderers.push(this.createRendererFromData(device, bigCastleObjData, element.position));
+                    renderers.push(this.createRendererFromData(device, bigCastleObjData!, element.position));
                 }
             }
 
@@ -213,7 +213,7 @@ class NewSuperMarioBrosDSSceneDesc implements Viewer.SceneDesc {
                 mat4.translate(mainObj.modelMatrix, mainObj.modelMatrix, [0, 2.5, 0]);
             } else if (this.worldNumber === 3) {
                 mat4.translate(mainObj.modelMatrix, mainObj.modelMatrix, [30, 3, 0]);
-                mat4.translate(treeObj.modelMatrix, treeObj.modelMatrix, [-4, 0, 0]);
+                mat4.translate(assertExists(treeObj).modelMatrix, treeObj!.modelMatrix, [-4, 0, 0]);
             }
 
             return new WorldMapRenderer(device, renderers);
@@ -224,7 +224,7 @@ class NewSuperMarioBrosDSSceneDesc implements Viewer.SceneDesc {
 const enum WorldMapObjType { ROUTE_POINT, START_POINT, TOWER, CASTLE, BIG_CASTLE };
 
 class ObjectData {
-    constructor(public bmd: NSBMD.BMD0 | null, public btx: NSBTX.BTX0 | null, public bta: NSBTA.BTA0 | null, public btp: NSBTP.BTP0 | null) {
+    constructor(public bmd: NSBMD.BMD0, public btx: NSBTX.BTX0 | null, public bta: NSBTA.BTA0 | null, public btp: NSBTP.BTP0 | null) {
     }
 }
 

@@ -2,7 +2,7 @@
 // Implements support for Retro Studios actor data
 
 import { ResourceSystem } from "./resource";
-import { readString, assert, hexdump } from "../util";
+import { readString, assert } from "../util";
 import ArrayBufferSlice from '../ArrayBufferSlice';
 import { mat4, vec3 } from 'gl-matrix';
 import { CMDL } from './cmdl';
@@ -76,7 +76,7 @@ export const enum MP1EntityType {
 }
 
 export class AnimationParameters {
-    ancs: ANCS;
+    ancs: ANCS | null;
     charID: number;
     animID: number;
 }
@@ -112,22 +112,20 @@ export class Entity {
     public readProperty_MP2(stream: InputStream, resourceSystem: ResourceSystem, propertyID: number) {
     }
 
-    public getRenderModel() : CMDL {
+    public getRenderModel(): CMDL | null {
         if (this.animParams !== null) {
             const charID = this.animParams.charID;
             const ancs = this.animParams.ancs;
 
             if (ancs !== null && ancs.characters.length > charID) {
                 const model = ancs.characters[charID].model;
-                if (model !== null) {
+                if (model !== null)
                     return model;
-                }
             }
         }
 
-        if (this.char !== null && this.char.cmdl !== null) {
+        if (this.char !== null && this.char.cmdl !== null)
             return this.char.cmdl;
-        }
 
         return this.model;
     }
@@ -135,7 +133,7 @@ export class Entity {
 
 export class AreaAttributes extends Entity {
     public needSky: boolean = false;
-    public overrideSky: CMDL = null;
+    public overrideSky: CMDL | null = null;
 
     public readProperty_MP2(stream: InputStream, resourceSystem: ResourceSystem, propertyID: number) {
         switch (propertyID) {
@@ -150,7 +148,7 @@ export class AreaAttributes extends Entity {
     }
 }
 
-function createEntity_MP2(type: string, entityID: number): Entity {
+function createEntity_MP2(type: string, entityID: number): Entity | null {
     switch (type) {
         // These are skipped because they look bad
         case "FISH": // FishCloud
@@ -211,7 +209,7 @@ function readTransform(buffer: ArrayBufferSlice, offs: number, ent: Entity, hasP
     return offs - originalOffs;
 }
 
-function readAssetId<T>(buffer: ArrayBufferSlice, offs: number, idSize: number, type: string, resourceSystem: ResourceSystem): T {
+function readAssetID<T>(buffer: ArrayBufferSlice, offs: number, idSize: number, type: string, resourceSystem: ResourceSystem): T | null {
     const assetId = readString(buffer, offs, idSize, false);
     return resourceSystem.loadAssetByID<T>(assetId, type);
 }
@@ -319,7 +317,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 const entity = new Entity(entityType, entityId);
                 entityTableIdx += readName(buffer, entityTableIdx, entity);
                 readTransform(buffer, entityTableIdx + 0x00, entity, true, true, true);
-                entity.model = readAssetId(buffer, entityTableIdx + 0xC4, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0xC4, 4, 'CMDL', resourceSystem);
                 readAnimationParameters(buffer, entityTableIdx + 0xC8, entity, resourceSystem);
                 readActorParameters(buffer, entityTableIdx + 0xD4, entity);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x155));
@@ -333,7 +331,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readTransform(buffer, entityTableIdx + 0x00, entity, true, true, true);
                 readAnimationParameters(buffer, entityTableIdx + 0x24, entity, resourceSystem);
                 readActorParameters(buffer, entityTableIdx + 0x30, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x83, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x83, 4, 'CMDL', resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0xD1));
                 entities.push(entity);
                 break;
@@ -343,7 +341,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 const entity = new Entity(entityType, entityId);
                 entityTableIdx += readName(buffer, entityTableIdx, entity);
                 readTransform(buffer, entityTableIdx + 0x00, entity, true, true, true);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x3C, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x3C, 4, 'CMDL', resourceSystem);
                 readAnimationParameters(buffer, entityTableIdx + 0x40, entity, resourceSystem);
                 readActorParameters(buffer, entityTableIdx + 0x4C, entity);
                 entity.active = !!(view.getUint8(entityTableIdx + 0xCD));
@@ -358,7 +356,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -367,7 +365,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 const entity = new Entity(entityType, entityId);
                 entityTableIdx += readName(buffer, entityTableIdx, entity);
                 readTransform(buffer, entityTableIdx + 0x00, entity, true, true, true);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x54, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x54, 4, 'CMDL', resourceSystem);
                 readAnimationParameters(buffer, entityTableIdx + 0x58, entity, resourceSystem);
                 readActorParameters(buffer, entityTableIdx + 0x64, entity);
                 entity.active = !!(view.getUint8(entityTableIdx + 0xE1));
@@ -382,7 +380,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x120, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x12C));
                 readActorParameters(buffer, entityTableIdx + 0x169, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -391,7 +389,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 const entity = new Entity(entityType, entityId);
                 entityTableIdx += readName(buffer, entityTableIdx, entity);
                 readTransform(buffer, entityTableIdx + 0x00, entity, true, true, true);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x55, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x55, 4, 'CMDL', resourceSystem);
                 readActorParameters(buffer, entityTableIdx + 0x59, entity);
                 entities.push(entity);
                 break;
@@ -404,7 +402,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x120, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x12C));
                 readActorParameters(buffer, entityTableIdx + 0x169, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -416,7 +414,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -428,7 +426,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -440,7 +438,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x29B, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x29B, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -452,7 +450,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -464,7 +462,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -476,7 +474,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -488,7 +486,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x120, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x12C));
                 readActorParameters(buffer, entityTableIdx + 0x169, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -500,7 +498,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x120, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x12C));
                 readActorParameters(buffer, entityTableIdx + 0x169, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -512,7 +510,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x120, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x12C));
                 readActorParameters(buffer, entityTableIdx + 0x169, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -524,7 +522,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -536,7 +534,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -548,7 +546,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -560,7 +558,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x120, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x12C));
                 readActorParameters(buffer, entityTableIdx + 0x169, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -572,7 +570,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x120, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x12C));
                 readActorParameters(buffer, entityTableIdx + 0x169, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -584,7 +582,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x124, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x130));
                 readActorParameters(buffer, entityTableIdx + 0x16D, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1C0, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1C0, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -596,7 +594,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x120, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x12C));
                 readActorParameters(buffer, entityTableIdx + 0x169, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -605,7 +603,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 const entity = new Entity(entityType, entityId);
                 entityTableIdx += readName(buffer, entityTableIdx, entity);
                 readTransform(buffer, entityTableIdx + 0x00, entity, true, true, true);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x8C, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x8C, 4, 'CMDL', resourceSystem);
                 readActorParameters(buffer, entityTableIdx + 0x90, entity);
                 entities.push(entity);
                 break;
@@ -618,7 +616,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -627,9 +625,9 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 const entity = new Entity(entityType, entityId);
                 entityTableIdx += readName(buffer, entityTableIdx, entity);
                 readTransform(buffer, entityTableIdx + 0x00, entity, true, true, true);
-                entity.model = readAssetId(buffer, entityTableIdx + 0xC4, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0xC4, 4, 'CMDL', resourceSystem);
                 readAnimationParameters(buffer, entityTableIdx + 0xC8, entity, resourceSystem);
-                entity.animParams.charID = 2;
+                entity.animParams!.charID = 2;
                 readActorParameters(buffer, entityTableIdx + 0xD4, entity);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x154));
                 entities.push(entity);
@@ -651,7 +649,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 const entity = new AreaAttributes(entityType, entityId);
                 entity.active = (view.getUint32(entityTableIdx) == 1);
                 entity.needSky = !!(view.getUint8(entityTableIdx + 0x04));
-                entity.overrideSky = readAssetId(buffer, entityTableIdx + 0x19, 4, 'CMDL', resourceSystem);
+                entity.overrideSky = readAssetID(buffer, entityTableIdx + 0x19, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -660,7 +658,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 const entity = new Entity(entityType, entityId);
                 entityTableIdx += readName(buffer, entityTableIdx, entity);
                 readTransform(buffer, entityTableIdx + 0x00, entity, true, true, true);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x25, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x25, 4, 'CMDL', resourceSystem);
                 readAnimationParameters(buffer, entityTableIdx + 0x29, entity, resourceSystem);
                 entities.push(entity);
                 break;
@@ -673,7 +671,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -685,7 +683,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -696,7 +694,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readTransform(buffer, entityTableIdx + 0x00, entity, true, true, true);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x24));
                 readActorParameters(buffer, entityTableIdx + 0x25, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x78, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x78, 4, 'CMDL', resourceSystem);
                 readAnimationParameters(buffer, entityTableIdx + 0xA6, entity, resourceSystem);
                 entities.push(entity);
                 break;
@@ -709,7 +707,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -721,7 +719,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -732,7 +730,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readTransform(buffer, entityTableIdx + 0x04, entity, true, true, true);
                 readAnimationParameters(buffer, entityTableIdx + 0x40, entity, resourceSystem);
                 readActorParameters(buffer, entityTableIdx + 0x4C, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x9F, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x9F, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -744,7 +742,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -756,7 +754,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x120, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x12C));
                 readActorParameters(buffer, entityTableIdx + 0x169, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1BC, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -768,7 +766,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -780,7 +778,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 entity.active = !!(view.getUint8(entityTableIdx + 0x18));
                 readAnimationParameters(buffer, entityTableIdx + 0x19, entity, resourceSystem);
                 readActorParameters(buffer, entityTableIdx + 0x25, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x78, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x78, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -791,7 +789,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readTransform(buffer, entityTableIdx + 0x00, entity, true, true, true);
                 readAnimationParameters(buffer, entityTableIdx + 0xC4, entity, resourceSystem);
                 readActorParameters(buffer, entityTableIdx + 0xD0, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x123, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x123, 4, 'CMDL', resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x165));
                 entities.push(entity);
                 break;
@@ -804,7 +802,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -816,7 +814,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -828,7 +826,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -839,7 +837,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readTransform(buffer, entityTableIdx + 0x00, entity, true, true, true);
                 readAnimationParameters(buffer, entityTableIdx + 0xC0, entity, resourceSystem);
                 readActorParameters(buffer, entityTableIdx + 0xCC, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x11F, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x11F, 4, 'CMDL', resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x159));
                 entities.push(entity);
                 break;
@@ -852,7 +850,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -864,7 +862,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -876,7 +874,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -888,7 +886,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -900,7 +898,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -912,7 +910,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -924,7 +922,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -936,7 +934,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -949,7 +947,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x24A, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x256));
                 readActorParameters(buffer, entityTableIdx + 0x293, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x2E6, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x2E6, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -961,7 +959,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x29B, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x29B, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -970,7 +968,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 const entity = new Entity(entityType, entityId);
                 entityTableIdx += readName(buffer, entityTableIdx, entity);
                 readTransform(buffer, entityTableIdx + 0x00, entity, true, true, true);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x25, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x25, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -982,7 +980,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -994,7 +992,7 @@ export function parseScriptLayer_MP1(buffer: ArrayBufferSlice, layerOffset: numb
                 readAnimationParameters(buffer, entityTableIdx + 0x11C, entity, resourceSystem);
                 entity.active = !!(view.getUint8(entityTableIdx + 0x128));
                 readActorParameters(buffer, entityTableIdx + 0x165, entity);
-                entity.model = readAssetId(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
+                entity.model = readAssetID(buffer, entityTableIdx + 0x1B8, 4, 'CMDL', resourceSystem);
                 entities.push(entity);
                 break;
             }
@@ -1064,7 +1062,7 @@ export function parseProperty_MP2(stream: InputStream, entity: Entity, resourceS
 
         // Models
         case 0xC27FFA8F: // Model
-            entity.model = readAssetId(stream.getBuffer(), stream.tell(), stream.assetIDLength, 'CMDL', resourceSystem);
+            entity.model = readAssetID(stream.getBuffer(), stream.tell(), stream.assetIDLength, 'CMDL', resourceSystem);
             break;
 
         // AnimationParameters

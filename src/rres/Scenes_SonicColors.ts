@@ -157,7 +157,7 @@ class SonicColorsSceneDesc implements Viewer.SceneDesc {
                 for (let i = 0; i < mapFile.entries.length; i++) {
                     const entry = mapFile.entries[i];
                     const entryArc = U8.parse(entryArcDatas[i]);
-                    const dir = entryArc.findDir(`arc`);
+                    const dir = assertExists(entryArc.findDir(`arc`));
 
                     for (let j = 0; j < dir.files.length; j++) {
                         const rres = BRRES.parse(dir.files[j].buffer);
@@ -182,27 +182,34 @@ class SonicColorsSceneDesc implements Viewer.SceneDesc {
 const id = 'sonic_colors';
 const name = "Sonic Colors";
 const sceneDescs = [
-    new SonicColorsSceneDesc("stg110", "stg110"),
-    new SonicColorsSceneDesc("stg120", "stg120"),
-    new SonicColorsSceneDesc("stg190", "stg190"),
-    new SonicColorsSceneDesc("stg210", "stg210"),
-    new SonicColorsSceneDesc("stg220", "stg220"),
-    new SonicColorsSceneDesc("stg290", "stg290"),
-    new SonicColorsSceneDesc("stg310", "stg310"),
-    new SonicColorsSceneDesc("stg320", "stg320"),
-    new SonicColorsSceneDesc("stg390", "stg390"),
-    new SonicColorsSceneDesc("stg410", "stg410"),
-    new SonicColorsSceneDesc("stg420", "stg420"),
-    new SonicColorsSceneDesc("stg490", "stg490"),
-    new SonicColorsSceneDesc("stg510", "stg510"),
-    new SonicColorsSceneDesc("stg520", "stg520"),
-    new SonicColorsSceneDesc("stg590", "stg590"),
-    new SonicColorsSceneDesc("stg610", "stg610"),
-    new SonicColorsSceneDesc("stg620", "stg620"),
-    new SonicColorsSceneDesc("stg690", "stg690"),
-    new SonicColorsSceneDesc("stg710", "stg710"),
-    new SonicColorsSceneDesc("stg720", "stg720"),
-    new SonicColorsSceneDesc("stg790", "stg790"),
+    "Tropical Resort",
+    new SonicColorsSceneDesc("stg110", "Act 1-2, 4"),
+    new SonicColorsSceneDesc("stg120", "Act 3, 5-6"),
+    new SonicColorsSceneDesc("stg190", "Rotatotron Boss Arena"),
+    "Sweet Mountain",
+    new SonicColorsSceneDesc("stg210", "Act 1-2, 6"),
+    new SonicColorsSceneDesc("stg220", "Act 3-5"),
+    new SonicColorsSceneDesc("stg290", "Captain Jelly Boss Arena"),
+    //"Starlight Carnival",
+    //new SonicColorsSceneDesc("stg310", "Map 1"),
+    //new SonicColorsSceneDesc("stg320", "Map 2"),
+    //new SonicColorsSceneDesc("stg390", "Figate Orcan Boss Arena"),
+    "Planet Wisp",
+    new SonicColorsSceneDesc("stg410", "Act 1-4"),
+    new SonicColorsSceneDesc("stg420", "Act 5-6"),
+    new SonicColorsSceneDesc("stg490", "Refreshinator Boss Arena"),
+    "Aquarium Park",
+    new SonicColorsSceneDesc("stg510", "Act 1, 3-5"),
+    new SonicColorsSceneDesc("stg520", "Act 2, 6"),
+    new SonicColorsSceneDesc("stg590", "Admiral Jelly Boss Arena"),
+    "Asteroid Coaster",
+    new SonicColorsSceneDesc("stg610", "Act 1-5"),
+    new SonicColorsSceneDesc("stg620", "Act 6"),
+    new SonicColorsSceneDesc("stg690", "Figate Skullian Boss Arena"),
+    "Terminal Velocity",
+    new SonicColorsSceneDesc("stg710", "Act 1"),
+    new SonicColorsSceneDesc("stg720", "Act 2"),
+    new SonicColorsSceneDesc("stg790", "Nega-Wisp Armor Boss Arena"),
 ];
 
 export const sceneGroup: Viewer.SceneGroup = { id, name, sceneDescs };

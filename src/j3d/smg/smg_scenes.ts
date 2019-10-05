@@ -2,10 +2,10 @@
 import { mat4, vec3 } from 'gl-matrix';
 import ArrayBufferSlice from '../../ArrayBufferSlice';
 import { assert, assertExists, align, nArray, hexzero } from '../../util';
-import { DataFetcher, DataFetcherFlags } from '../../DataFetcher';
+import { DataFetcher, DataFetcherFlags, AbortedCallback } from '../../DataFetcher';
 import { MathConstants, computeModelMatrixSRT, lerp, computeNormalMatrix, clamp } from '../../MathHelpers';
 import { getPointBezier } from '../../Spline';
-import { Camera, computeClipSpacePointFromWorldSpacePoint } from '../../Camera';
+import { Camera, computeClipSpacePointFromWorldSpacePoint, texProjCamera } from '../../Camera';
 import { SceneContext } from '../../SceneBase';
 import * as Viewer from '../../viewer';
 import * as UI from '../../ui';
@@ -171,7 +171,7 @@ class SMGRenderer implements Viewer.SceneGfx {
             const zoneNode = this.spawner.zones[i];
             if (zoneNode === undefined)
                 continue;
-            zoneNode.layerMask = scenarioData.getValueNumber(zoneNode.name);
+            zoneNode.layerMask = assertExists(scenarioData.getValueNumber(zoneNode.name));
         }
 
         this.spawner.zones[0].computeZoneVisibility();
@@ -198,7 +198,7 @@ class SMGRenderer implements Viewer.SceneGfx {
         const scenarioData = this.sceneObjHolder.scenarioData.scenarioDataIter;
 
         scenarioData.mapRecords((jmp, i) => {
-            this.scenarioNoToIndex[jmp.getValueNumber('ScenarioNo')] = i;
+            this.scenarioNoToIndex[assertExists(jmp.getValueNumber('ScenarioNo'))] = i;
         });
 
         const scenarioNames: string[] = [];
@@ -206,12 +206,12 @@ class SMGRenderer implements Viewer.SceneGfx {
             const scenarioIndex = this.scenarioNoToIndex[i];
             scenarioData.setRecord(scenarioIndex);
 
-            let name: string = "";
-            if (!name && this.sceneObjHolder.messageDataHolder !== null)
+            let name: string | null = null;
+            if (name === null && this.sceneObjHolder.messageDataHolder !== null)
                 name = this.sceneObjHolder.messageDataHolder.getStringById(`ScenarioName_${galaxyName}${i}`);
 
-            if (!name)
-                name = scenarioData.getValueString(`ScenarioName`);
+            if (name === null)
+                name = assertExists(scenarioData.getValueString(`ScenarioName`));
 
             scenarioNames.push(name);
         }
@@ -260,13 +260,25 @@ class SMGRenderer implements Viewer.SceneGfx {
         }
     }
 
-    private drawAllEffects(): void {
+    private drawAllEffects(viewerInput: Viewer.ViewerRenderInput): void {
         if (this.sceneObjHolder.effectSystem === null)
             return;
+
+        const effectSystem = this.sceneObjHolder.effectSystem;
+
         for (let drawType = DrawType.EFFECT_DRAW_3D; drawType <= DrawType.EFFECT_DRAW_AFTER_IMAGE_EFFECT; drawType++) {
             const template = this.renderHelper.renderInstManager.pushTemplateRenderInst();
             template.filterKey = createFilterKeyForDrawType(drawType);
-            this.sceneObjHolder.effectSystem.draw(this.sceneObjHolder.modelCache.device, this.renderHelper.renderInstManager, drawType);
+
+            let texPrjMtx: mat4 | null = null;
+            if (drawType === DrawType.EFFECT_DRAW_INDIRECT) {
+                texPrjMtx = scratchMatrix;
+                texProjCamera(texPrjMtx, viewerInput.camera, 0.5, -0.5, 0.5, 0.5);
+            }
+
+            effectSystem.setDrawInfo(viewerInput.camera.viewMatrix, viewerInput.camera.projectionMatrix, texPrjMtx);
+            effectSystem.draw(this.sceneObjHolder.modelCache.device, this.renderHelper.renderInstManager, drawType);
+
             this.renderHelper.renderInstManager.popTemplateRenderInst();
         }
     }
@@ -301,7 +313,7 @@ class SMGRenderer implements Viewer.SceneGfx {
         this.mainRenderTarget.setParameters(device, viewerInput.viewportWidth, viewerInput.viewportHeight);
         this.sceneTexture.setParameters(device, viewerInput.viewportWidth, viewerInput.viewportHeight);
 
-        this.sceneObjHolder.captureSceneDirector.opaqueSceneTexture = this.sceneTexture.gfxTexture;
+        this.sceneObjHolder.captureSceneDirector.opaqueSceneTexture = this.sceneTexture.gfxTexture!;
 
         const template = this.renderHelper.pushTemplateRenderInst();
         fillSceneParamsDataOnTemplate(template, viewerInput);
@@ -310,16 +322,19 @@ class SMGRenderer implements Viewer.SceneGfx {
         if (effectSystem !== null) {
             const deltaTime = getDeltaTimeFrames(viewerInput);
             effectSystem.calc(deltaTime);
-            effectSystem.setDrawInfo(viewerInput.camera.viewMatrix, viewerInput.camera.projectionMatrix, null);
+
+            const indDummy = effectSystem.particleResourceHolder.getTextureMappingReference('IndDummy');
+            if (indDummy !== null)
+                setTextureMappingIndirect(indDummy, this.sceneTexture.gfxTexture!);
         }
 
         // Prepare all of our NameObjs.
         executor.executeDrawAll(this.sceneObjHolder, this.renderHelper.renderInstManager, viewerInput);
-        executor.setIndirectTextureOverride(this.sceneTexture.gfxTexture);
+        executor.setIndirectTextureOverride(this.sceneTexture.gfxTexture!);
 
         // Push to the renderinst.
         executor.drawAllBuffers(this.sceneObjHolder.modelCache.device, this.renderHelper.renderInstManager, camera);
-        this.drawAllEffects();
+        this.drawAllEffects(viewerInput);
 
         let bloomParameterBufferOffs = -1;
         if (this.isNormalBloomOn()) {
@@ -401,6 +416,8 @@ class SMGRenderer implements Viewer.SceneGfx {
         // if not PriorDrawAir, they would go here...
 
         // executeDrawListOpa();
+        this.execute(passRenderer, DrawType.WARP_POD_PATH);
+
         this.drawOpa(passRenderer, 0x18);
 
         // executeDrawBufferListNormalXlu()
@@ -530,12 +547,8 @@ interface ObjInfo {
     objArg1: number;
     objArg2: number;
     objArg3: number;
-    moveConditionType: number;
-    rotateSpeed: number;
-    rotateAxis: number;
-    rotateAccelType: number;
     modelMatrix: mat4;
-    path: Path;
+    path: Path | null;
 }
 
 export interface WorldmapPointInfo {
@@ -581,7 +594,8 @@ function patchInTexMtxIdxBuffer(loadedVertexLayout: LoadedVertexLayout, loadedVe
     loadedVertexData.vertexBufferStrides[1] = bufferStride;
 
     const view = new DataView(loadedVertexData.vertexBuffers[0]);
-    let offs = loadedVertexLayout.dstVertexAttributeLayouts.find((attrib) => attrib.vtxAttrib === GX.VertexAttribute.PNMTXIDX).bufferOffset;
+    const pnmtxidxLayout = assertExists(loadedVertexLayout.dstVertexAttributeLayouts.find((attrib) => attrib.vtxAttrib === GX.VertexAttribute.PNMTXIDX));
+    let offs = pnmtxidxLayout.bufferOffset;
     const loadedStride = loadedVertexData.vertexBufferStrides[0];
 
     for (let i = 0; i < vertexCount; i++) {
@@ -720,8 +734,9 @@ export class ModelCache {
     public archiveCache = new Map<string, RARC.RARC | null>();
     public modelCache = new Map<string, BMDModel | null>();
     private models: BMDModel[] = [];
+    public cache = new GfxRenderCache(true);
 
-    constructor(public device: GfxDevice, public cache: GfxRenderCache, private pathBase: string, private dataFetcher: DataFetcher) {
+    constructor(public device: GfxDevice, private pathBase: string, private dataFetcher: DataFetcher) {
     }
 
     public waitForLoad(): Promise<void> {
@@ -731,7 +746,7 @@ export class ModelCache {
 
     public getModel(rarc: RARC.RARC, modelFilename: string): BMDModel | null {
         if (this.modelCache.has(modelFilename))
-            return this.modelCache.get(modelFilename);
+            return this.modelCache.get(modelFilename)!;
 
         const bmd = BMD.parse(assertExists(rarc.findFileData(modelFilename)));
         patchBMD(bmd);
@@ -742,22 +757,27 @@ export class ModelCache {
         return bmdModel;
     }
 
-    public requestArchiveData(archivePath: string): Promise<RARC.RARC | null> {
+    private async requestArchiveDataInternal(archivePath: string, abortedCallback: AbortedCallback): Promise<RARC.RARC | null> {
+        const buffer = await this.dataFetcher.fetchData(`${this.pathBase}/${archivePath}`, DataFetcherFlags.ALLOW_404, abortedCallback);
+
+        if (buffer.byteLength === 0) {
+            console.warn(`Could not fetch archive ${archivePath}`);
+            return null;
+        }
+
+        const decompressed = await Yaz0.decompress(buffer);
+        const rarc = RARC.parse(decompressed);
+        this.archiveCache.set(archivePath, rarc);
+        return rarc;
+    }
+
+    public async requestArchiveData(archivePath: string): Promise<RARC.RARC | null> {
         if (this.archivePromiseCache.has(archivePath))
-            return this.archivePromiseCache.get(archivePath);
+            return this.archivePromiseCache.get(archivePath)!;
 
-        const p = this.dataFetcher.fetchData(`${this.pathBase}/${archivePath}`, DataFetcherFlags.ALLOW_404).then((buffer: ArrayBufferSlice) => {
-            if (buffer.byteLength === 0) {
-                console.warn(`Could not fetch archive ${archivePath}`);
-                return null;
-            }
-            return Yaz0.decompress(buffer);
-        }).then((buffer: ArrayBufferSlice) => {
-            const rarc = buffer !== null ? RARC.parse(buffer) : null;
-            this.archiveCache.set(archivePath, rarc);
-            return rarc;
+        const p = this.requestArchiveDataInternal(archivePath, () => {
+            this.archivePromiseCache.delete(archivePath);
         });
-
         this.archivePromiseCache.set(archivePath, p);
         return p;
     }
@@ -793,12 +813,12 @@ class ScenarioData {
     public scenarioDataIter: JMapInfoIter;
 
     constructor(private scenarioArc: RARC.RARC) {
-        const zoneListIter = createCsvParser(scenarioArc.findFileData('ZoneList.bcsv'));
+        const zoneListIter = createCsvParser(scenarioArc.findFileData('ZoneList.bcsv')!);
         this.zoneNames = zoneListIter.mapRecords((iter) => {
-            return iter.getValueString(`ZoneName`);
+            return assertExists(iter.getValueString(`ZoneName`));
         });
 
-        this.scenarioDataIter = createCsvParser(scenarioArc.findFileData('ScenarioData.bcsv'));
+        this.scenarioDataIter = createCsvParser(scenarioArc.findFileData('ScenarioData.bcsv')!);
     }
 
     public getMasterZoneFilename(): string {
@@ -914,7 +934,7 @@ export class SceneObjHolder {
     public npcDirector: NPCDirector;
     public stageDataHolder: StageDataHolder;
     public effectSystem: EffectSystem | null = null;
-    public messageDataHolder: MessageDataHolder | null;
+    public messageDataHolder: MessageDataHolder | null = null;
     public captureSceneDirector = new CaptureSceneDirector();
 
     // This is technically stored outside the SceneObjHolder, separately
@@ -924,7 +944,6 @@ export class SceneObjHolder {
     public uiSystem: UISystem;
 
     public destroy(device: GfxDevice): void {
-        this.modelCache.destroy(device);
         this.sceneNameObjListExecutor.destroy(device);
 
         if (this.effectSystem !== null)
@@ -954,7 +973,7 @@ const enum LayerId {
 }
 
 export function getObjectName(infoIter: JMapInfoIter): string {
-    return infoIter.getValueString(`name`);
+    return assertExists(infoIter.getValueString(`name`));
 }
 
 // Random actor for other things that otherwise do not have their own actors.
@@ -990,7 +1009,7 @@ class NoclipLegacyActor extends LiveActor {
             objinfo.modelMatrix[13] = 0;
             objinfo.modelMatrix[14] = 0;
 
-            this.modelInstance.isSkybox = true;
+            this.modelInstance!.isSkybox = true;
         }
 
         this.initEffectKeeper(sceneObjHolder, null);
@@ -999,16 +1018,11 @@ class NoclipLegacyActor extends LiveActor {
     }
 
     public setupAnimations(): void {
-        if (this.objinfo.moveConditionType === 0) {
-            this.rotateSpeed = this.objinfo.rotateSpeed;
-            this.rotateAxis = this.objinfo.rotateAxis;
-        }
-
         const objName = this.objinfo.objName;
         if (objName.startsWith('HoleBeltConveyerParts') && this.objinfo.path) {
             this.modelMatrixAnimator = new RailAnimationMapPart(this.objinfo.path, this.translation);
         } else if (objName === 'TicoRail') {
-            this.modelMatrixAnimator = new RailAnimationTico(this.objinfo.path);
+            this.modelMatrixAnimator = new RailAnimationTico(assertExists(this.objinfo.path));
         }
     }
 
@@ -1033,9 +1047,9 @@ class NoclipLegacyActor extends LiveActor {
     public calcAndSetBaseMtx(viewerInput: Viewer.ViewerRenderInput): void {
         const time = viewerInput.time / 1000;
         super.calcAndSetBaseMtx(viewerInput);
-        this.updateMapPartsRotation(this.modelInstance.modelMatrix, time);
+        this.updateMapPartsRotation(this.modelInstance!.modelMatrix, time);
         if (this.modelMatrixAnimator !== null)
-            this.modelMatrixAnimator.updateRailAnimation(this.modelInstance.modelMatrix, time);
+            this.modelMatrixAnimator.updateRailAnimation(this.modelInstance!.modelMatrix, time);
     }
 }
 
@@ -1093,8 +1107,8 @@ class SMGSpawner {
     private isWorldMap = false;
 
     constructor(private galaxyName: string, pathBase: string, private sceneObjHolder: SceneObjHolder) {
-        this.isSMG1 = pathBase === 'j3d/smg';
-        this.isSMG2 = pathBase === 'j3d/smg2';
+        this.isSMG1 = pathBase === 'SuperMarioGalaxy';
+        this.isSMG2 = pathBase === 'SuperMarioGalaxy2';
         this.isWorldMap = this.isSMG2 && galaxyName.startsWith('WorldMap');
     }
 
@@ -1112,7 +1126,7 @@ class SMGSpawner {
             this.syncActorVisible(this.sceneObjHolder.sceneNameObjListExecutor.nameObjExecuteInfos[i].nameObj as LiveActor);
     }
 
-    private getNameObjFactory(objName: string): NameObjFactory | null {
+    private getNameObjFactory(objName: string): NameObjFactory | null | undefined {
         const actorFactory = getNameObjTableEntry(objName);
         if (actorFactory !== null)
             return actorFactory.factory;
@@ -1121,27 +1135,27 @@ class SMGSpawner {
         if (planetFactory !== null)
             return planetFactory;
 
-        return null;
+        return undefined;
     }
 
     public spawnObjectLegacy(zoneAndLayer: ZoneAndLayer, infoIter: JMapInfoIter, objinfo: ObjInfo): void {
         const modelCache = this.sceneObjHolder.modelCache;
 
-        const applyAnimations = (actor: LiveActor, animOptions?: AnimOptions) => {
+        const applyAnimations = (actor: LiveActor, animOptions: AnimOptions | null | undefined) => {
             if (animOptions !== null) {
                 if (animOptions !== undefined) {
                     if (animOptions.bck !== undefined)
                         startBck(actor, animOptions.bck.slice(0, -4));
                     if (animOptions.brk !== undefined)
-                        startBrkIfExist(actor.modelInstance, actor.arc, animOptions.brk.slice(0, -4));
+                        startBrkIfExist(actor.modelInstance!, actor.arc, animOptions.brk.slice(0, -4));
                     if (animOptions.btk !== undefined)
-                        startBtkIfExist(actor.modelInstance, actor.arc, animOptions.btk.slice(0, -4));
+                        startBtkIfExist(actor.modelInstance!, actor.arc, animOptions.btk.slice(0, -4));
                 } else {
                     // Look for "Wait" animation first, then fall back to the first animation.
                     let hasAnim = false;
                     hasAnim = startBck(actor, 'Wait') || hasAnim;
-                    hasAnim = startBrkIfExist(actor.modelInstance, actor.arc, 'Wait') || hasAnim;
-                    hasAnim = startBtkIfExist(actor.modelInstance, actor.arc, 'Wait') || hasAnim;
+                    hasAnim = startBrkIfExist(actor.modelInstance!, actor.arc, 'Wait') || hasAnim;
+                    hasAnim = startBtkIfExist(actor.modelInstance!, actor.arc, 'Wait') || hasAnim;
                     if (!hasAnim) {
                         // If there's no "Wait" animation, then play the first animations that we can...
                         const bckFile = actor.arc.files.find((file) => file.name.endsWith('.bck')) || null;
@@ -1149,61 +1163,55 @@ class SMGSpawner {
                             const bckFilename = bckFile.name.slice(0, -4);
                             startBck(actor, bckFilename);
                         }
-    
+
                         const brkFile = actor.arc.files.find((file) => file.name.endsWith('.brk') && file.name.toLowerCase() !== 'colorchange.brk') || null;
                         if (brkFile !== null) {
                             const brkFilename = brkFile.name.slice(0, -4);
-                            startBckIfExist(actor.modelInstance, actor.arc, brkFilename);
+                            startBckIfExist(actor.modelInstance!, actor.arc, brkFilename);
                         }
-    
+
                         const btkFile = actor.arc.files.find((file) => file.name.endsWith('.btk') && file.name.toLowerCase() !== 'texchange.btk') || null;
                         if (btkFile !== null) {
                             const btkFilename = btkFile.name.slice(0, -4);
-                            startBtkIfExist(actor.modelInstance, actor.arc, btkFilename);
+                            startBtkIfExist(actor.modelInstance!, actor.arc, btkFilename);
                         }            
                     }
                 }
             }
-    
+
             // Apply a random phase to the animation.
-            if (actor.modelInstance.ank1Animator !== null && actor.modelInstance.ank1Animator.ank1.loopMode === LoopMode.REPEAT)
-                actor.modelInstance.animationController.phaseFrames += Math.random() * actor.modelInstance.ank1Animator.ank1.duration;
+            if (actor.modelInstance!.ank1Animator !== null && actor.modelInstance!.ank1Animator.ank1.loopMode === LoopMode.REPEAT)
+                actor.modelInstance!.animationController.phaseFrames += Math.random() * actor.modelInstance!.ank1Animator.ank1.duration;
         }
-    
+
         const bindChangeAnimation = (actor: NoclipLegacyActor, rarc: RARC.RARC, frame: number) => {
-            bindColorChangeAnimation(actor.modelInstance, rarc, frame);
-            bindTexChangeAnimation(actor.modelInstance, rarc, frame);
+            bindColorChangeAnimation(actor.modelInstance!, rarc, frame);
+            bindTexChangeAnimation(actor.modelInstance!, rarc, frame);
         };
-    
-        const spawnGraph = (arcName: string, tag: SceneGraphTag = SceneGraphTag.Normal, animOptions: AnimOptions | null | undefined = undefined) => {
-            return modelCache.requestObjectData(arcName).then((data): [NoclipLegacyActor, RARC.RARC] | null => {
-                if (data === null) {
-                    // Received a 404.
-                    return null;
-                }
-                
-                const actor = new NoclipLegacyActor(zoneAndLayer, arcName, this.sceneObjHolder, infoIter, tag, objinfo);
-                applyAnimations(actor, animOptions);
 
-                this.addActor(actor);
-                this.syncActorVisible(actor);
+        const spawnGraphNullable = async (arcName: string, tag: SceneGraphTag = SceneGraphTag.Normal, animOptions: AnimOptions | null | undefined = undefined): Promise<[NoclipLegacyActor, RARC.RARC] | null> => {
+            const data = await modelCache.requestObjectData(arcName);
 
-                return [actor, actor.arc];
-            });
+            if (data === null)
+                return null;
+
+            const actor = new NoclipLegacyActor(zoneAndLayer, arcName, this.sceneObjHolder, infoIter, tag, objinfo);
+            applyAnimations(actor, animOptions);
+
+            this.addActor(actor);
+            this.syncActorVisible(actor);
+
+            return [actor, actor.arc];
+        };
+
+        const spawnGraph = async (arcName: string, tag: SceneGraphTag = SceneGraphTag.Normal, animOptions: AnimOptions | null | undefined = undefined) => {
+            return assertExists(await spawnGraphNullable(arcName, tag, animOptions));
         };
 
         const name = objinfo.objName;
         switch (name) {
-        case 'PeachCastleTownAfterAttack':
-            // Don't show. We want the pristine town state.
-            return;
-
         case 'ElectricRail':
             // Covers the path with the rail -- will require special spawn logic.
-            return;
-
-        case 'ShootingStar':
-            // Actor implementation in the works, but it requires stripe particles to look good...
             return;
 
         case 'MeteorCannon':
@@ -1230,38 +1238,6 @@ class SMGSpawner {
         case 'RingBeamerAreaObj':
         case 'StatusFloor':
             // Archives just contain the textures. Mesh geometry appears to be generated at runtime by the game.
-            return;
-
-        case 'InvisibleWall10x10':
-        case 'InvisibleWall10x20':
-        case 'InvisibleWallJump10x20':
-        case 'InvisibleWallGCapture10x20':
-        case 'InvisibleWaterfallTwinFallLake':
-        case 'GhostShipCavePipeCollision':
-            // Invisible / Collision only.
-            return;
-
-        case 'TimerSwitch':
-        case 'ClipFieldSwitch':
-        case 'SoundSyncSwitch':
-        case 'ExterminationSwitch':
-        case 'SwitchSynchronizerReverse':
-        case 'PrologueDirector':
-        case 'MovieStarter':
-        case 'ScenarioStarter':
-        case 'LuigiEvent':
-        case 'MameMuimuiScorer':
-        case 'MameMuimuiScorerLv2':
-        case 'ScoreAttackCounter':
-        case 'RepeartTimerSwitch':
-        case 'FlipPanelObserver':
-            // Logic objects.
-            return;
-
-        case 'OpeningDemoObj':
-        case 'NormalEndingDemoObj':
-        case 'MeetKoopaDemoObj':
-            // Cutscenes.
             return;
 
         case 'StarPieceFollowGroup':
@@ -1352,13 +1328,6 @@ class SMGSpawner {
             break;
 
         // SMG1.
-        case 'AstroCore':
-            spawnGraph(name, SceneGraphTag.Normal, { bck: 'revival4.bck', brk: 'revival4.brk', btk: 'astrocore.btk' });
-            break;
-        case 'SignBoard':
-            // SignBoard has a single animation for falling over which we don't want to play.
-            spawnGraph('SignBoard', SceneGraphTag.Normal, null);
-            break;
         case 'Rabbit':
             spawnGraph('TrickRabbit');
             break;
@@ -1369,7 +1338,7 @@ class SMGSpawner {
             break;
         case 'TicoShop':
             spawnGraph(`TicoShop`).then(([node, rarc]) => {
-                startBvaIfExist(node.modelInstance, rarc, 'Small0');
+                startBvaIfExist(node.modelInstance!, rarc, 'Small0');
             });
             break;
 
@@ -1392,16 +1361,16 @@ class SMGSpawner {
             });
             break;
         case 'PlantA':
-            spawnGraph(`PlantA${hexzero(infoIter.getValueNumber('ShapeModelNo'), 2)}`);
+            spawnGraph(`PlantA${hexzero(assertExists(infoIter.getValueNumber('ShapeModelNo')), 2)}`);
             break;
         case 'PlantB':
-            spawnGraph(`PlantB${hexzero(infoIter.getValueNumber('ShapeModelNo'), 2)}`);
+            spawnGraph(`PlantB${hexzero(assertExists(infoIter.getValueNumber('ShapeModelNo')), 2)}`);
             break;
         case 'PlantC':
-            spawnGraph(`PlantC${hexzero(infoIter.getValueNumber('ShapeModelNo'), 2)}`);
+            spawnGraph(`PlantC${hexzero(assertExists(infoIter.getValueNumber('ShapeModelNo')), 2)}`);
             break;
         case 'PlantD':
-            spawnGraph(`PlantD${hexzero(infoIter.getValueNumber('ShapeModelNo'), 2)}`);
+            spawnGraph(`PlantD${hexzero(assertExists(infoIter.getValueNumber('ShapeModelNo')), 2)}`);
             break;
         case 'BenefitItemOneUp':
             spawnGraph(`KinokoOneUp`);
@@ -1440,17 +1409,14 @@ class SMGSpawner {
         case 'TreasureBoxKinokoOneUp':
             spawnGraph(`TreasureBox`);
             break;
-        case 'SuperSpinDriverPink':
-            // TODO(jstpierre): Adjust color override.
-            spawnGraph(`SuperSpinDriver`);
-            break;
         case 'JetTurtle':
             // spawnGraph(`Koura`);
             break;
 
         // TODO(jstpierre): Group spawn logic?
         case 'FlowerGroup':
-            spawnGraph(`Flower`);
+            if (this.isSMG1)
+                spawnGraph(`Flower`);
             return;
         case 'FlowerBlueGroup':
             spawnGraph(`FlowerBlue`);
@@ -1487,19 +1453,19 @@ class SMGSpawner {
                     const animationController = new AnimationController();
                     animationController.setTimeInFrames(frame);
 
-                    const btp = BTP.parse(rarc.findFileData(`powerstar.btp`));
-                    node.modelInstance.bindTPT1(btp.tpt1, animationController);
+                    const btp = BTP.parse(rarc.findFileData(`powerstar.btp`)!);
+                    node.modelInstance!.bindTPT1(btp.tpt1, animationController);
                 } else {
                     const frame = name === 'GreenStar' ? 2 : 0;
 
                     const animationController = new AnimationController();
                     animationController.setTimeInFrames(frame);
 
-                    const btp = BTP.parse(rarc.findFileData(`PowerStarColor.btp`));
-                    node.modelInstance.bindTPT1(btp.tpt1, animationController);
+                    const btp = BTP.parse(rarc.findFileData(`PowerStarColor.btp`)!);
+                    node.modelInstance!.bindTPT1(btp.tpt1, animationController);
                 }
 
-                node.modelInstance.setMaterialVisible('Empty', false);
+                node.modelInstance!.setMaterialVisible('Empty', false);
 
                 node.setRotateSpeed(140);
             });
@@ -1509,7 +1475,7 @@ class SMGSpawner {
             spawnGraph(name).then(([node, rarc]) => {
                 // Stars in cages are rotated by BreakableCage at a hardcoded '3.0'.
                 // See BreakableCage::exeWait.
-                node.modelInstance.setMaterialVisible('GrandStarEmpty', false);
+                node.modelInstance!.setMaterialVisible('GrandStarEmpty', false);
                 node.setRotateSpeed(3);
             });
             return;
@@ -1517,8 +1483,8 @@ class SMGSpawner {
         // SMG2
         case 'Moc':
             spawnGraph(name, SceneGraphTag.Normal, { bck: 'turn.bck' }).then(([node, rarc]) => {
-                const bva = BVA.parse(rarc.findFileData(`FaceA.bva`));
-                node.modelInstance.bindVAF1(bva.vaf1);
+                const bva = BVA.parse(rarc.findFileData(`FaceA.bva`)!);
+                node.modelInstance!.bindVAF1(bva.vaf1);
             });
             break;
         case 'CareTakerHunter':
@@ -1571,7 +1537,7 @@ class SMGSpawner {
 
         case 'TicoCoin':
             spawnGraph(name).then(([node, rarc]) => {
-                node.modelInstance.setMaterialVisible('TicoCoinEmpty_v', false);
+                node.modelInstance!.setMaterialVisible('TicoCoinEmpty_v', false);
             });
             break;
         case 'WanwanRolling':
@@ -1582,7 +1548,7 @@ class SMGSpawner {
                 emitEffect(this.sceneObjHolder, node, 'Fire');
             });
         default:
-            spawnGraph(name);
+            spawnGraphNullable(name);
             break;
         }
     }
@@ -1600,8 +1566,14 @@ class SMGSpawner {
 
         stageDataHolder.iterPlacement((infoIter, layerId) => {
             const factory = this.getNameObjFactory(getObjectName(infoIter));
+
+            if (factory === null) {
+                // Explicitly null. Don't spawn anything.
+                return;
+            }
+
             const zoneAndLayer: ZoneAndLayer = { zoneId: stageDataHolder.zoneId, layerId };
-            if (factory !== null) {
+            if (factory !== undefined) {
                 const actor = new factory(zoneAndLayer, this.sceneObjHolder, infoIter);
                 this.addActor(actor);
             } else {
@@ -1639,7 +1611,7 @@ class SMGSpawner {
         }
 
         const factory = this.getNameObjFactory(objName);
-        if (factory !== null && factory.requestArchives !== undefined)
+        if (factory !== null && factory !== undefined && factory.requestArchives !== undefined)
             factory.requestArchives(this.sceneObjHolder, infoIter);
 
         const entry = getNameObjTableEntry(objName);
@@ -1675,26 +1647,27 @@ class SMGSpawner {
         modelCache.requestObjectData('MiniTicoMasterMark');
         modelCache.requestObjectData('MiniStarCheckPointMark');
 
-        const worldMapRarc = this.sceneObjHolder.modelCache.getObjectData(this.galaxyName.substr(0, 10));
-        const worldMapGalaxyData = createCsvParser(worldMapRarc.findFileData('ActorInfo/Galaxy.bcsv'));
+        const worldMapRarc = this.sceneObjHolder.modelCache.getObjectData(this.galaxyName.substr(0, 10))!;
+        const worldMapGalaxyData = createCsvParser(worldMapRarc.findFileData('ActorInfo/Galaxy.bcsv')!);
         worldMapGalaxyData.mapRecords((jmp) => {
-            modelCache.requestObjectData(jmp.getValueString('MiniatureName'));
+            modelCache.requestObjectData(assertExists(jmp.getValueString('MiniatureName')));
         })
     }
 
     public placeWorldMap(): void {
         const points: WorldmapPointInfo[] = [];
-        const worldMapRarc = this.sceneObjHolder.modelCache.getObjectData(this.galaxyName.substr(0, 10));
-        const worldMapPointData = createCsvParser(worldMapRarc.findFileData('ActorInfo/PointPos.bcsv'));
+        const worldMapRarc = this.sceneObjHolder.modelCache.getObjectData(this.galaxyName.substr(0, 10))!;
+        const worldMapPointData = createCsvParser(worldMapRarc.findFileData('ActorInfo/PointPos.bcsv')!);
 
         // Spawn everything in Zone 0.
         const zoneAndLayer: ZoneAndLayer = { zoneId: 0, layerId: LayerId.COMMON };
 
         worldMapPointData.mapRecords((infoIter) => {
             const position = vec3.fromValues(
-                infoIter.getValueNumber('PointPosX'),
-                infoIter.getValueNumber('PointPosY'),
-                infoIter.getValueNumber('PointPosZ'));
+                assertExists(infoIter.getValueNumber('PointPosX')),
+                assertExists(infoIter.getValueNumber('PointPosY')),
+                assertExists(infoIter.getValueNumber('PointPosZ')),
+            );
 
             const isPink = infoIter.getValueString('ColorChange') == 'o';
             const isSmall = true;
@@ -1704,18 +1677,18 @@ class SMGSpawner {
             points.push(pointInfo);
         });
 
-        const worldMapGalaxyData = createCsvParser(worldMapRarc.findFileData('ActorInfo/Galaxy.bcsv'));
+        const worldMapGalaxyData = createCsvParser(worldMapRarc.findFileData('ActorInfo/Galaxy.bcsv')!);
         worldMapGalaxyData.mapRecords((infoIter) => {
-            const pointIndex = infoIter.getValueNumber('PointPosIndex');
+            const pointIndex = assertExists(infoIter.getValueNumber('PointPosIndex'));
             points[pointIndex].isSmall = false;
             const galaxy = new MiniRouteGalaxy(zoneAndLayer, this.sceneObjHolder, infoIter, points[pointIndex]);
             this.addActor(galaxy);
         });
 
         // Sometimes it's in the ActorInfo directory, sometimes its not... WTF?
-        const worldMapPointParts = createCsvParser(worldMapRarc.files.find((file) => file.name.toLowerCase() === 'pointparts.bcsv').buffer);
+        const worldMapPointParts = createCsvParser(worldMapRarc.files.find((file) => file.name.toLowerCase() === 'pointparts.bcsv')!.buffer);
         worldMapPointParts.mapRecords((infoIter) => {
-            const pointIndex = infoIter.getValueNumber('PointIndex');
+            const pointIndex = assertExists(infoIter.getValueNumber('PointIndex'));
             points[pointIndex].isSmall = false;
             const pointPart = new MiniRoutePart(zoneAndLayer, this.sceneObjHolder, infoIter, points[pointIndex]);
             this.addActor(pointPart);
@@ -1730,11 +1703,11 @@ class SMGSpawner {
             }
         });
 
-        const worldMapLinkData = createCsvParser(worldMapRarc.findFileData('ActorInfo/PointLink.bcsv'));
+        const worldMapLinkData = createCsvParser(worldMapRarc.findFileData('ActorInfo/PointLink.bcsv')!);
         worldMapLinkData.mapRecords((jmp) => {
             const isColorChange = jmp.getValueString('IsColorChange') === 'o';
-            const pointA = points[jmp.getValueNumber('PointIndexA')];
-            const pointB = points[jmp.getValueNumber('PointIndexB')];
+            const pointA = points[assertExists(jmp.getValueNumber('PointIndexA'))];
+            const pointB = points[assertExists(jmp.getValueNumber('PointIndexB'))];
             this.spawnWorldMapLine(zoneAndLayer, pointA, pointB, isColorChange);
         });
     }
@@ -1764,17 +1737,13 @@ class SMGSpawner {
         modelMatrix[10] = f[2]*2;
 
         const obj = createModelObjMapObj(zoneAndLayer, this.sceneObjHolder, `MiniRouteLine`, 'MiniRouteLine', modelMatrix);
-        startBvaIfExist(obj.modelInstance, obj.arc, 'Open');
+        startBvaIfExist(obj.modelInstance!, obj.arc, 'Open');
         if (isPink)
-            startBrkIfExist(obj.modelInstance, obj.arc, 'TicoBuild');
+            startBrkIfExist(obj.modelInstance!, obj.arc, 'TicoBuild');
         else
-            startBrkIfExist(obj.modelInstance, obj.arc, 'Normal');
+            startBrkIfExist(obj.modelInstance!, obj.arc, 'Normal');
 
         this.addActor(obj);
-    }
-
-    public destroy(device: GfxDevice): void {
-        this.sceneObjHolder.destroy(device);
     }
 }
 
@@ -1806,6 +1775,21 @@ class StageDataHolder {
         return iter;
     }
 
+    public getCommonPathPointInfo(railId: number): [JMapInfoIter, JMapInfoIter] {
+        const commonPathInfo = this.createCsvParser(this.zoneArchive.findFileData(`jmp/path/CommonPathInfo`)!);
+
+        for (let i = 0; i < commonPathInfo.getNumRecords(); i++) {
+            commonPathInfo.setRecord(i);
+            if (commonPathInfo.getValueNumber(`l_id`) === railId)
+                break;
+        }
+
+        const no = commonPathInfo.getValueNumber('no')!;
+        const pointInfo = this.createCsvParser(this.zoneArchive.findFileData(`jmp/path/CommonPathPointInfo.${no}`)!);
+
+        return [commonPathInfo, pointInfo];
+    }
+
     public legacyCreateObjinfo(infoIter: JMapInfoIter, paths: Path[]): ObjInfo {
         const objId = infoIter.getValueNumber('l_id', -1);
         const objName = infoIter.getValueString('name', 'Unknown');
@@ -1813,10 +1797,6 @@ class StageDataHolder {
         const objArg1 = infoIter.getValueNumber('Obj_arg1', -1);
         const objArg2 = infoIter.getValueNumber('Obj_arg2', -1);
         const objArg3 = infoIter.getValueNumber('Obj_arg3', -1);
-        const moveConditionType = infoIter.getValueNumber('MoveConditionType', 0);
-        const rotateSpeed = infoIter.getValueNumber('RotateSpeed', 0);
-        const rotateAccelType = infoIter.getValueNumber('RotateAccelType', 0);
-        const rotateAxis = infoIter.getValueNumber('RotateAxis', 0);
         const pathId: number = infoIter.getValueNumber('CommonPath_ID', -1);
         const path = paths.find((path) => path.l_id === pathId) || null;
         const modelMatrix = mat4.create();
@@ -1830,35 +1810,35 @@ class StageDataHolder {
             rotation[0], rotation[1], rotation[2],
             translation[0], translation[1], translation[2]);
 
-        return { objId, objName, objArg0, objArg1, objArg2, objArg3, moveConditionType, rotateSpeed, rotateAccelType, rotateAxis, modelMatrix, path };
+        return { objId, objName, objArg0, objArg1, objArg2, objArg3, modelMatrix, path };
     }
 
     public legacyParsePaths(): Path[] {
-        const pathDir = this.zoneArchive.findDir('jmp/path');
+        const pathDir = assertExists(this.zoneArchive.findDir('jmp/path'));
 
-        const commonPathInfo = BCSV.parse(RARC.findFileDataInDir(pathDir, 'commonpathinfo'));
+        const commonPathInfo = BCSV.parse(RARC.findFileDataInDir(pathDir, 'commonpathinfo')!);
         return commonPathInfo.records.map((record, i): Path => {
-            const l_id = BCSV.getField<number>(commonPathInfo, record, 'l_id');
-            const no = BCSV.getField<number>(commonPathInfo, record, 'no');
+            const l_id = assertExists(BCSV.getField<number>(commonPathInfo, record, 'l_id'));
+            const no = assertExists(BCSV.getField<number>(commonPathInfo, record, 'no'));
             assert(no === i);
-            const name = BCSV.getField<string>(commonPathInfo, record, 'name');
-            const type = BCSV.getField<string>(commonPathInfo, record, 'type');
+            const name = assertExists(BCSV.getField<string>(commonPathInfo, record, 'name'));
+            const type = assertExists(BCSV.getField<string>(commonPathInfo, record, 'type'));
             const closed = BCSV.getField<string>(commonPathInfo, record, 'closed', 'OPEN');
-            const path_arg0 = BCSV.getField<string>(commonPathInfo, record, 'path_arg0');
-            const path_arg1 = BCSV.getField<string>(commonPathInfo, record, 'path_arg1');
-            const pointinfo = BCSV.parse(RARC.findFileDataInDir(pathDir, `commonpathpointinfo.${i}`));
+            const path_arg0 = assertExists(BCSV.getField<string>(commonPathInfo, record, 'path_arg0'));
+            const path_arg1 = assertExists(BCSV.getField<string>(commonPathInfo, record, 'path_arg1'));
+            const pointinfo = BCSV.parse(RARC.findFileDataInDir(pathDir, `commonpathpointinfo.${i}`)!);
             const points = pointinfo.records.map((record, i) => {
                 const id = BCSV.getField<number>(pointinfo, record, 'id');
                 assert(id === i);
-                const pnt0_x = BCSV.getField<number>(pointinfo, record, 'pnt0_x');
-                const pnt0_y = BCSV.getField<number>(pointinfo, record, 'pnt0_y');
-                const pnt0_z = BCSV.getField<number>(pointinfo, record, 'pnt0_z');
-                const pnt1_x = BCSV.getField<number>(pointinfo, record, 'pnt1_x');
-                const pnt1_y = BCSV.getField<number>(pointinfo, record, 'pnt1_y');
-                const pnt1_z = BCSV.getField<number>(pointinfo, record, 'pnt1_z');
-                const pnt2_x = BCSV.getField<number>(pointinfo, record, 'pnt2_x');
-                const pnt2_y = BCSV.getField<number>(pointinfo, record, 'pnt2_y');
-                const pnt2_z = BCSV.getField<number>(pointinfo, record, 'pnt2_z');
+                const pnt0_x = assertExists(BCSV.getField<number>(pointinfo, record, 'pnt0_x'));
+                const pnt0_y = assertExists(BCSV.getField<number>(pointinfo, record, 'pnt0_y'));
+                const pnt0_z = assertExists(BCSV.getField<number>(pointinfo, record, 'pnt0_z'));
+                const pnt1_x = assertExists(BCSV.getField<number>(pointinfo, record, 'pnt1_x'));
+                const pnt1_y = assertExists(BCSV.getField<number>(pointinfo, record, 'pnt1_y'));
+                const pnt1_z = assertExists(BCSV.getField<number>(pointinfo, record, 'pnt1_z'));
+                const pnt2_x = assertExists(BCSV.getField<number>(pointinfo, record, 'pnt2_x'));
+                const pnt2_y = assertExists(BCSV.getField<number>(pointinfo, record, 'pnt2_y'));
+                const pnt2_z = assertExists(BCSV.getField<number>(pointinfo, record, 'pnt2_z'));
                 const p0 = vec3.fromValues(pnt0_x, pnt0_y, pnt0_z);
                 const p1 = vec3.fromValues(pnt1_x, pnt1_y, pnt1_z);
                 const p2 = vec3.fromValues(pnt2_x, pnt2_y, pnt2_z);
@@ -2000,12 +1980,12 @@ class MessageDataHolder {
     private messageIds: string[];
 
     constructor(messageArc: RARC.RARC) {
-        const messageIds = createCsvParser(messageArc.findFileData(`MessageId.tbl`));
+        const messageIds = createCsvParser(messageArc.findFileData(`MessageId.tbl`)!);
         this.messageIds = messageIds.mapRecords((iter) => {
-            return iter.getValueString('MessageId');
+            return assertExists(iter.getValueString('MessageId'));
         });
 
-        this.mesg = new BMG(messageArc.findFileData(`Message.bmg`));
+        this.mesg = new BMG(messageArc.findFileData(`Message.bmg`)!);
     }
 
     public getStringById(id: string): string | null {
@@ -2029,11 +2009,12 @@ export abstract class SMGSceneDescBase implements Viewer.SceneDesc {
     public abstract requestZoneArchives(modelCache: ModelCache, zoneName: string): void;
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+        const modelCache = await context.dataShare.ensureObject<ModelCache>(`${this.pathBase}/ModelCache`, async () => {
+            return new ModelCache(device, this.pathBase, context.dataFetcher);
+        });
+
         const renderHelper = new GXRenderHelperGfx(device);
         context.destroyablePool.push(renderHelper);
-
-        const gfxRenderCache = renderHelper.renderInstManager.gfxRenderCache;
-        const modelCache = new ModelCache(device, gfxRenderCache, this.pathBase, context.dataFetcher);
 
         const galaxyName = this.galaxyName;
 
@@ -2054,7 +2035,7 @@ export abstract class SMGSceneDescBase implements Viewer.SceneDesc {
 
         await modelCache.waitForLoad();
 
-        const scenarioData = new ScenarioData(modelCache.getArchive(scenarioDataFilename));
+        const scenarioData = new ScenarioData(modelCache.getArchive(scenarioDataFilename)!);
 
         for (let i = 0; i < scenarioData.zoneNames.length; i++) {
             const zoneName = scenarioData.zoneNames[i];
@@ -2065,21 +2046,18 @@ export abstract class SMGSceneDescBase implements Viewer.SceneDesc {
 
         await modelCache.waitForLoad();
 
-        sceneObjHolder.planetMapCreator = new PlanetMapCreator(modelCache.getObjectData(`PlanetMapDataTable`));
-        sceneObjHolder.npcDirector = new NPCDirector(modelCache.getObjectData(`NPCData`));
+        sceneObjHolder.planetMapCreator = new PlanetMapCreator(modelCache.getObjectData(`PlanetMapDataTable`)!);
+        sceneObjHolder.npcDirector = new NPCDirector(modelCache.getObjectData(`NPCData`)!);
         sceneObjHolder.lightDataHolder = new LightDataHolder(this.getLightData(modelCache));
         sceneObjHolder.stageDataHolder = new StageDataHolder(this, modelCache, sceneObjHolder.scenarioData, sceneObjHolder.scenarioData.getMasterZoneFilename(), 0);
 
         if (modelCache.isArchiveExist(`ParticleData/Effect.arc`))
-            sceneObjHolder.effectSystem = new EffectSystem(device, modelCache.getArchive(`ParticleData/Effect.arc`));
+            sceneObjHolder.effectSystem = new EffectSystem(device, modelCache.getArchive(`ParticleData/Effect.arc`)!);
 
         if (modelCache.isArchiveExist(`UsEnglish/MessageData/Message.arc`))
-            sceneObjHolder.messageDataHolder = new MessageDataHolder(modelCache.getArchive(`UsEnglish/MessageData/Message.arc`));
-        else
-            sceneObjHolder.messageDataHolder = null;
+            sceneObjHolder.messageDataHolder = new MessageDataHolder(modelCache.getArchive(`UsEnglish/MessageData/Message.arc`)!);
 
         const spawner = new SMGSpawner(galaxyName, this.pathBase, sceneObjHolder);
-        context.destroyablePool.push(spawner);
         spawner.requestArchives();
 
         await modelCache.waitForLoad();

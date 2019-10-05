@@ -23,6 +23,47 @@ import { GfxRenderInstManager } from '../gfx/render/GfxRenderer';
 import { GfxRenderDynamicUniformBuffer } from '../gfx/render/GfxRenderDynamicUniformBuffer';
 import { SceneContext } from '../SceneBase';
 
+const pathBase = `mkds`;
+class ModelCache {
+    private filePromiseCache = new Map<string, Promise<ArrayBufferSlice>>();
+    private fileDataCache = new Map<string, ArrayBufferSlice>();
+
+    constructor(private dataFetcher: DataFetcher) {
+    }
+
+    public waitForLoad(): Promise<any> {
+        const p: Promise<any>[] = [... this.filePromiseCache.values()];
+        return Promise.all(p);
+    }
+
+    private mountNARC(narc: NARC.NitroFS): void {
+        for (let i = 0; i < narc.files.length; i++) {
+            const file = narc.files[i];
+            this.fileDataCache.set(assertExists(file.path), file.buffer);
+        }
+    }
+
+    private fetchFile(path: string): Promise<ArrayBufferSlice> {
+        assert(!this.filePromiseCache.has(path));
+        const p = this.dataFetcher.fetchData(`${pathBase}/${path}`);
+        this.filePromiseCache.set(path, p);
+        return p;
+    }
+
+    public async fetchNARC(path: string) {
+        const fileData = await this.fetchFile(path);
+        const narc = NARC.parse(CX.decompress(fileData));
+        this.mountNARC(narc);
+    }
+
+    public getFileData(path: string): ArrayBufferSlice | null {
+        if (this.fileDataCache.has(path))
+            return this.fileDataCache.get(path)!;
+        else
+            return null;
+    }
+}
+
 export class MKDSRenderer implements Viewer.SceneGfx {
     public renderTarget = new BasicRenderTarget();
     public renderInstManager = new GfxRenderInstManager();
@@ -158,17 +199,7 @@ const scratchMatrix = mat4.create();
 class MarioKartDSSceneDesc implements Viewer.SceneDesc {
     constructor(public id: string, public name: string) {}
 
-    private fetchCARC(path: string, dataFetcher: DataFetcher): Promise<NARC.NitroFS> {
-        return dataFetcher.fetchData(path).then((buffer: ArrayBufferSlice) => {
-            return NARC.parse(CX.decompress(buffer));
-        });
-    }
-
-    private spawnObjectFromNKM(device: GfxDevice, courseNARC: NARC.NitroFS, renderer: MKDSRenderer, obji: OBJI): void {
-        function getFileBuffer(filePath: string): ArrayBufferSlice {
-            return assertExists(courseNARC.files.find((file) => file.path === filePath)).buffer;
-        }
-
+    private spawnObjectFromNKM(device: GfxDevice, modelCache: ModelCache, renderer: MKDSRenderer, obji: OBJI): void {
         function setModelMtx(mdl0Renderer: MDL0Renderer, bby: boolean = false): void {
             const rotationY = bby ? 0 : obji.rotationY;
             computeModelMatrixSRT(scratchMatrix, obji.scaleX, obji.scaleY, obji.scaleZ, obji.rotationX, rotationY, obji.rotationZ, obji.translationX, obji.translationY, obji.translationZ);
@@ -178,21 +209,22 @@ class MarioKartDSSceneDesc implements Viewer.SceneDesc {
         }
 
         function spawnModel(filePath: string): MDL0Renderer {
-            const bmd = NSBMD.parse(getFileBuffer(filePath));
+            const buffer = assertExists(modelCache.getFileData(filePath));
+            const bmd = NSBMD.parse(buffer);
             assert(bmd.models.length === 1);
-            const mdl0Renderer = new MDL0Renderer(device, bmd.models[0], bmd.tex0);
+            const mdl0Renderer = new MDL0Renderer(device, bmd.models[0], assertExists(bmd.tex0));
             setModelMtx(mdl0Renderer);
             renderer.objectRenderers.push(mdl0Renderer);
             return mdl0Renderer;
         }
 
         function parseBTA(filePath: string): NSBTA.SRT0 {
-            const bta = NSBTA.parse(getFileBuffer(filePath));
+            const bta = NSBTA.parse(assertExists(modelCache.getFileData(filePath)));
             return bta.srt0;
         }
 
         function parseBTP(filePath: string): NSBTP.PAT0 {
-            const btp = NSBTP.parse(getFileBuffer(filePath));
+            const btp = NSBTP.parse(assertExists(modelCache.getFileData(filePath)));
             assert(btp.pat0.length === 1);
             return btp.pat0[0];
         }
@@ -222,7 +254,8 @@ class MarioKartDSSceneDesc implements Viewer.SceneDesc {
             const b = spawnModel(`/MapObj/woodbox1.nsbmd`);
             b.modelMatrix[13] += 32;
         } else if (obji.objectId === 0x00CA) { // koopa_block
-            spawnModel(`/MapObj/koopa_block.nsbmd`);
+            if (modelCache.getFileData(`/MapObj/koopa_block.nsbmd`) !== null)
+                spawnModel(`/MapObj/koopa_block.nsbmd`);
         } else if (obji.objectId === 0x00CB) { // gear
             spawnModel(`/MapObj/gear_black.nsbmd`);
         } else if (obji.objectId === 0x00CC) { // bridge
@@ -299,87 +332,97 @@ class MarioKartDSSceneDesc implements Viewer.SceneDesc {
             const b = spawnModel(`/MapObj/om6Tree1.nsbmd`);
             setModelMtx(b, true);
         } else if (obji.objectId === 0x0154) { // RainStar
-            spawnModel(`/MapObj/RainStar.nsbmd`).bindSRT0(parseBTA(`/MapObj/RainStar.nsbta`));
+            const b = spawnModel(`/MapObj/RainStar.nsbmd`);
+            b.bindSRT0(parseBTA(`/MapObj/RainStar.nsbta`));
         } else if (obji.objectId === 0x0156) { // Of6Tree1
             spawnModel(`/MapObj/Of6Tree1.nsbmd`);
         } else if (obji.objectId === 0x0157) { // TownMonte
             const whichFrame = obji.objectArg0;
-            spawnModel(`/MapObj/TownMonte.nsbmd`).bindPAT0(device, parseBTP(`/MapObj/TownMonte.nsbtp`), animFrame(whichFrame));
+            const b = spawnModel(`/MapObj/TownMonte.nsbmd`);
+            b.bindPAT0(device, parseBTP(`/MapObj/TownMonte.nsbtp`), animFrame(whichFrame));
         } else if (obji.objectId === 0x01A6) { // ob_pakkun_sf
             const b = spawnModel(`/MapObj/ob_pakkun_sf.nsbmd`);
             b.modelMatrix[13] += 30;
         } else if (obji.objectId === 0x01A8) { // bound
-            spawnModel(`/MapObj/bound.nsbmd`).bindPAT0(device, parseBTP(`/MapObj/bound.nsbtp`));
+            const b = spawnModel(`/MapObj/bound.nsbmd`)!;
+            b.bindPAT0(device, parseBTP(`/MapObj/bound.nsbtp`));
         } else if (obji.objectId === 0x01A9) { // flipper
+            if (modelCache.getFileData(`/MapObj/flipper.nsbmd`) === null)
+                return;
             const b = spawnModel(`/MapObj/flipper.nsbmd`);
-            b.bindPAT0(device, parseBTP(`/MapObj/flipper.nsbtp`));
-            b.bindSRT0(parseBTA(`/MapObj/flipper.nsbta`));
+            if (modelCache.getFileData(`/MapObj/flipper.nsbtp`) !== null)
+                b.bindPAT0(device, parseBTP(`/MapObj/flipper.nsbtp`));
+            if (modelCache.getFileData(`/MapObj/flipper.nsbta`) !== null)
+                b.bindSRT0(parseBTA(`/MapObj/flipper.nsbta`));
             if (obji.objectArg0 === 0x01)
                 mat4.rotateY(b.modelMatrix, b.modelMatrix, Math.PI * 9/8);
         } else if (obji.objectId === 0x01B4) { // cream
             spawnModel(`/MapObj/cream.nsbmd`);
         } else if (obji.objectId === 0x01B5) { // berry
             spawnModel(`/MapObj/berry.nsbmd`);
+            //pat: note to self, look more into this section
+        } else if (obji.objectId === 0x0065) { // itembox
+            const b = spawnModel(`/itembox.nsbmd`);
+            mat4.translate(b.modelMatrix, b.modelMatrix, [0, 1, 0]);             
+            //b.bindSRT0(parseBTA(`/itembox.nsbta`));                       
         }
     }
 
-    public createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+    public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
         const dataFetcher = context.dataFetcher;
-        return Promise.all([
-            this.fetchCARC(`mkds/Course/${this.id}.carc`, dataFetcher),
-            this.fetchCARC(`mkds/Course/${this.id}Tex.carc`, dataFetcher),
-        ]).then(([courseNARC, textureNARC]) => {
-            const courseBmdFile = courseNARC.files.find((file) => file.path === '/course_model.nsbmd');
-            const courseBmd = NSBMD.parse(courseBmdFile.buffer);
-            const courseBtxFile = textureNARC.files.find((file) => file.path === '/course_model.nsbtx');
-            const courseBtx = courseBtxFile !== undefined ? NSBTX.parse(courseBtxFile.buffer) : null;
-            assert(courseBmd.models.length === 1);
-            const courseRenderer = new MDL0Renderer(device, courseBmd.models[0], courseBtx !== null ? courseBtx.tex0 : courseBmd.tex0);
 
-            let skyboxRenderer: MDL0Renderer | null = null;
-            const skyboxBmdFile = courseNARC.files.find((file) => file.path === '/course_model_V.nsbmd');
-            if (skyboxBmdFile !== undefined) {
-                const skyboxBmd = skyboxBmdFile !== undefined ? NSBMD.parse(skyboxBmdFile.buffer) : null;
-                const skyboxBtxFile = textureNARC.files.find((file) => file.path === '/course_model_V.nsbtx');
-                const skyboxBtx = skyboxBtxFile !== undefined ? NSBTX.parse(skyboxBtxFile.buffer) : null;
-                assert(skyboxBmd.models.length === 1);
-                skyboxRenderer = new MDL0Renderer(device, skyboxBmd.models[0], skyboxBtx !== null ? skyboxBtx.tex0 : skyboxBmd.tex0);
-                skyboxRenderer.modelMatrix[13] -= 1500;
-                skyboxRenderer.isSkybox = true;
-            }
+        const modelCache = new ModelCache(dataFetcher);
+        modelCache.fetchNARC(`Main/MapObj.carc`);
+        modelCache.fetchNARC(`Course/${this.id}.carc`);
+        modelCache.fetchNARC(`Course/${this.id}Tex.carc`);
+        await modelCache.waitForLoad();
 
-            const renderer = new MKDSRenderer(device, courseRenderer, skyboxRenderer);
+        const courseBmd = NSBMD.parse(assertExists(modelCache.getFileData(`/course_model.nsbmd`)));
+        assert(courseBmd.models.length === 1);
 
-            const courseBtaFile = courseNARC.files.find((file) => file.path === '/course_model.nsbta');
-            const courseBta = courseBtaFile !== undefined ? NSBTA.parse(courseBtaFile.buffer) : null;
-            if (courseBta !== null)
-                courseRenderer.bindSRT0(courseBta.srt0);
+        const courseBtxFile = modelCache.getFileData(`/course_model.nsbtx`);
+        const courseBtx = courseBtxFile !== null ? NSBTX.parse(courseBtxFile) : null;
+        const courseRenderer = new MDL0Renderer(device, courseBmd.models[0], courseBmd.tex0 !== null ? courseBmd.tex0 : assertExists(assertExists(courseBtx).tex0));
 
-            const courseBtpFile = courseNARC.files.find((file) => file.path === '/course_model.nsbtp');
-            const courseBtp = courseBtpFile !== undefined ? NSBTP.parse(courseBtpFile.buffer) : null;
-            if (courseBtp !== null) {
-                assert(courseBtp.pat0.length === 1);
-                courseRenderer.bindPAT0(device, courseBtp.pat0[0]);
-            }
+        let skyboxRenderer: MDL0Renderer | null = null;
+        const skyboxBmdFile = modelCache.getFileData(`/course_model_V.nsbmd`);
+        if (skyboxBmdFile !== null) {
+            const skyboxBmd = NSBMD.parse(skyboxBmdFile);
+            const skyboxBtxFile = modelCache.getFileData(`/course_model_V.nsbtx`);
+            const skyboxBtx = skyboxBtxFile !== null ? NSBTX.parse(skyboxBtxFile) : null;
+            assert(skyboxBmd.models.length === 1);
+            skyboxRenderer = new MDL0Renderer(device, skyboxBmd.models[0], skyboxBtx !== null ? skyboxBtx.tex0 : assertExists(skyboxBmd.tex0));
+            skyboxRenderer.modelMatrix[13] -= 1500;
+            skyboxRenderer.isSkybox = true;
+            
+            const skyboxBtaFile = modelCache.getFileData(`/course_model_V.nsbta`);
+            if (skyboxBtaFile !== null)
+                skyboxRenderer.bindSRT0(NSBTA.parse(skyboxBtaFile).srt0);
+        }
 
-            if (skyboxRenderer !== null) {
-                const skyboxBtaFile = courseNARC.files.find((file) => file.path === '/course_model_V.nsbta');
-                const skyboxBta = skyboxBtaFile !== undefined ? NSBTA.parse(skyboxBtaFile.buffer) : null;
-                if (skyboxBta !== null)
-                    skyboxRenderer.bindSRT0(skyboxBta.srt0);
-            }
+        const renderer = new MKDSRenderer(device, courseRenderer, skyboxRenderer);
 
-            // Now spawn objects
-            const courseNKM = courseNARC.files.find((file) => file.path === '/course_map.nkm');
-            if (courseNKM !== undefined) {
-                const nkm = parseNKM(courseNKM.buffer);
-                (renderer as any).nkm = nkm;
-                for (let i = 0; i < nkm.obji.length; i++)
-                    this.spawnObjectFromNKM(device, courseNARC, renderer, nkm.obji[i]);
-            }
+        const courseBtaFile = modelCache.getFileData(`/course_model.nsbta`);
+        if (courseBtaFile !== null)
+            courseRenderer.bindSRT0(NSBTA.parse(courseBtaFile).srt0);
 
-            return renderer;
-        });
+        const courseBtpFile = modelCache.getFileData(`/course_model.nsbtp`);
+        if (courseBtpFile !== null) {
+            const courseBtp = NSBTP.parse(courseBtpFile);
+            assert(courseBtp.pat0.length === 1);
+            courseRenderer.bindPAT0(device, courseBtp.pat0[0]);
+        }
+
+        // Now spawn objects
+        const courseNKM = modelCache.getFileData(`/course_map.nkm`);
+        if (courseNKM !== null) {
+            const nkm = parseNKM(courseNKM);
+            (renderer as any).nkm = nkm;
+            for (let i = 0; i < nkm.obji.length; i++)
+                this.spawnObjectFromNKM(device, modelCache, renderer, nkm.obji[i]);
+        }
+
+        return renderer;
     }
 }
 
@@ -402,9 +445,9 @@ const sceneDescs = [
     new MarioKartDSSceneDesc("mario_course", "Mario Circuit"),
     new MarioKartDSSceneDesc("airship_course", "Airship Fortress"),
     "Special Cup",
-    new MarioKartDSSceneDesc("stadium_course", "Wario's Stadium"),
+    new MarioKartDSSceneDesc("stadium_course", "Wario Stadium"),
     new MarioKartDSSceneDesc("garden_course", "Peach Gardens"),
-    new MarioKartDSSceneDesc("koopa_course", "Bowser's Castle"),
+    new MarioKartDSSceneDesc("koopa_course", "Bowser Castle"),
     new MarioKartDSSceneDesc("rainbow_course", "Rainbow Road"),
     "Shell Cup",
     new MarioKartDSSceneDesc("old_mario_sfc", "SNES Mario Circuit 1"),
@@ -431,27 +474,55 @@ const sceneDescs = [
     new MarioKartDSSceneDesc("mini_stage2", "Twilight House"),
     new MarioKartDSSceneDesc("mini_stage3", "Palm Shore"),
     new MarioKartDSSceneDesc("mini_stage4", "Tart Top"),
-    new MarioKartDSSceneDesc("mini_block_64", "Block Fort"),
-    new MarioKartDSSceneDesc("mini_dokan_gc", "Pipe Plaza"),
+    new MarioKartDSSceneDesc("mini_block_64", "N64 Block Fort"),
+    new MarioKartDSSceneDesc("mini_dokan_gc", "GCN Pipe Plaza"),
     "Mission Stages",
-    new MarioKartDSSceneDesc("MR_stage1", "MR_stage1"),
-    new MarioKartDSSceneDesc("MR_stage2", "MR_stage2"),
-    new MarioKartDSSceneDesc("MR_stage3", "MR_stage3"),
-    new MarioKartDSSceneDesc("MR_stage4", "MR_stage4"),
-    "Unused Test Courses",
-    new MarioKartDSSceneDesc("dokan_course", "dokan_course"),
-    new MarioKartDSSceneDesc("wario_course", "wario_course"),
-
-    // These try to reference items that aren't in the archive, so we crash.
-    // TODO(jstpierre): Put these back and don't crash on the missing items.
-    // new MarioKartDSSceneDesc("donkey_course", "donkey_course"),
-    // new MarioKartDSSceneDesc("luigi_course", "luigi_course"),
-    // new MarioKartDSSceneDesc("test1_course", "test1_course"),
-
-    new MarioKartDSSceneDesc("test_circle", "test_circle"),
-    new MarioKartDSSceneDesc("mini_block_course", "mini_block_course"),
+    new MarioKartDSSceneDesc("MR_stage1", "Big Bully's Stage; Chief Chilly's Stage"),
+    new MarioKartDSSceneDesc("MR_stage2", "Eyerok's Stage; Big Bomb-omb's Stage"),
+    new MarioKartDSSceneDesc("MR_stage3", "King Boo's Stage"),
+    "Other",
+    new MarioKartDSSceneDesc("Award", "Figure-8 Circuit (Award)"),
+    new MarioKartDSSceneDesc("StaffRoll", "Staff Roll"),     
+    "Unused Courses",
+    new MarioKartDSSceneDesc("donkey_course", "donkey_course (Waluigi Pinball Draft)"),
+    new MarioKartDSSceneDesc("luigi_course", "luigi_course (Waluigi Pinball Draft)"),
+    new MarioKartDSSceneDesc("mini_block_course", "mini_block_course (GCN Block City)"),
+    new MarioKartDSSceneDesc("MR_stage4", "MR_stage4 (GCN Mushroom Bridge Boss)"),
+    new MarioKartDSSceneDesc("old_mario_gc", "old_mario_gc (GCN Mario Circuit)"),   
+    new MarioKartDSSceneDesc("wario_course", "wario_course (Wario Stadium Draft)"),     
+    new MarioKartDSSceneDesc("dokan_course", "dokan_course"),    
     new MarioKartDSSceneDesc("nokonoko_course", "nokonoko_course"),
-    new MarioKartDSSceneDesc("old_mario_gc", "old_mario_gc"),
+    new MarioKartDSSceneDesc("test_circle", "test_circle"),
+    new MarioKartDSSceneDesc("test1_course", "test1_course"),
+    "Kiosk Demo Courses (Used)",
+    new MarioKartDSSceneDesc("kiosk_cross_course", "Figure-Eight Circuit"),    
+    new MarioKartDSSceneDesc("kiosk_bank_course", "Yoshi Falls"),
+    new MarioKartDSSceneDesc("kiosk_beach_course", "Cheep Cheep Beach"),
+    new MarioKartDSSceneDesc("kiosk_mansion_course", "Luigi's Mansion"),
+    new MarioKartDSSceneDesc("kiosk_old_mario_sfc", "SNES Mario Circuit 1"),
+    //new MarioKartDSSceneDesc("kiosk_old_luigi_gc", "GCN Luigi Circuit"),
+    "Kiosk Demo Courses (Unused)",
+    new MarioKartDSSceneDesc("kiosk_desert_course", "Desert Hills"),    
+    new MarioKartDSSceneDesc("kiosk_town_course", "Delfino Square"),
+    new MarioKartDSSceneDesc("kiosk_ridge_course", "Shroom Ridge"),
+    new MarioKartDSSceneDesc("kiosk_snow_course", "DK Pass"),
+    //new MarioKartDSSceneDesc("kiosk_clock_course", "Tick Tock Clock"), //missing object crashes
+    new MarioKartDSSceneDesc("kiosk_mario_course", "Mario Circuit"),
+    //new MarioKartDSSceneDesc("kiosk_airship_course", "Airship Fortress"),
+    new MarioKartDSSceneDesc("kiosk_stadium_course", "Wario Stadium"),
+    new MarioKartDSSceneDesc("kiosk_garden_course", "Peach Gardens"),
+    new MarioKartDSSceneDesc("kiosk_koopa_course", "Bowser Castle"),
+    //new MarioKartDSSceneDesc("kiosk_rainbow_course", "Rainbow Road"),
+    new MarioKartDSSceneDesc("kiosk_old_donut_sfc", "SNES Donut Plains 1"),
+    //new MarioKartDSSceneDesc("kiosk_old_frappe_64", "N64 Frappe Snowland"),
+    new MarioKartDSSceneDesc("kiosk_old_baby_gc", "GCN Baby Park"),
+    new MarioKartDSSceneDesc("kiosk_old_choco_64", "N64 Choco Mountain"),
+    new MarioKartDSSceneDesc("kiosk_old_choco_sfc", "SNES Choco Island 2"),
+    new MarioKartDSSceneDesc("kiosk_mini_stage1", "Nintendo DS"),
+    new MarioKartDSSceneDesc("kiosk_mini_block_64", "N64 Block Fort"),    
+    new MarioKartDSSceneDesc("kiosk_mini_dokan_gc", "GCN Pipe Plaza"),
+    new MarioKartDSSceneDesc("kiosk_donkey_course", "donkey_course (DK Pass Draft)"),
+    new MarioKartDSSceneDesc("kiosk_MR_stage1", "MR_stage1 (Boss Room Draft)"),
 ];
 
 export const sceneGroup: Viewer.SceneGroup = { id, name, sceneDescs };

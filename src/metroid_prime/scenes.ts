@@ -7,7 +7,7 @@ import { MREARenderer, RetroTextureHolder, CMDLRenderer, RetroPass, ModelCache }
 
 import * as Viewer from '../viewer';
 import * as UI from '../ui';
-import { assert } from '../util';
+import { assert, assertExists } from '../util';
 import ArrayBufferSlice from '../ArrayBufferSlice';
 import * as BYML from '../byml';
 import { GfxDevice, GfxHostAccessPass, GfxRenderPass } from '../gfx/platform/GfxPlatform';
@@ -171,7 +171,7 @@ class RetroSceneDesc implements Viewer.SceneDesc {
                     continue;
                 }
 
-                const mlvl: MLVL.MLVL = resourceSystem.loadAssetByID<MLVL.MLVL>(mlvlEntry.fileID, mlvlEntry.fourCC);
+                const mlvl: MLVL.MLVL = assertExists(resourceSystem.loadAssetByID<MLVL.MLVL>(mlvlEntry.fileID, mlvlEntry.fourCC));
 
                 const renderer = new RetroSceneRenderer(device, mlvl);
                 const cache = renderer.renderHelper.getCache();
@@ -188,7 +188,7 @@ class RetroSceneDesc implements Viewer.SceneDesc {
 
                 for (let i = 0; i < areas.length; i++) {
                     const mreaEntry = areas[i];
-                    const mrea: MREA.MREA = resourceSystem.loadAssetByID<MREA.MREA>(mreaEntry.areaMREAID, 'MREA');
+                    const mrea = resourceSystem.loadAssetByID<MREA.MREA>(mreaEntry.areaMREAID, 'MREA');
 
                     if (mrea !== null && mreaEntry.areaName.indexOf("worldarea") === -1) {
                         const areaRenderer = new MREARenderer(device, renderer.modelCache, cache, renderer.textureHolder, mreaEntry.areaName, mrea);
@@ -202,7 +202,7 @@ class RetroSceneDesc implements Viewer.SceneDesc {
                 return renderer;
             }
 
-            return null;
+            throw "whoops";
         });
     }
 }
@@ -220,7 +220,6 @@ const sceneDescsMP1: Viewer.SceneDesc[] = [
 ];
 
 export const sceneGroupMP1: Viewer.SceneGroup = { id: idMP1, name: nameMP1, sceneDescs: sceneDescsMP1 };
-
 
 const idMP2 = "mp2";
 const nameMP2 = "Metroid Prime 2: Echoes";

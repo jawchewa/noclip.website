@@ -1,7 +1,7 @@
 
 import * as Viewer from '../viewer';
 import { DeviceProgram } from "../Program";
-import { Texture, getFormatString, RSPOutput, Vertex, DrawCall, GeometryMode, OtherModeH_CycleType } from "./f3dex";
+import { Texture, getImageFormatString, RSPOutput, Vertex, DrawCall, GeometryMode, OtherModeH_CycleType, getTextFiltFromOtherModeH } from "./f3dex";
 import { GfxDevice, GfxTextureDimension, GfxFormat, GfxTexture, GfxSampler, GfxWrapMode, GfxTexFilterMode, GfxMipFilterMode, GfxBuffer, GfxBufferUsage, GfxInputLayout, GfxInputState, GfxVertexAttributeDescriptor, GfxVertexAttributeFrequency, GfxBindingLayoutDescriptor, GfxBlendMode, GfxBlendFactor, GfxCullMode, GfxMegaStateDescriptor, GfxProgram } from "../gfx/platform/GfxPlatform";
 import { makeStaticDataBuffer } from '../gfx/helpers/BufferHelpers';
 import { assert, nArray } from '../util';
@@ -11,6 +11,8 @@ import { computeViewMatrix, computeViewMatrixSkybox } from '../Camera';
 import { TextureMapping } from '../TextureHolder';
 import { interactiveVizSliderSelect } from '../DebugJunk';
 import { GfxRenderInstManager } from '../gfx/render/GfxRenderer';
+import { GfxRenderCache } from '../gfx/render/GfxRenderCache';
+import { TextFilt } from '../Common/N64/Image';
 
 class F3DEX_Program extends DeviceProgram {
     public static a_Position = 0;
@@ -82,7 +84,7 @@ void main() {
         const drawCall = this.drawCall;
         const cycletype: OtherModeH_CycleType = (drawCall.DP_OtherModeH >>> 20) & 0x03;
 
-        const textFilt = (this.drawCall.DP_OtherModeH >>> 12) & 0x03;
+        const textFilt = getTextFiltFromOtherModeH(drawCall.DP_OtherModeH);
         let texFiltStr: string;
         if (textFilt === TextFilt.G_TF_POINT)
             texFiltStr = 'Point';
@@ -90,6 +92,8 @@ void main() {
             texFiltStr = 'Average';
         else if (textFilt === TextFilt.G_TF_BILERP)
             texFiltStr = 'Bilerp';
+        else
+            throw "whoops";
 
         return `
 vec4 Texture2D_N64_Point(sampler2D t_Texture, vec2 t_TexCoord) {
@@ -145,13 +149,13 @@ export function textureToCanvas(texture: Texture): Viewer.Texture {
     canvas.height = texture.height;
     canvas.title = texture.name;
 
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d")!;
     const imgData = ctx.createImageData(canvas.width, canvas.height);
     imgData.data.set(texture.pixels);
     ctx.putImageData(imgData, 0, 0);
     const surfaces = [ canvas ];
     const extraInfo = new Map<string, string>();
-    extraInfo.set('Format', getFormatString(texture.tile.fmt, texture.tile.siz));
+    extraInfo.set('Format', getImageFormatString(texture.tile.fmt, texture.tile.siz));
     return { name: texture.name, surfaces, extraInfo };
 }
 
@@ -195,11 +199,11 @@ export class N64Data {
     public inputLayout: GfxInputLayout;
     public inputState: GfxInputState;
 
-    constructor(device: GfxDevice, public rspOutput: RSPOutput) {
+    constructor(device: GfxDevice, cache: GfxRenderCache, public rspOutput: RSPOutput) {
         for (let i = 0; i < this.rspOutput.textures.length; i++) {
             const tex = this.rspOutput.textures[i];
             this.textures.push(this.translateTexture(device, tex));
-            this.samplers.push(this.translateSampler(device, tex));
+            this.samplers.push(this.translateSampler(device, cache, tex));
         }
 
         const vertexBufferData = makeVertexBufferData(this.rspOutput.vertices);
@@ -236,8 +240,8 @@ export class N64Data {
         return gfxTexture;
     }
 
-    private translateSampler(device: GfxDevice, texture: Texture): GfxSampler {
-        return device.createSampler({
+    private translateSampler(device: GfxDevice, cache: GfxRenderCache, texture: Texture): GfxSampler {
+        return cache.createSampler(device, {
             wrapS: translateCM(texture.tile.cms),
             wrapT: translateCM(texture.tile.cmt),
             minFilter: GfxTexFilterMode.POINT,
@@ -250,8 +254,6 @@ export class N64Data {
     public destroy(device: GfxDevice): void {
         for (let i = 0; i < this.textures.length; i++)
             device.destroyTexture(this.textures[i]);
-        for (let i = 0; i < this.samplers.length; i++)
-            device.destroySampler(this.samplers[i]);
         device.destroyBuffer(this.indexBuffer);
         device.destroyBuffer(this.vertexBuffer);
         device.destroyInputLayout(this.inputLayout);
@@ -270,12 +272,6 @@ function translateCullMode(m: number): GfxCullMode {
         return GfxCullMode.BACK;
     else
         return GfxCullMode.NONE;
-}
-
-const enum TextFilt {
-    G_TF_POINT   = 0x00,
-    G_TF_AVERAGE = 0x03,
-    G_TF_BILERP  = 0x02,
 }
 
 const modelViewScratch = mat4.create();
@@ -398,11 +394,6 @@ class DrawCallInstance {
         this.computeTextureMatrix(texMatrixScratch, 1);
         offs += fillMatrix4x2(mappedF32, offs, texMatrixScratch);
     }
-
-    public destroy(device: GfxDevice): void {
-        if (this.gfxProgram !== null)
-            device.destroyProgram(this.gfxProgram);
-    }
 }
 
 export const enum BKPass {
@@ -474,10 +465,5 @@ export class N64Renderer {
 
         for (let i = 0; i < this.drawCallInstances.length; i++)
             this.drawCallInstances[i].prepareToRender(device, renderInstManager, viewerInput, this.isSkybox, this.modelMatrix);
-    }
-
-    public destroy(device: GfxDevice): void {
-        for (let i = 0; i < this.drawCallInstances.length; i++)
-            this.drawCallInstances[i].destroy(device);
     }
 }

@@ -19,8 +19,9 @@ import { GfxRenderDynamicUniformBuffer } from '../gfx/render/GfxRenderDynamicUni
 import { GfxRenderInstManager } from '../gfx/render/GfxRenderer';
 import { fillMatrix4x4 } from '../gfx/helpers/UniformBufferHelpers';
 import { SceneContext } from '../SceneBase';
-import { DataFetcher } from '../DataFetcher';
+import { DataFetcher, DataFetcherFlags } from '../DataFetcher';
 import { MathConstants, clamp } from '../MathHelpers';
+import { GfxRenderCache } from '../gfx/render/GfxRenderCache';
 
 // https://github.com/Arisotura/SM64DSe/blob/master/obj_list.txt
 enum ObjectId {
@@ -388,6 +389,7 @@ class ModelCache {
     private filePromiseCache = new Map<string, Promise<ArrayBufferSlice>>();
     private fileDataCache = new Map<string, ArrayBufferSlice>();
     private modelCache = new Map<string, BMDData>();
+    private gfxRenderCache = new GfxRenderCache(true);
 
     constructor(private dataFetcher: DataFetcher) {
     }
@@ -400,14 +402,17 @@ class ModelCache {
     public mountNARC(narc: NARC.NitroFS): void {
         for (let i = 0; i < narc.files.length; i++) {
             const file = narc.files[i];
-            this.fileDataCache.set(file.path, file.buffer);
+            this.fileDataCache.set(assertExists(file.path), file.buffer);
         }
     }
 
     private fetchFile(path: string): Promise<ArrayBufferSlice> {
         assert(!this.filePromiseCache.has(path));
         assert(path.startsWith('/data'));
-        const p = this.dataFetcher.fetchData(`${pathBase}${path}`);
+
+        const p = this.dataFetcher.fetchData(`${pathBase}${path}`, DataFetcherFlags.NONE, () => {
+            this.filePromiseCache.delete(path);
+        });
         this.filePromiseCache.set(path, p);
         return p;
     }
@@ -440,7 +445,7 @@ class ModelCache {
             const buffer = assertExists(this.fileDataCache.get(modelPath));
             const result = LZ77.maybeDecompress(buffer);
             const bmd = BMD.parse(result);
-            p = new BMDData(device, bmd);
+            p = new BMDData(device, this.gfxRenderCache, bmd);
             this.modelCache.set(modelPath, p);
         }
 
@@ -455,6 +460,7 @@ class ModelCache {
     public destroy(device: GfxDevice): void {
         for (const model of this.modelCache.values())
             model.destroy(device);
+        this.gfxRenderCache.destroy(device);
     }
 }
 
@@ -466,9 +472,9 @@ class SM64DSRenderer implements Viewer.SceneGfx {
     public objectRenderers: ObjectRenderer[] = [];
     public bmdRenderers: BMDModelInstance[] = [];
     public animationController = new AnimationController();
+    public renderInstManager = new GfxRenderInstManager();
 
     private uniformBuffer: GfxRenderDynamicUniformBuffer;
-    private renderInstManager = new GfxRenderInstManager();
     private currentScenarioIndex: number = -1;
 
     private scenarioSelect: UI.SingleSelect;
@@ -548,7 +554,7 @@ class SM64DSRenderer implements Viewer.SceneGfx {
         const scenarioNames: string[] = this.crg1Level.SetupNames.slice();
 
         if (scenarioNames.length > 0)
-        scenarioNames.push('All Scenarios');
+            scenarioNames.push('All Scenarios');
 
         this.scenarioSelect = new UI.SingleSelect();
         this.scenarioSelect.setStrings(scenarioNames);
@@ -598,7 +604,6 @@ class SM64DSRenderer implements Viewer.SceneGfx {
         this.renderInstManager.destroy(device);
         this.uniformBuffer.destroy(device);
         this.renderTarget.destroy(device);
-        this.modelCache.destroy(device);
     }
 }
 
@@ -727,6 +732,15 @@ class Sanbo implements ObjectRenderer {
         this.body1.prepareToRender(device, renderInstManager, viewerInput);
         this.body2.prepareToRender(device, renderInstManager, viewerInput);
         this.body3.prepareToRender(device, renderInstManager, viewerInput);
+    }
+}
+
+class DataHolder {
+    constructor(public crg1: Sm64DSCRG1, public modelCache: ModelCache) {
+    }
+
+    public destroy(device: GfxDevice): void {
+        this.modelCache.destroy(device);
     }
 }
 
@@ -952,10 +966,9 @@ export class SM64DSSceneDesc implements Viewer.SceneDesc {
             const b = await spawnObject(`/data/enemy/pakkun/pakkun_model.bmd`);
             await bindBCA(b, '/data/enemy/pakkun/pakkun_sleep_loop.bca');
         } else if (objectId === ObjectId.STAR_CAMERA) { 		//ID 060
-            return null; // Star Camera Path
+            return; // Star Camera Path
         } else if (objectId === ObjectId.STAR) { 				//ID 061
             const b = await spawnObject(`/data/normal_obj/star/obj_star.bmd`, 0.8, 0.08);
-            //return null; // Star Target
         } else if (objectId === ObjectId.SILVER_STAR) { 		//ID 062
             const b = await spawnObject(`/data/normal_obj/star/obj_star_silver.bmd`, 0.8, 0.08); // Silver Star
         } else if (objectId === ObjectId.STARBASE) { 			//ID 063
@@ -1631,33 +1644,38 @@ export class SM64DSSceneDesc implements Viewer.SceneDesc {
 
     private async _createBMDRendererForObject(device: GfxDevice, renderer: SM64DSRenderer, object: CRG1Object): Promise<void> {
         if (object.Type === 'Standard' || object.Type === 'Simple')
-        return this._createBMDRendererForStandardObject(device, renderer, object);
+            return this._createBMDRendererForStandardObject(device, renderer, object);
         else if (object.Type === 'Door')
-        return this._createBMDRendererForDoorObject(device, renderer, object);
+            return this._createBMDRendererForDoorObject(device, renderer, object);
     }
 
     public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
-        const dataFetcher = context.dataFetcher;
-        const [crg1Buffer, ... narcBuffers] = await Promise.all([
-            // Increment this every time the format of the CRG1 changes
-            dataFetcher.fetchData(`${pathBase}/sm64ds.crg1?cache_bust=0`),
-            dataFetcher.fetchData(`${pathBase}/ARCHIVE/ar1.narc`),
-            dataFetcher.fetchData(`${pathBase}/ARCHIVE/arc0.narc`),
-            dataFetcher.fetchData(`${pathBase}/ARCHIVE/vs1.narc`),
-            dataFetcher.fetchData(`${pathBase}/ARCHIVE/vs2.narc`),
-            dataFetcher.fetchData(`${pathBase}/ARCHIVE/vs3.narc`),
-            dataFetcher.fetchData(`${pathBase}/ARCHIVE/vs4.narc`),
-        ]);
+        const dataHolder = await context.dataShare.ensureObject<DataHolder>(`${pathBase}/DataHolder`, async () => {
+            const dataFetcher = context.dataFetcher;
+            const [crg1Buffer, ... narcBuffers] = await Promise.all([
+                // Increment this every time the format of the CRG1 changes
+                dataFetcher.fetchData(`${pathBase}/sm64ds.crg1?cache_bust=0`),
+                dataFetcher.fetchData(`${pathBase}/ARCHIVE/ar1.narc`),
+                dataFetcher.fetchData(`${pathBase}/ARCHIVE/arc0.narc`),
+                dataFetcher.fetchData(`${pathBase}/ARCHIVE/vs1.narc`),
+                dataFetcher.fetchData(`${pathBase}/ARCHIVE/vs2.narc`),
+                dataFetcher.fetchData(`${pathBase}/ARCHIVE/vs3.narc`),
+                dataFetcher.fetchData(`${pathBase}/ARCHIVE/vs4.narc`),
+            ]);
+    
+            const modelCache = new ModelCache(dataFetcher);
+            const crg1 = BYML.parse<Sm64DSCRG1>(crg1Buffer, BYML.FileType.CRG1);
 
-        const modelCache = new ModelCache(dataFetcher);
+            for (let i = 0; i < narcBuffers.length; i++)
+                modelCache.mountNARC(NARC.parse(narcBuffers[i]));
 
-        for (let i = 0; i < narcBuffers.length; i++)
-        modelCache.mountNARC(NARC.parse(narcBuffers[i]));
+            const dataHolder = new DataHolder(crg1, modelCache);
+            return dataHolder;
+        });
 
-        const crg1 = BYML.parse<Sm64DSCRG1>(crg1Buffer, BYML.FileType.CRG1);
-        const level = crg1.Levels[this.levelId];
+        const level = dataHolder.crg1.Levels[this.levelId];
 
-        const renderer = new SM64DSRenderer(device, modelCache, level);
+        const renderer = new SM64DSRenderer(device, dataHolder.modelCache, level);
         context.destroyablePool.push(renderer);
 
         this._createBMDRenderer(device, renderer, level.MapBmdFile, GLOBAL_SCALE, level, false);
@@ -1670,9 +1688,9 @@ export class SM64DSSceneDesc implements Viewer.SceneDesc {
         const promises: Promise<void>[] = [];
 
         for (let i = 0; i < level.Objects.length; i++)
-        promises.push(this._createBMDRendererForObject(device, renderer, level.Objects[i]));
+            promises.push(this._createBMDRendererForObject(device, renderer, level.Objects[i]));
 
-        await modelCache.waitForLoad();
+        await dataHolder.modelCache.waitForLoad();
         await Promise.all(promises);
 
         return renderer;
@@ -1692,58 +1710,58 @@ const sceneDescs = [
     "First Floor Courses",
     new SM64DSSceneDesc(6, 'Bob-omb Battlefield'),
     new SM64DSSceneDesc(7, "Whomp's Fortress"),
-    new SM64DSSceneDesc(8, 'Jolly Roger Bay'),
-    new SM64DSSceneDesc(9, 'Jolly Roger Bay (Inside the Ship)'),
-    new SM64DSSceneDesc(10, 'Cool, Cool Mountain'),
-    new SM64DSSceneDesc(11, 'Cool, Cool Mountain (Inside the Slide)'),
+    new SM64DSSceneDesc(8, "Jolly Roger Bay"),
+    new SM64DSSceneDesc(9, "Jolly Roger Bay (Inside the Ship)"),
+    new SM64DSSceneDesc(10, "Cool, Cool Mountain"),
+    new SM64DSSceneDesc(11, "Cool, Cool Mountain (Inside the Slide)"),
     new SM64DSSceneDesc(12, "Big Boo's Haunt"),
     "Basement Courses",
-    new SM64DSSceneDesc(13, 'Hazy Maze Cave'),
-    new SM64DSSceneDesc(14, 'Lethal Lava Land'),
-    new SM64DSSceneDesc(15, 'Lethal Lava Land (Inside the Volcano)'),
-    new SM64DSSceneDesc(16, 'Shifting Sand Land'),
-    new SM64DSSceneDesc(17, 'Shifting Sand Land (Inside the Pyramid)'),
-    new SM64DSSceneDesc(18, 'Dire, Dire Docks'),
+    new SM64DSSceneDesc(13, "Hazy Maze Cave"),
+    new SM64DSSceneDesc(14, "Lethal Lava Land"),
+    new SM64DSSceneDesc(15, "Lethal Lava Land (Inside the Volcano)"),
+    new SM64DSSceneDesc(16, "Shifting Sand Land"),
+    new SM64DSSceneDesc(17, "Shifting Sand Land (Inside the Pyramid)"),
+    new SM64DSSceneDesc(18, "Dire, Dire Docks"),
     "Second Floor Courses",
     new SM64DSSceneDesc(19, "Snowman's Land"),
     new SM64DSSceneDesc(20, "Snowman's Land (Inside the Igloo)"),
-    new SM64DSSceneDesc(21, 'Wet-Dry World'),
-    new SM64DSSceneDesc(22, 'Tall Tall Mountain'),
-    new SM64DSSceneDesc(23, 'Tall Tall Mountain (Inside the Slide)'),
-    new SM64DSSceneDesc(25, 'Tiny-Huge Island (Tiny)'),
-    new SM64DSSceneDesc(24, 'Tiny-Huge Island (Huge)'),
+    new SM64DSSceneDesc(21, "Wet-Dry World"),
+    new SM64DSSceneDesc(22, "Tall Tall Mountain"),
+    new SM64DSSceneDesc(23, "Tall Tall Mountain (Inside the Slide)"),
+    new SM64DSSceneDesc(25, "Tiny-Huge Island (Tiny)"),
+    new SM64DSSceneDesc(24, "Tiny-Huge Island (Huge)"),
     new SM64DSSceneDesc(26, "Tiny-Huge Island (Inside Wiggler's Cavern)"),
     "Third Floor Courses",
-    new SM64DSSceneDesc(27, 'Tick Tock Clock'),
-    new SM64DSSceneDesc(28, 'Rainbow Ride'),
+    new SM64DSSceneDesc(27, "Tick Tock Clock"),
+    new SM64DSSceneDesc(28, "Rainbow Ride"),
     "Bowser Levels",
-    new SM64DSSceneDesc(35, 'Bowser in the Dark World'),
-    new SM64DSSceneDesc(36, 'Bowser in the Dark World (Boss Arena)'),
-    new SM64DSSceneDesc(37, 'Bowser in the Fire Sea'),
-    new SM64DSSceneDesc(38, 'Bowser in the Fire Sea (Boss Arena)'),
-    new SM64DSSceneDesc(39, 'Bowser in the Sky'),
-    new SM64DSSceneDesc(40, 'Bowser in the Sky (Boss Arena)'),
+    new SM64DSSceneDesc(35, "Bowser in the Dark World"),
+    new SM64DSSceneDesc(36, "Bowser in the Dark World (Boss Arena)"),
+    new SM64DSSceneDesc(37, "Bowser in the Fire Sea"),
+    new SM64DSSceneDesc(38, "Bowser in the Fire Sea (Boss Arena)"),
+    new SM64DSSceneDesc(39, "Bowser in the Sky"),
+    new SM64DSSceneDesc(40, "Bowser in the Sky (Boss Arena)"),
     "Secret Levels",
-    new SM64DSSceneDesc(29, 'The Princess\'s Secret Slide'),
-    new SM64DSSceneDesc(30, 'The Secret Aquarium'),
-    new SM64DSSceneDesc(34, 'Wing Mario over the Rainbow'),
-    new SM64DSSceneDesc(31, 'Tower of the Wing Cap'),
-    new SM64DSSceneDesc(32, 'Vanish Cap Under the Moat'),
-    new SM64DSSceneDesc(33, 'Cavern of the Metal Cap'),
+    new SM64DSSceneDesc(29, "The Princess's Secret Slide"),
+    new SM64DSSceneDesc(30, "The Secret Aquarium"),
+    new SM64DSSceneDesc(34, "Wing Mario over the Rainbow"),
+    new SM64DSSceneDesc(31, "Tower of the Wing Cap"),
+    new SM64DSSceneDesc(32, "Vanish Cap Under the Moat"),
+    new SM64DSSceneDesc(33, "Cavern of the Metal Cap"),
     "Extra DS Levels",
-    new SM64DSSceneDesc(46, 'Big Boo Battle'),
-    new SM64DSSceneDesc(47, 'Big Boo Battle (Boss Arena)'),
-    new SM64DSSceneDesc(44, 'Goomboss Battle'),
-    new SM64DSSceneDesc(45, 'Goomboss Battle (Boss Arena)'),
-    new SM64DSSceneDesc(48, 'Chief Chilly Challenge'),
-    new SM64DSSceneDesc(49, 'Chief Chilly Challenge (Boss Arena)'),
+    new SM64DSSceneDesc(46, "Big Boo Battle"),
+    new SM64DSSceneDesc(47, "Big Boo Battle (Boss Arena)"),
+    new SM64DSSceneDesc(44, "Goomboss Battle"),
+    new SM64DSSceneDesc(45, "Goomboss Battle (Boss Arena)"),
+    new SM64DSSceneDesc(48, "Chief Chilly Challenge"),
+    new SM64DSSceneDesc(49, "Chief Chilly Challenge (Boss Arena)"),
     "VS Maps",
-    new SM64DSSceneDesc(42, 'The Secret of Battle Fort'),
-    new SM64DSSceneDesc(43, 'Sunshine Isles'),
-    new SM64DSSceneDesc(51, 'Castle Gardens'),
+    new SM64DSSceneDesc(42, "The Secret of Battle Fort"),
+    new SM64DSSceneDesc(43, "Sunshine Isles"),
+    new SM64DSSceneDesc(51, "Castle Gardens"),
     "Unused Test Maps",
-    new SM64DSSceneDesc(0,  'Test Map A'),
-    new SM64DSSceneDesc(41, 'Test Map B'),
+    new SM64DSSceneDesc(0,  "Test Map A"),
+    new SM64DSSceneDesc(41, "Test Map B"),
 ];
 
 export const sceneGroup: Viewer.SceneGroup = { id, name, sceneDescs };

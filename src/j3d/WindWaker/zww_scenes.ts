@@ -11,8 +11,6 @@ import * as RARC from '../rarc';
 import * as Yaz0 from '../../compression/Yaz0';
 import * as UI from '../../ui';
 
-import * as GX_Material from '../../gx/gx_material';
-
 import * as DZB from './DZB';
 import * as JPA from '../JPA';
 import { BMD, BTK, BRK, BCK, BTI, LoopMode, BMT } from '../j3d';
@@ -23,7 +21,7 @@ import { colorToCSS, Color, colorNew } from '../../Color';
 import { ColorKind, fillSceneParamsDataOnTemplate } from '../../gx/gx_render';
 import { GXRenderHelperGfx } from '../../gx/gx_render';
 import { GfxDevice, GfxRenderPass, GfxHostAccessPass, GfxBufferUsage, GfxFormat, GfxVertexAttributeFrequency, GfxInputLayout, GfxInputState, GfxBuffer, GfxProgram, GfxBindingLayoutDescriptor, GfxCompareMode, GfxBufferFrequencyHint, GfxVertexAttributeDescriptor } from '../../gfx/platform/GfxPlatform';
-import { GfxRenderInstManager, GfxRendererLayer } from '../../gfx/render/GfxRenderer';
+import { GfxRenderInstManager, GfxRendererLayer, GfxRenderInst } from '../../gfx/render/GfxRenderer';
 import { BasicRenderTarget, standardFullClearRenderPassDescriptor, depthClearRenderPassDescriptor } from '../../gfx/helpers/RenderTargetHelpers';
 import { makeStaticDataBuffer } from '../../gfx/helpers/BufferHelpers';
 import { fillMatrix4x4, fillMatrix4x3, fillColor } from '../../gfx/helpers/UniformBufferHelpers';
@@ -422,7 +420,6 @@ class SeaPlane {
         device.destroyBuffer(this.indexBuffer);
         device.destroyInputLayout(this.inputLayout);
         device.destroyInputState(this.inputState);
-        device.destroyProgram(this.gfxProgram);
     }
 
     private createBuffers(device: GfxDevice) {
@@ -463,13 +460,13 @@ class SimpleEffectSystem {
         this.jpacData = new JPA.JPACData(this.jpac);
     }
 
-    private getResourceData(device: GfxDevice, userIndex: number): JPA.JPAResourceData | null {
+    private getResourceData(device: GfxDevice, cache: GfxRenderCache, userIndex: number): JPA.JPAResourceData | null {
         if (!this.resourceDatas.has(userIndex)) {
-            const resData = new JPA.JPAResourceData(device, this.jpacData, this.jpac.effects.find((resource) => resource.resourceId === userIndex));
+            const resData = new JPA.JPAResourceData(device, cache, this.jpacData, this.jpac.effects.find((resource) => resource.resourceId === userIndex)!);
             this.resourceDatas.set(userIndex, resData);
         }
 
-        return this.resourceDatas.get(userIndex);
+        return this.resourceDatas.get(userIndex)!;
     }
 
     public setDrawInfo(posCamMtx: mat4, prjMtx: mat4, texPrjMtx: mat4 | null): void {
@@ -487,32 +484,30 @@ class SimpleEffectSystem {
         this.emitterManager.draw(device, renderInstManager, this.drawInfo, drawGroupId);
     }
 
-    public createEmitter(device: GfxDevice, resourceId: number = 0x14) {
-        const emitter = this.emitterManager.createEmitter(this.getResourceData(device, resourceId));
+    public createEmitter(device: GfxDevice, cache: GfxRenderCache, resourceId: number = 0x14) {
+        const emitter = this.emitterManager.createEmitter(assertExists(this.getResourceData(device, cache, resourceId)));
         if (emitter !== null) {
             emitter.globalTranslation[0] = -275;
             emitter.globalTranslation[1] = 150;
             emitter.globalTranslation[2] = 2130;
-        }
 
-        const orig = vec3.clone(emitter.globalTranslation);
-        let t = 0;
-        function move() {
-            t += 0.1;
-            emitter.globalTranslation[0] = orig[0] + Math.sin(t) * 50;
-            emitter.globalTranslation[1] = orig[1] + Math.sin(t * 0.777) * 50;
-            emitter.globalTranslation[2] = orig[2] + Math.cos(t) * 50;
+            const orig = vec3.clone(emitter.globalTranslation);
+            let t = 0;
+            function move() {
+                t += 0.1;
+                emitter!.globalTranslation[0] = orig[0] + Math.sin(t) * 50;
+                emitter!.globalTranslation[1] = orig[1] + Math.sin(t * 0.777) * 50;
+                emitter!.globalTranslation[2] = orig[2] + Math.cos(t) * 50;
+                requestAnimationFrame(move);
+            }
             requestAnimationFrame(move);
         }
-        requestAnimationFrame(move);
 
         return emitter;
     }
 
     public destroy(device: GfxDevice): void {
         this.jpacData.destroy(device);
-        for (const [, resourceData] of this.resourceDatas.entries())
-            resourceData.destroy(device);
         this.emitterManager.destroy(device);
     }
 }
@@ -522,51 +517,21 @@ const enum WindWakerPass {
     SKYBOX = 0x02,
 }
 
-export class WindWakerRenderer implements Viewer.SceneGfx {
-    private renderTarget = new BasicRenderTarget();
-    public renderHelper: GXRenderHelperGfx;
-
-    private seaPlane: SeaPlane | null;
-    private vr_sky: BMDModelInstance;
-    private vr_uso_umi: BMDModelInstance;
-    private vr_kasumi_mae: BMDModelInstance;
-    private vr_back_cloud: BMDModelInstance;
-
-    public roomRenderers: WindWakerRoomRenderer[] = [];
-    public effectSystem: SimpleEffectSystem | null = null;
-
-    private currentTimeOfDay: number;
-    private timeOfDaySelector: UI.SingleSelect;
-
-    public onstatechanged!: () => void;
-
-    constructor(device: GfxDevice, public modelCache: ModelCache, public extraTextures: ZWWExtraTextures, wantsSeaPlane: boolean, private isFullSea: boolean, private stageRarc: RARC.RARC) {
-        this.renderHelper = new GXRenderHelperGfx(device);
-        const cache = this.renderHelper.renderInstManager.gfxRenderCache;
-
-        if (wantsSeaPlane)
-            this.seaPlane = new SeaPlane(device, cache);
-
-        this.vr_sky = createModelInstance(device, cache, this.extraTextures, stageRarc, `vr_sky`, true)!;
-        this.vr_uso_umi = createModelInstance(device, cache, this.extraTextures, stageRarc, `vr_uso_umi`, true)!;
-        this.vr_kasumi_mae = createModelInstance(device, cache, this.extraTextures, stageRarc, `vr_kasumi_mae`, true)!;
-        this.vr_back_cloud = createModelInstance(device, cache, this.extraTextures, stageRarc, `vr_back_cloud`, true)!;
+class SkyEnvironment {
+    private vr_sky: BMDModelInstance | null;
+    private vr_uso_umi: BMDModelInstance | null;
+    private vr_kasumi_mae: BMDModelInstance | null;
+    private vr_back_cloud: BMDModelInstance | null;
+    
+    constructor(device: GfxDevice, cache: GfxRenderCache, extraTextures: ZWWExtraTextures, stageRarc: RARC.RARC) {
+        this.vr_sky = createModelInstance(device, cache, extraTextures, stageRarc, `vr_sky`, true);
+        this.vr_uso_umi = createModelInstance(device, cache, extraTextures, stageRarc, `vr_uso_umi`, true);
+        this.vr_kasumi_mae = createModelInstance(device, cache, extraTextures, stageRarc, `vr_kasumi_mae`, true);
+        this.vr_back_cloud = createModelInstance(device, cache, extraTextures, stageRarc, `vr_back_cloud`, true);
     }
 
-    private setTimeOfDay(timeOfDay: number): void {
-        if (this.currentTimeOfDay === timeOfDay)
-            return;
-
-        this.currentTimeOfDay = timeOfDay;
-        this.timeOfDaySelector.selectItem(timeOfDay + 1);
-        this.onstatechanged();
-        const dzsFile = this.stageRarc.findFile(`dzs/stage.dzs`)!;
-
-        const colors = timeOfDay === -1 ? undefined : getColorsFromDZS(dzsFile.buffer, 0, timeOfDay);
-
+    public setColorOverrides(colors: Colors | undefined): void {
         if (colors !== undefined) {
-            if (this.seaPlane)
-                this.seaPlane.setColor(colors.ocean);
             if (this.vr_sky)
                 this.vr_sky.setColorOverride(ColorKind.K0, colors.vr_sky);
             if (this.vr_uso_umi)
@@ -584,6 +549,73 @@ export class WindWakerRenderer implements Viewer.SceneGfx {
                 this.vr_kasumi_mae.setColorOverride(ColorKind.C0, undefined);
             if (this.vr_back_cloud)
                 this.vr_back_cloud.setColorOverride(ColorKind.K0, undefined);
+        }
+    }
+
+    public prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput): void {
+        if (this.vr_sky)
+            this.vr_sky.prepareToRender(device, renderInstManager, viewerInput);
+        if (this.vr_kasumi_mae)
+            this.vr_kasumi_mae.prepareToRender(device, renderInstManager, viewerInput);
+        if (this.vr_uso_umi)
+            this.vr_uso_umi.prepareToRender(device, renderInstManager, viewerInput);
+        if (this.vr_back_cloud)
+            this.vr_back_cloud.prepareToRender(device, renderInstManager, viewerInput);
+    }
+
+    public destroy(device: GfxDevice): void {
+        if (this.vr_sky)
+            this.vr_sky.destroy(device);
+        if (this.vr_kasumi_mae)
+            this.vr_kasumi_mae.destroy(device);
+        if (this.vr_uso_umi)
+            this.vr_uso_umi.destroy(device);
+        if (this.vr_back_cloud)
+            this.vr_back_cloud.destroy(device);
+    }
+}
+
+export class WindWakerRenderer implements Viewer.SceneGfx {
+    private renderTarget = new BasicRenderTarget();
+    public renderHelper: GXRenderHelperGfx;
+
+    private seaPlane: SeaPlane | null;
+
+    public skyEnvironment: SkyEnvironment | null = null;
+    public roomRenderers: WindWakerRoomRenderer[] = [];
+    public effectSystem: SimpleEffectSystem | null = null;
+    public extraTextures: ZWWExtraTextures;
+
+    private currentTimeOfDay: number;
+    private timeOfDaySelector: UI.SingleSelect;
+
+    public onstatechanged!: () => void;
+
+    constructor(device: GfxDevice, public modelCache: ModelCache, wantsSeaPlane: boolean, private stageRarc: RARC.RARC) {
+        this.renderHelper = new GXRenderHelperGfx(device);
+        const cache = this.renderHelper.renderInstManager.gfxRenderCache;
+
+        if (wantsSeaPlane)
+            this.seaPlane = new SeaPlane(device, cache);
+    }
+
+    private setTimeOfDay(timeOfDay: number): void {
+        if (this.currentTimeOfDay === timeOfDay)
+            return;
+
+        this.currentTimeOfDay = timeOfDay;
+        this.timeOfDaySelector.selectItem(timeOfDay + 1);
+        this.onstatechanged();
+        const dzsFile = this.stageRarc.findFile(`dzs/stage.dzs`)!;
+
+        const colors = timeOfDay === -1 ? undefined : getColorsFromDZS(dzsFile.buffer, 0, timeOfDay);
+
+        if (this.skyEnvironment !== null)
+            this.skyEnvironment.setColorOverrides(colors);
+
+        if (colors !== undefined) {
+            if (this.seaPlane)
+                this.seaPlane.setColor(colors.ocean);
         }
 
         for (const roomRenderer of this.roomRenderers) {
@@ -657,14 +689,8 @@ export class WindWakerRenderer implements Viewer.SceneGfx {
         fillSceneParamsDataOnTemplate(template, viewerInput);
         if (this.seaPlane)
             this.seaPlane.prepareToRender(renderInstManager, viewerInput);
-        if (this.vr_sky)
-            this.vr_sky.prepareToRender(device, renderInstManager, viewerInput);
-        if (this.vr_kasumi_mae)
-            this.vr_kasumi_mae.prepareToRender(device, renderInstManager, viewerInput);
-        if (this.vr_uso_umi)
-            this.vr_uso_umi.prepareToRender(device, renderInstManager, viewerInput);
-        if (this.vr_back_cloud)
-            this.vr_back_cloud.prepareToRender(device, renderInstManager, viewerInput);
+        if (this.skyEnvironment !== null)
+            this.skyEnvironment.prepareToRender(device, renderInstManager, viewerInput);
         for (let i = 0; i < this.roomRenderers.length; i++)
             this.roomRenderers[i].prepareToRender(device, renderInstManager, viewerInput);
 
@@ -723,16 +749,10 @@ export class WindWakerRenderer implements Viewer.SceneGfx {
         this.renderHelper.destroy(device);
         this.extraTextures.destroy(device);
         this.renderTarget.destroy(device);
-        if (this.vr_sky)
-            this.vr_sky.destroy(device);
-        if (this.vr_kasumi_mae)
-            this.vr_kasumi_mae.destroy(device);
-        if (this.vr_uso_umi)
-            this.vr_uso_umi.destroy(device);
-        if (this.vr_back_cloud)
-            this.vr_back_cloud.destroy(device);
         if (this.seaPlane)
             this.seaPlane.destroy(device);
+        if (this.skyEnvironment !== null)
+            this.skyEnvironment.destroy(device);
         for (let i = 0; i < this.roomRenderers.length; i++)
             this.roomRenderers[i].destroy(device);
         if (this.effectSystem !== null)
@@ -807,14 +827,12 @@ class ModelCache {
         return p;
     }
 
-    public getModel(device: GfxDevice, cache: GfxRenderCache, rarc: RARC.RARC, modelPath: string, hacks?: (bmd: BMD) => void): BMDModel {
+    public getModel(device: GfxDevice, cache: GfxRenderCache, rarc: RARC.RARC, modelPath: string): BMDModel {
         let p = this.modelCache.get(modelPath);
 
         if (p === undefined) {
             const bmdData = rarc.findFileData(modelPath)!;
             const bmd = BMD.parse(bmdData);
-            if (hacks !== undefined)
-                hacks(bmd);
             p = new BMDModel(device, cache, bmd);
             this.modelCache.set(modelPath, p);
         }
@@ -863,9 +881,6 @@ class SceneDesc {
 
         return modelCache.waitForLoad().then(() => {
             const systemArc = modelCache.getArchive(`${pathBase}/Object/System.arc`);
-            const ZAtoon = new BTIData(device, BTI.parse(systemArc.findFileData(`dat/toon.bti`)!, `ZAtoon`).texture);
-            const ZBtoonEX = new BTIData(device, BTI.parse(systemArc.findFileData(`dat/toonex.bti`)!, `ZBtoonEX`).texture);
-            const extraTextures = new ZWWExtraTextures(ZAtoon, ZBtoonEX);
 
             const stageRarc = modelCache.getArchive(`${pathBase}/Stage/${this.stageDir}/Stage.arc`);
             const stageDzs = stageRarc.findFileData(`dzs/stage.dzs`)!;
@@ -874,9 +889,16 @@ class SceneDesc {
 
             const isSea = this.stageDir === 'sea';
             const isFullSea = isSea && this.rooms.length > 1;
-            const renderer = new WindWakerRenderer(device, modelCache, extraTextures, isSea, isFullSea, stageRarc);
+            const renderer = new WindWakerRenderer(device, modelCache, isSea, stageRarc);
             context.destroyablePool.push(renderer);
+
             const cache = renderer.renderHelper.renderInstManager.gfxRenderCache;
+            const ZAtoon = new BTIData(device, cache, BTI.parse(systemArc.findFileData(`dat/toon.bti`)!, `ZAtoon`).texture);
+            const ZBtoonEX = new BTIData(device, cache, BTI.parse(systemArc.findFileData(`dat/toonex.bti`)!, `ZBtoonEX`).texture);
+            renderer.extraTextures = new ZWWExtraTextures(ZAtoon, ZBtoonEX);
+
+            renderer.skyEnvironment = new SkyEnvironment(device, cache, renderer.extraTextures, stageRarc);
+
             for (let i = 0; i < this.rooms.length; i++) {
                 const roomIdx = Math.abs(this.rooms[i]);
                 const roomRarc = modelCache.getArchive(`${pathBase}/Stage/${this.stageDir}/Room${roomIdx}.arc`);

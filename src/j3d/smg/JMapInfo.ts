@@ -4,14 +4,37 @@ import { vec3 } from 'gl-matrix';
 import { MathConstants } from '../../MathHelpers';
 import ArrayBufferSlice from '../../ArrayBufferSlice';
 
-export function getJMapInfoArg0(infoIter: JMapInfoIter, fallback: number = null): number | null { return infoIter.getValueNumber('Obj_arg0', fallback); }
-export function getJMapInfoArg1(infoIter: JMapInfoIter, fallback: number = null): number | null { return infoIter.getValueNumber('Obj_arg1', fallback); }
-export function getJMapInfoArg2(infoIter: JMapInfoIter, fallback: number = null): number | null { return infoIter.getValueNumber('Obj_arg2', fallback); }
-export function getJMapInfoArg3(infoIter: JMapInfoIter, fallback: number = null): number | null { return infoIter.getValueNumber('Obj_arg3', fallback); }
-export function getJMapInfoArg4(infoIter: JMapInfoIter, fallback: number = null): number | null { return infoIter.getValueNumber('Obj_arg4', fallback); }
-export function getJMapInfoArg5(infoIter: JMapInfoIter, fallback: number = null): number | null { return infoIter.getValueNumber('Obj_arg5', fallback); }
-export function getJMapInfoArg6(infoIter: JMapInfoIter, fallback: number = null): number | null { return infoIter.getValueNumber('Obj_arg6', fallback); }
-export function getJMapInfoArg7(infoIter: JMapInfoIter, fallback: number = null): number | null { return infoIter.getValueNumber('Obj_arg7', fallback); }
+export function getJMapInfoArg0(infoIter: JMapInfoIter, fallback: number) : number;
+export function getJMapInfoArg0(infoIter: JMapInfoIter) : number | null;
+export function getJMapInfoArg0(infoIter: JMapInfoIter, fallback: number | null = null): number | null { return infoIter.getValueNumber('Obj_arg0', fallback!); }
+
+export function getJMapInfoArg1(infoIter: JMapInfoIter, fallback: number) : number;
+export function getJMapInfoArg1(infoIter: JMapInfoIter) : number | null;
+export function getJMapInfoArg1(infoIter: JMapInfoIter, fallback: number | null = null): number | null { return infoIter.getValueNumber('Obj_arg1', fallback!); }
+
+export function getJMapInfoArg2(infoIter: JMapInfoIter, fallback: number) : number;
+export function getJMapInfoArg2(infoIter: JMapInfoIter) : number | null;
+export function getJMapInfoArg2(infoIter: JMapInfoIter, fallback: number | null = null): number | null { return infoIter.getValueNumber('Obj_arg2', fallback!); }
+
+export function getJMapInfoArg3(infoIter: JMapInfoIter, fallback: number) : number;
+export function getJMapInfoArg3(infoIter: JMapInfoIter) : number | null;
+export function getJMapInfoArg3(infoIter: JMapInfoIter, fallback: number | null = null): number | null { return infoIter.getValueNumber('Obj_arg3', fallback!); }
+
+export function getJMapInfoArg4(infoIter: JMapInfoIter, fallback: number) : number;
+export function getJMapInfoArg4(infoIter: JMapInfoIter) : number | null;
+export function getJMapInfoArg4(infoIter: JMapInfoIter, fallback: number | null = null): number | null { return infoIter.getValueNumber('Obj_arg4', fallback!); }
+
+export function getJMapInfoArg5(infoIter: JMapInfoIter, fallback: number) : number;
+export function getJMapInfoArg5(infoIter: JMapInfoIter) : number | null;
+export function getJMapInfoArg5(infoIter: JMapInfoIter, fallback: number | null = null): number | null { return infoIter.getValueNumber('Obj_arg5', fallback!); }
+
+export function getJMapInfoArg6(infoIter: JMapInfoIter, fallback: number) : number;
+export function getJMapInfoArg6(infoIter: JMapInfoIter) : number | null;
+export function getJMapInfoArg6(infoIter: JMapInfoIter, fallback: number | null = null): number | null { return infoIter.getValueNumber('Obj_arg6', fallback!); }
+
+export function getJMapInfoArg7(infoIter: JMapInfoIter, fallback: number) : number;
+export function getJMapInfoArg7(infoIter: JMapInfoIter) : number | null;
+export function getJMapInfoArg7(infoIter: JMapInfoIter, fallback: number | null = null): number | null { return infoIter.getValueNumber('Obj_arg7', fallback!); }
 
 export function getJMapInfoTransLocal(dst: vec3, infoIter: JMapInfoIter): void {
     dst[0] = infoIter.getValueNumber('pos_x', 0);
@@ -29,6 +52,14 @@ export function getJMapInfoScale(dst: vec3, infoIter: JMapInfoIter): void {
     dst[0] = infoIter.getValueNumber('scale_x', 1);
     dst[1] = infoIter.getValueNumber('scale_y', 1);
     dst[2] = infoIter.getValueNumber('scale_z', 1);
+}
+
+export function getJMapInfoGroupId(infoIter: JMapInfoIter): number | null {
+    const groupId = infoIter.getValueNumber('GroupId');
+    if (groupId !== null)
+        return groupId;
+
+    return infoIter.getValueNumber('ClippingGroupId');
 }
 
 type Callback<T> = (jmp: JMapInfoIter, i: number) => T;
@@ -63,12 +94,16 @@ export class JMapInfoIter {
         return results;
     }
 
+    public getValueString(name: string): string | null;
+    public getValueString(name: string, fallback: string): string;
     public getValueString(name: string, fallback: string | null = null): string | null {
-        return BCSV.getField<string>(this.bcsv, this.record, name, fallback);
+        return BCSV.getField<string>(this.bcsv, this.record, name, fallback!);
     }
 
+    public getValueNumber(name: string): number | null;
+    public getValueNumber(name: string, fallback: number): number;
     public getValueNumber(name: string, fallback: number | null = null): number | null {
-        return BCSV.getField<number>(this.bcsv, this.record, name, fallback);
+        return BCSV.getField<number>(this.bcsv, this.record, name, fallback!);
     }
 }
 
