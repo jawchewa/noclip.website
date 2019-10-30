@@ -1,7 +1,7 @@
 
 import { vec3, mat4, vec2 } from "gl-matrix";
 import { SceneObjHolder, ZoneAndLayer, getObjectName } from "./smg_scenes";
-import { connectToScene } from "./Actors";
+import { connectToScene, loadBTIData } from "./Actors";
 import { GfxDevice, GfxBuffer, GfxBufferUsage, GfxBufferFrequencyHint, GfxInputLayout, GfxInputState, GfxFormat, GfxVertexAttributeDescriptor, GfxVertexAttributeFrequency, GfxCullMode } from "../../gfx/platform/GfxPlatform";
 import { ViewerRenderInput } from "../../viewer";
 import { JMapInfoIter } from "./JMapInfo";
@@ -9,7 +9,6 @@ import { computeModelMatrixSRT, clamp } from "../../MathHelpers";
 import AnimationController from "../../AnimationController";
 import { colorFromRGBA8 } from "../../Color";
 import { BTIData } from "../render";
-import { BTI } from "../j3d";
 import { assert } from "../../util";
 import { makeStaticDataBuffer } from "../../gfx/helpers/BufferHelpers";
 import { getVertexAttribLocation, GXMaterial, ColorChannelControl, TexGen, IndTexStage, TevStage } from "../../gx/gx_material";
@@ -20,6 +19,7 @@ import { Camera, texProjCamera } from "../../Camera";
 import { GfxRenderInstManager, makeSortKey, GfxRendererLayer } from "../../gfx/render/GfxRenderer";
 import { createFilterKeyForDrawType, DrawType } from "./NameObj";
 import { LiveActor } from "./LiveActor";
+import { GfxRenderCache } from "../../gfx/render/GfxRenderCache";
 
 function calcHeightStatic(wave1Time: number, wave2Time: number, x: number, z: number): number {
     const wave1 = 40 * Math.sin(wave1Time + 0.003 * z);
@@ -40,7 +40,7 @@ class OceanBowlPoint {
     }
 }
 
-function setTextureMatrixST(m: mat4, scale: number, v: vec2): void {
+function setTextureMatrixST(m: mat4, scale: number, v: vec2 | null): void {
     mat4.identity(m);
     m[0] = scale;
     m[5] = scale;
@@ -89,15 +89,16 @@ export class OceanBowl extends LiveActor {
         this.initDefaultPos(sceneObjHolder, infoIter);
 
         const device = sceneObjHolder.modelCache.device;
-        this.initPoints(device);
+        const cache = sceneObjHolder.modelCache.cache;
+        this.initPoints(device, cache);
 
-        const waterWaveArc = sceneObjHolder.modelCache.getObjectData('WaterWave');
-        this.water = new BTIData(device, BTI.parse(waterWaveArc.findFileData('Water.bti'), "Water").texture);
-        this.waterIndirect = new BTIData(device, BTI.parse(waterWaveArc.findFileData('WaterIndirect.bti'), "WaterIndirect").texture);
-        this.mask = new BTIData(device, BTI.parse(waterWaveArc.findFileData('Mask.bti'), "Mask").texture);
+        const waterWaveArc = sceneObjHolder.modelCache.getObjectData('WaterWave')!;
+        this.water = loadBTIData(sceneObjHolder, waterWaveArc, `Water.bti`);
+        this.waterIndirect = loadBTIData(sceneObjHolder, waterWaveArc, `WaterIndirect.bti`);
+        this.mask = loadBTIData(sceneObjHolder, waterWaveArc, `Mask.bti`);
     }
 
-    public initPoints(device: GfxDevice): void {
+    public initPoints(device: GfxDevice, cache: GfxRenderCache): void {
         const m = scratchMatrix;
 
         computeModelMatrixSRT(m,
@@ -198,7 +199,7 @@ export class OceanBowl extends LiveActor {
             { location: getVertexAttribLocation(GX.VertexAttribute.TEX3), format: GfxFormat.S16_RG_NORM, bufferIndex: 2, bufferByteOffset: 0, frequency: GfxVertexAttributeFrequency.PER_VERTEX },
         ];
 
-        this.inputLayout = device.createInputLayout({
+        this.inputLayout = cache.createInputLayout(device, {
             indexBufferFormat: GfxFormat.U16_R,
             vertexAttributeDescriptors,
         });
@@ -219,12 +220,12 @@ export class OceanBowl extends LiveActor {
             attenuationFunction: GX.AttenuationFunction.NONE,
         };
 
-        // GXSetTexCoordGen2(0,1,4,0x1e,0,0x7d);
-        // GXSetTexCoordGen2(1,1,5,0x21,0,0x7d);
-        // GXSetTexCoordGen2(2,1,6,0x24,0,0x7d);
-        // GXSetTexCoordGen2(3,0,0,0x27,0,0x7d);
-        // GXSetTexCoordGen2(4,0,7,0x2a,0,0x7d);
-        // GXSetTexCoordGen2(4,1,7,0x2a,1,0x7d);
+        // GXSetTexCoordGen2(GX_TEXCOORD0,GX_TG_MTX2x4,GX_TG_TEX0,GX_TEXMTX0,false,GX_PTIDENTITY);
+        // GXSetTexCoordGen2(GX_TEXCOORD1,GX_TG_MTX2x4,GX_TG_TEX1,GX_TEXMTX1,false,GX_PTIDENTITY);
+        // GXSetTexCoordGen2(GX_TEXCOORD2,GX_TG_MTX2x4,GX_TG_TEX2,GX_TEXMTX2,false,GX_PTIDENTITY);
+        // GXSetTexCoordGen2(GX_TEXCOORD3,GX_TG_MTX3x4,GX_TG_POS,GX_TEXMTX3,false,GX_PTIDENTITY);
+        // GXSetTexCoordGen2(GX_TEXCOORD4,GX_TG_MTX3x4,GX_TG_TEX3,GX_TEXMTX4,false,GX_PTIDENTITY);
+        // GXSetTexCoordGen2(GX_TEXCOORD4,GX_TG_MTX2x4,GX_TG_TEX3,GX_TEXMTX4,true,GX_PTIDENTITY);
         // Don't ask me why GXSetTexCoordGen2 is called twice for texgen 4.
         const texGens: TexGen[] = [];
         texGens.push({ index: 0, type: GX.TexGenType.MTX2x4, source: GX.TexGenSrc.TEX0, matrix: GX.TexGenMatrix.TEXMTX0, normalize: false, postMatrix: GX.PostTexGenMatrix.PTIDENTITY });
@@ -422,16 +423,14 @@ export class OceanBowl extends LiveActor {
 
         // Now create our draw instance.
         const renderInst = renderInstManager.pushRenderInst();
-        renderInst.filterKey = createFilterKeyForDrawType(DrawType.OCEAN_BOWL);
         renderInst.setInputLayoutAndState(this.inputLayout, this.inputState);
         renderInst.drawIndexes(this.indexCount);
 
         this.materialHelper.setOnRenderInst(device, cache, renderInst);
         renderInst.sortKey = makeSortKey(GfxRendererLayer.TRANSLUCENT, this.materialHelper.programKey);
-        renderInst.allocateUniformBuffer(ub_MaterialParams, this.materialHelper.materialParamsBufferSize);
 
-        let offs = renderInst.getUniformBufferOffset(ub_MaterialParams);
-        this.materialHelper.fillMaterialParamsData(renderInstManager, offs, materialParams);
+        const offs = renderInst.allocateUniformBuffer(ub_MaterialParams, this.materialHelper.materialParamsBufferSize);
+        this.materialHelper.fillMaterialParamsDataOnInst(renderInst, offs, materialParams);
 
         renderInst.setSamplerBindingsFromTextureMappings(materialParams.m_TextureMapping);
 

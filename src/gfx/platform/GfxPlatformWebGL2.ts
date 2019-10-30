@@ -494,7 +494,7 @@ function applyMegaState(gl: WebGL2RenderingContext, currentMegaState: GfxMegaSta
 
     if (currentMegaState.polygonOffset !== newMegaState.polygonOffset) {
         if (newMegaState.polygonOffset) {
-            gl.polygonOffset(-0.5, -0.5);
+            gl.polygonOffset(1, 1);
             gl.enable(gl.POLYGON_OFFSET_FILL);
         } else {
             gl.disable(gl.POLYGON_OFFSET_FILL);
@@ -503,24 +503,36 @@ function applyMegaState(gl: WebGL2RenderingContext, currentMegaState: GfxMegaSta
     }
 }
 
-const TRACK_RESOURCES = IS_DEVELOPMENT;
+// TODO(jstpierre): Turn this back on at some point in the future. The DataShare really breaks this concept...
+const TRACK_RESOURCES = false && IS_DEVELOPMENT;
 class ResourceCreationTracker {
+    public liveObjects = new Set<GfxResource>();
     public creationStacks = new Map<GfxResource, string>();
+    public deletionStacks = new Map<GfxResource, string>();
 
     public trackResourceCreated(o: GfxResource): void {
-        if (!TRACK_RESOURCES) return;
         this.creationStacks.set(o, new Error().stack!);
+        this.liveObjects.add(o);
     }
 
     public trackResourceDestroyed(o: GfxResource): void {
-        if (!TRACK_RESOURCES) return;
-        this.creationStacks.delete(o);
+        if (this.deletionStacks.has(o))
+            console.warn(`Object double freed:`, o, `\n\nCreation stack: `, this.creationStacks.get(o), `\n\nDeletion stack: `, this.deletionStacks.get(o), `\n\nThis stack: `, new Error().stack!);
+        this.deletionStacks.set(o, new Error().stack!);
+        this.liveObjects.delete(o);
     }
 
     public checkForLeaks(): void {
-        if (!TRACK_RESOURCES) return;
-        for (const [object, stack] of this.creationStacks.entries())
-            console.warn("Object leaked:", object, "Creation stack:", stack);
+        for (const o of this.liveObjects.values())
+            console.warn("Object leaked:", o, "Creation stack:", this.creationStacks.get(o));
+    }
+
+    public setResourceLeakCheck(o: GfxResource, v: boolean): void {
+        if (v)
+            this.liveObjects.add(o);
+        else
+            this.liveObjects.delete(o);
+        console.log(o, v, this.liveObjects.has(o));
     }
 }
 
@@ -552,7 +564,7 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
     private _blackTexture!: WebGLTexture;
     private _hostAccessPassPool: GfxHostAccessPassP_GL[] = [];
     private _renderPassPool: GfxRenderPassP_GL[] = [];
-    private _resourceCreationTracker = new ResourceCreationTracker();
+    private _resourceCreationTracker: ResourceCreationTracker | null = null;
     private _resourceUniqueId = 0;
     private _dummyCompilerVAO: WebGLVertexArrayObject;
 
@@ -602,6 +614,9 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
             if (navigator.platform === 'MacIntel' && !renderer.includes('NVIDIA'))
                 this.programBugDefines += '#define _BUG_AMD_ROW_MAJOR';
         }
+
+        if (TRACK_RESOURCES)
+            this._resourceCreationTracker = new ResourceCreationTracker();
     }
 
     //#region GfxSwapChain
@@ -616,7 +631,7 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
             this._scHeight = height;
 
             if (this._scTexture !== null)
-                this.destroyTexture(this._scTexture);
+                this._destroyTexture(this._scTexture);
 
             this._scTexture = this._createTexture({
                 dimension: GfxTextureDimension.n2D, pixelFormat: GfxFormat.U8_RGBA,
@@ -837,7 +852,8 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
 
         const gl_target = translateBufferUsageToTarget(usage);
         const buffer: GfxBufferP_GL = { _T: _T.Buffer, ResourceUniqueId: this.getNextUniqueId(), gl_buffer_pages, gl_target, usage, byteSize, pageByteSize };
-        this._resourceCreationTracker.trackResourceCreated(buffer);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceCreated(buffer);
         return buffer;
     }
 
@@ -872,7 +888,8 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
 
     public createTexture(descriptor: GfxTextureDescriptor): GfxTexture {
         const texture = this._createTexture(descriptor);
-        this._resourceCreationTracker.trackResourceCreated(texture);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceCreated(texture);
         return texture;
     }
 
@@ -886,7 +903,8 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
         gl.samplerParameterf(gl_sampler, gl.TEXTURE_MIN_LOD, descriptor.minLOD);
         gl.samplerParameterf(gl_sampler, gl.TEXTURE_MAX_LOD, descriptor.maxLOD);
         const sampler: GfxSamplerP_GL = { _T: _T.Sampler, ResourceUniqueId: this.getNextUniqueId(), gl_sampler };
-        this._resourceCreationTracker.trackResourceCreated(sampler);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceCreated(sampler);
         return sampler;
     }
 
@@ -896,7 +914,8 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
         gl.bindRenderbuffer(gl.RENDERBUFFER, gl_renderbuffer);
         gl.renderbufferStorageMultisample(gl.RENDERBUFFER, numSamples, gl.RGBA8, width, height);
         const colorAttachment: GfxColorAttachmentP_GL = { _T: _T.ColorAttachment, ResourceUniqueId: this.getNextUniqueId(), gl_renderbuffer, width, height };
-        this._resourceCreationTracker.trackResourceCreated(colorAttachment);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceCreated(colorAttachment);
         return colorAttachment;
     }
 
@@ -906,7 +925,8 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
         gl.bindRenderbuffer(gl.RENDERBUFFER, gl_renderbuffer);
         gl.renderbufferStorageMultisample(gl.RENDERBUFFER, numSamples, gl.DEPTH32F_STENCIL8, width, height);
         const depthStencilAttachment: GfxDepthStencilAttachmentP_GL = { _T: _T.DepthStencilAttachment, ResourceUniqueId: this.getNextUniqueId(), gl_renderbuffer, width, height };
-        this._resourceCreationTracker.trackResourceCreated(depthStencilAttachment);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceCreated(depthStencilAttachment);
         return depthStencilAttachment;
     }
 
@@ -920,7 +940,8 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
 
     public createProgram(compiledProgram: DeviceProgram): GfxProgram {
         const program = this._createProgram(compiledProgram);
-        this._resourceCreationTracker.trackResourceCreated(program);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceCreated(program);
         return program;
     }
 
@@ -929,14 +950,16 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
         assert(uniformBufferBindings.length >= bindingLayout.numUniformBuffers);
         assert(samplerBindings.length >= bindingLayout.numSamplers);
         const bindings: GfxBindingsP_GL = { _T: _T.Bindings, ResourceUniqueId: this.getNextUniqueId(), uniformBufferBindings, samplerBindings };
-        this._resourceCreationTracker.trackResourceCreated(bindings);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceCreated(bindings);
         return bindings;
     }
 
     public createInputLayout(inputLayoutDescriptor: GfxInputLayoutDescriptor): GfxInputLayout {
         const { vertexAttributeDescriptors, indexBufferFormat } = inputLayoutDescriptor;
         const inputLayout: GfxInputLayoutP_GL = { _T: _T.InputLayout, ResourceUniqueId: this.getNextUniqueId(), vertexAttributeDescriptors, indexBufferFormat };
-        this._resourceCreationTracker.trackResourceCreated(inputLayout);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceCreated(inputLayout);
         return inputLayout;
     }
 
@@ -988,7 +1011,8 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
         gl.bindVertexArray(null);
 
         const inputState: GfxInputStateP_GL = { _T: _T.InputState, ResourceUniqueId: this.getNextUniqueId(), vao, indexBufferByteOffset, indexBufferType, indexBufferCompByteSize, inputLayout, vertexBuffers };
-        this._resourceCreationTracker.trackResourceCreated(inputState);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceCreated(inputState);
         return inputState;
     }
 
@@ -999,7 +1023,8 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
         const megaState = descriptor.megaStateDescriptor;
         const inputLayout = descriptor.inputLayout as GfxInputLayoutP_GL | null;
         const pipeline: GfxRenderPipelineP_GL = { _T: _T.RenderPipeline, ResourceUniqueId: this.getNextUniqueId(), bindingLayouts, drawMode, program, megaState, inputLayout, ready: false };
-        this._resourceCreationTracker.trackResourceCreated(pipeline);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceCreated(pipeline);
 
         // Start compiling the program. ANGLE compiles a separate underlying program for each InputLayout
         // it is used in. For that reason, when we call compileShader, we set up a dummy VAO with the right
@@ -1045,49 +1070,63 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
         const { gl_buffer_pages } = o as GfxBufferP_GL;
         for (let i = 0; i < gl_buffer_pages.length; i++)
             this.gl.deleteBuffer(gl_buffer_pages[i]);
-        this._resourceCreationTracker.trackResourceDestroyed(o);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceDestroyed(o);
+    }
+
+    private _destroyTexture(o: GfxTexture): void {
+        this.gl.deleteTexture(getPlatformTexture(o));
     }
 
     public destroyTexture(o: GfxTexture): void {
-        this.gl.deleteTexture(getPlatformTexture(o));
-        this._resourceCreationTracker.trackResourceDestroyed(o);
+        this._destroyTexture(o);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceDestroyed(o);
     }
 
     public destroySampler(o: GfxSampler): void {
         this.gl.deleteSampler(getPlatformSampler(o));
-        this._resourceCreationTracker.trackResourceDestroyed(o);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceDestroyed(o);
     }
 
     public destroyColorAttachment(o: GfxColorAttachment): void {
         this.gl.deleteRenderbuffer(getPlatformColorAttachment(o));
-        this._resourceCreationTracker.trackResourceDestroyed(o);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceDestroyed(o);
     }
 
     public destroyDepthStencilAttachment(o: GfxDepthStencilAttachment): void {
         this.gl.deleteRenderbuffer(getPlatformDepthStencilAttachment(o));
-        this._resourceCreationTracker.trackResourceDestroyed(o);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceDestroyed(o);
     }
 
     public destroyProgram(o: GfxProgram): void {
-        this._resourceCreationTracker.trackResourceDestroyed(o);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceDestroyed(o);
     }
 
     public destroyBindings(o: GfxBindings): void {
-        this._resourceCreationTracker.trackResourceDestroyed(o);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceDestroyed(o);
     }
 
     public destroyInputLayout(o: GfxInputLayout): void {
-        this._resourceCreationTracker.trackResourceDestroyed(o);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceDestroyed(o);
     }
 
     public destroyInputState(o: GfxInputState): void {
         const inputState = o as GfxInputStateP_GL;
         this.gl.deleteVertexArray(inputState.vao);
-        this._resourceCreationTracker.trackResourceDestroyed(o);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceDestroyed(o);
     }
 
     public destroyRenderPipeline(o: GfxRenderPipeline): void {
-        this._resourceCreationTracker.trackResourceDestroyed(o);
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.trackResourceDestroyed(o);
     }
 
     public createHostAccessPass(): GfxHostAccessPass {
@@ -1209,6 +1248,11 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
             assignPlatformName((o as GfxInputStateP_GL).vao, name);
     }
 
+    public setResourceLeakCheck(o: GfxResource, v: boolean): void {
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.setResourceLeakCheck(o, v);
+    }
+
     public pushDebugGroup(debugGroup: GfxDebugGroup): void {
         this._debugGroupStack.push(debugGroup);
     }
@@ -1227,7 +1271,8 @@ class GfxImplP_GL implements GfxSwapChain, GfxDevice {
     }
 
     public checkForLeaks(): void {
-        this._resourceCreationTracker.checkForLeaks();
+        if (this._resourceCreationTracker !== null)
+            this._resourceCreationTracker.checkForLeaks();
     }
     //#endregion
 

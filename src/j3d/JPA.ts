@@ -22,6 +22,8 @@ import { GfxRenderInst, GfxRenderInstManager, makeSortKeyTranslucent, GfxRendere
 import { fillMatrix4x3, fillColor, fillMatrix4x2 } from "../gfx/helpers/UniformBufferHelpers";
 import { computeViewSpaceDepthFromWorldSpacePointAndViewMatrix } from "../Camera";
 import { makeTriangleIndexBuffer, GfxTopology, getTriangleIndexCountForTopologyIndexCount } from "../gfx/helpers/TopologyHelpers";
+import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
+import { TextureMapping } from "../TextureHolder";
 
 export interface JPAResourceRaw {
     resourceId: number;
@@ -365,15 +367,35 @@ function shapeTypeSupported(shapeType: ShapeType): boolean {
 }
 
 export class JPACData {
+    // TODO(jstpierre): Use a global JPAResourceManager for textures.
+
     public texData: BTIData[] = [];
+    public textureMapping: TextureMapping[] = [];
 
     constructor(public jpac: JPAC) {
     }
 
-    public translateTexture(device: GfxDevice, index: number): BTIData {
-        if (this.texData[index] === undefined)
-            this.texData[index] = new BTIData(device, this.jpac.textures[index].texture);
-        return this.texData[index];
+    public ensureTexture(device: GfxDevice, cache: GfxRenderCache, index: number): void {
+        if (this.texData[index] === undefined) {
+            this.texData[index] = new BTIData(device, cache, this.jpac.textures[index].texture);
+            this.textureMapping[index] = new TextureMapping();
+            this.texData[index].fillTextureMapping(this.textureMapping[index]);
+        }
+    }
+
+    public getTextureMappingReference(name: string): TextureMapping | null {
+        for (let i = 0; i < this.texData.length; i++) {
+            const texData = this.texData[i];
+            if (texData === undefined)
+                continue;
+            if (texData.btiTexture.name === name)
+                return this.textureMapping[i];
+        }
+        return null;
+    }
+
+    public fillTextureMapping(m: TextureMapping, index: number): void {
+        m.copy(this.textureMapping[index]);
     }
 
     public destroy(device: GfxDevice): void {
@@ -389,10 +411,9 @@ export class JPAResourceData {
     public supportedChild: boolean = true;
     public resourceId: number;
     public name: string;
-    public texData: BTIData[] = [];
     public materialHelper: GXMaterialHelperGfx;
 
-    constructor(device: GfxDevice, private jpacData: JPACData, resRaw: JPAResourceRaw) {
+    constructor(device: GfxDevice, cache: GfxRenderCache, private jpacData: JPACData, resRaw: JPAResourceRaw) {
         this.res = parseResource(this.jpacData.jpac.version, resRaw);
         this.resourceId = resRaw.resourceId;
 
@@ -413,21 +434,21 @@ export class JPAResourceData {
         // Translate all of the texture data.
         if (bsp1.texIdxAnimData !== null) {
             for (let i = 0; i < bsp1.texIdxAnimData.length; i++)
-                this.translateTDB1Index(device, bsp1.texIdxAnimData[i]);
+                this.ensureTextureFromTDB1Index(device, cache, bsp1.texIdxAnimData[i]);
         } else {
-            this.translateTDB1Index(device, bsp1.texIdx);
+            this.ensureTextureFromTDB1Index(device, cache, bsp1.texIdx);
         }
 
         if (etx1 !== null) {
             if (!!(etx1.flags & 0x00000001))
-                this.translateTDB1Index(device, etx1.indTextureID);
+                this.ensureTextureFromTDB1Index(device, cache, etx1.indTextureID);
 
             if (!!(etx1.flags & 0x00000100))
-                this.translateTDB1Index(device, etx1.subTextureID);
+                this.ensureTextureFromTDB1Index(device, cache, etx1.subTextureID);
         }
 
         if (ssp1 !== null)
-            this.translateTDB1Index(device, ssp1.texIdx);
+            this.ensureTextureFromTDB1Index(device, cache, ssp1.texIdx);
 
         const ropInfo: RopInfo = {
             blendMode: {
@@ -557,16 +578,12 @@ export class JPAResourceData {
         this.materialHelper = new GXMaterialHelperGfx(gxMaterial);
     }
 
-    private translateTDB1Index(device: GfxDevice, idx: number): void {
-        if (this.texData[idx] === undefined)
-            this.texData[idx] = this.jpacData.translateTexture(device, this.res.tdb1[idx]);
+    private ensureTextureFromTDB1Index(device: GfxDevice, cache: GfxRenderCache, idx: number): void {
+        this.jpacData.ensureTexture(device, cache, this.res.tdb1[idx]);
     }
 
-    public destroy(device: GfxDevice): void {
-        for (let i = 0; i < this.texData.length; i++)
-            if (this.texData[i] !== undefined)
-                this.texData[i].destroy(device);
-        this.materialHelper.destroy(device);
+    public fillTextureMapping(m: TextureMapping, idx: number): void {
+        this.jpacData.fillTextureMapping(m, this.res.tdb1[idx]);
     }
 }
 
@@ -944,7 +961,7 @@ export class JPAEmitterManager {
         if (this.deadEmitterPool.length === 0)
             return null;
 
-        const emitter = this.deadEmitterPool.pop();
+        const emitter = assertExists(this.deadEmitterPool.pop());
         emitter.init(resData);
         assert(emitter.aliveParticlesBase.length === 0);
         this.aliveEmitters.push(emitter);
@@ -1126,23 +1143,25 @@ function calcTexIdx(workData: JPAEmitterWorkData, tick: number, time: number, ra
     const isEnableTextureAnm = !!(bsp1.texFlags & 0x00000001);
     assert(isEnableTextureAnm);
 
+    const texIdxAnimData = assertExists(bsp1.texIdxAnimData);
+
     const calcTexIdxType: CalcIdxType = (bsp1.texFlags >>> 2) & 0x07;
     let anmIdx: number;
     if (calcTexIdxType === CalcIdxType.Normal) {
-        anmIdx = Math.min(bsp1.texIdxAnimData.length - 1, tick);
+        anmIdx = Math.min(texIdxAnimData.length - 1, tick);
     } else if (calcTexIdxType === CalcIdxType.Repeat) {
-        anmIdx = ((tick | 0) + randomPhase) % bsp1.texIdxAnimData.length;
+        anmIdx = ((tick | 0) + randomPhase) % texIdxAnimData.length;
     } else if (calcTexIdxType === CalcIdxType.Reverse) {
-        anmIdx = mirroredRepeat((tick | 0) + randomPhase, bsp1.texIdxAnimData.length - 1);
+        anmIdx = mirroredRepeat((tick | 0) + randomPhase, texIdxAnimData.length - 1);
     } else if (calcTexIdxType === CalcIdxType.Merge) {
-        anmIdx = (((time * bsp1.texIdxAnimData.length) | 0) + randomPhase) % bsp1.texIdxAnimData.length;
+        anmIdx = (((time * texIdxAnimData.length) | 0) + randomPhase) % texIdxAnimData.length;
     } else if (calcTexIdxType === CalcIdxType.Random) {
-        anmIdx = randomPhase % bsp1.texIdxAnimData.length;
+        anmIdx = randomPhase % texIdxAnimData.length;
     } else {
         throw "whoops";
     }
 
-    return bsp1.texIdxAnimData[anmIdx];
+    return texIdxAnimData[anmIdx];
 }
 
 function calcColor(dstPrm: Color, dstEnv: Color, workData: JPAEmitterWorkData, tick: number, time: number, randomPhase: number): void {
@@ -1167,10 +1186,14 @@ function calcColor(dstPrm: Color, dstEnv: Color, workData: JPAEmitterWorkData, t
     const calcPrmColor = !!(bsp1.colorFlags & 0x02);
     const calcEnvColor = !!(bsp1.colorFlags & 0x08);
 
-    if (calcPrmColor)
-        colorCopy(dstPrm, bsp1.colorPrmAnimData[anmIdx]);
-    if (calcEnvColor)
-        colorCopy(dstEnv, bsp1.colorEnvAnimData[anmIdx]);
+    if (calcPrmColor) {
+        const colorPrmAnimData = assertExists(bsp1.colorPrmAnimData);
+        colorCopy(dstPrm, colorPrmAnimData[anmIdx]);
+    }
+    if (calcEnvColor) {
+        const colorEnvAnimData = assertExists(bsp1.colorEnvAnimData);
+        colorCopy(dstEnv, colorEnvAnimData[anmIdx]);
+    }
 }
 
 function isNearZero(v: vec3, min: number): boolean {
@@ -1190,6 +1213,10 @@ function isNearZero(v: vec3, min: number): boolean {
 const enum TraverseOrder {
     REVERSE = 0x00,
     FORWARD = 0x01,
+}
+
+export interface JPAEmitterCallBack {
+    execute(emitter: JPABaseEmitter): void;
 }
 
 const scratchVec3Points = nArray(4, () => vec3.create());
@@ -1235,6 +1262,8 @@ export class JPABaseEmitter {
     public aliveParticlesBase: JPABaseParticle[] = [];
     public aliveParticlesChild: JPABaseParticle[] = [];
     public drawGroupId: number = 0;
+
+    public emitterCallBack: JPAEmitterCallBack | null = null;
 
     constructor(private emitterManager: JPAEmitterManager) {
     }
@@ -1298,6 +1327,8 @@ export class JPABaseEmitter {
 
         if (!this.resData.supportedParticle)
             this.flags |= BaseEmitterFlags.TERMINATED;
+
+        this.emitterCallBack = null;
     }
 
     public deleteAllParticle(): void {
@@ -1311,9 +1342,9 @@ export class JPABaseEmitter {
 
     public createChild(parent: JPABaseParticle): void {
         if (this.emitterManager.deadParticlePool.length === 0)
-            return null;
+            return;
 
-        const particle = this.emitterManager.deadParticlePool.pop();
+        const particle = this.emitterManager.deadParticlePool.pop()!;
         this.aliveParticlesChild.push(particle);
         particle.init_c(this.emitterManager.workData, parent);
     }
@@ -1511,7 +1542,7 @@ export class JPABaseEmitter {
         if (this.emitterManager.deadParticlePool.length === 0)
             return null;
 
-        const particle = this.emitterManager.deadParticlePool.pop();
+        const particle = this.emitterManager.deadParticlePool.pop()!;
         this.aliveParticlesBase.push(particle);
         this.calcVolume(this.emitterManager.workData);
         particle.init_p(this.emitterManager.workData);
@@ -1657,6 +1688,8 @@ export class JPABaseEmitter {
             // Reset fields.
 
             // Emitter callback +0x0c
+            if (this.emitterCallBack !== null)
+                this.emitterCallBack.execute(this);
 
             this.calcWorkData_c(workData);
 
@@ -1736,7 +1769,7 @@ export class JPABaseEmitter {
 
         mat4.copy(packetParams.u_PosMtx[0], workData.posCamMtx);
 
-        if (!calcTexCrdMtxPrj(materialParams.u_TexMtx[0], workData, workData.posCamMtx)) {
+        if (!calcTexCrdMtxPrj(materialParams.u_TexMtx[0], workData, workData.posCamMtx, materialParams.m_TextureMapping[0].flipY)) {
             const isEnableTexScrollAnm = !!(bsp1.flags & 0x01000000);
             if (isEnableTexScrollAnm)
                 calcTexCrdMtxAnm(materialParams.u_TexMtx[0], bsp1, workData.baseEmitter.tick);
@@ -1885,18 +1918,18 @@ export class JPABaseEmitter {
         const isEnableTextureAnm = !!(bsp1.texFlags & 0x00000001);
         const texCalcOnEmitter = !!(bsp1.flags & 0x00004000);
         if (!isEnableTextureAnm)
-            this.resData.texData[bsp1.texIdx].fillTextureMapping(materialParams.m_TextureMapping[0]);
+            this.resData.fillTextureMapping(materialParams.m_TextureMapping[0], bsp1.texIdx);
         else if (texCalcOnEmitter)
-            this.resData.texData[this.texAnmIdx].fillTextureMapping(materialParams.m_TextureMapping[0]);
+            this.resData.fillTextureMapping(materialParams.m_TextureMapping[0], this.texAnmIdx);
 
         if (etx1 !== null) {
             if (!!(etx1.flags & 0x00000001)) {
-                this.resData.texData[etx1.indTextureID].fillTextureMapping(materialParams.m_TextureMapping[2]);
+                this.resData.fillTextureMapping(materialParams.m_TextureMapping[2], etx1.indTextureID);
                 fillIndTexMtx(materialParams.u_IndTexMtx[0], etx1.indTextureMtx);
             }
 
             if (!!(etx1.flags & 0x00000100))
-                this.resData.texData[etx1.subTextureID].fillTextureMapping(materialParams.m_TextureMapping[3]);
+                this.resData.fillTextureMapping(materialParams.m_TextureMapping[3], etx1.subTextureID);
         }
 
         workData.forceTexMtxIdentity = false;
@@ -1935,7 +1968,7 @@ export class JPABaseEmitter {
 
     private drawC(device: GfxDevice, renderInstManager: GfxRenderInstManager, workData: JPAEmitterWorkData): void {
         const bsp1 = this.resData.res.bsp1;
-        const ssp1 = this.resData.res.ssp1;
+        const ssp1 = this.resData.res.ssp1!;
 
         const materialParams = workData.materialParams;
 
@@ -1955,8 +1988,7 @@ export class JPABaseEmitter {
 
         workData.forceTexMtxIdentity = true;
         mat4.identity(materialParams.u_TexMtx[0]);
-
-        workData.baseEmitter.resData.texData[ssp1.texIdx].fillTextureMapping(materialParams.m_TextureMapping[0]);
+        workData.baseEmitter.resData.fillTextureMapping(materialParams.m_TextureMapping[0], ssp1.texIdx);
 
         // mpDrawEmitterChildFuncList
 
@@ -2089,7 +2121,7 @@ function mat4SwapTranslationColumns(m: mat4): void {
 }
 
 
-function calcTexCrdMtxPrj(dst: mat4, workData: JPAEmitterWorkData, posMtx: mat4): boolean {
+function calcTexCrdMtxPrj(dst: mat4, workData: JPAEmitterWorkData, posMtx: mat4, flipY: boolean): boolean {
     const bsp1 = workData.baseEmitter.resData.res.bsp1;
 
     const isEnableProjection = !!(bsp1.flags & 0x00100000);
@@ -2099,11 +2131,21 @@ function calcTexCrdMtxPrj(dst: mat4, workData: JPAEmitterWorkData, posMtx: mat4)
             // loadPrjAnm
             calcTexCrdMtxAnm(dst, bsp1, workData.baseEmitter.tick);
             mat4SwapTranslationColumns(dst);
-            mat4.mul(dst, dst, workData.texPrjMtx);
+            mat4.copy(scratchMatrix, workData.texPrjMtx);
+            if (flipY) {
+                scratchMatrix[5] *= -1;
+                scratchMatrix[13] += 2;
+            }
+            mat4.mul(dst, dst, scratchMatrix);
             mat4.mul(dst, dst, posMtx);
         } else {
             // loadPrj
-            mat4.mul(dst, workData.texPrjMtx, posMtx);
+            mat4.copy(scratchMatrix, workData.texPrjMtx);
+            if (flipY) {
+                scratchMatrix[5] *= -1;
+                scratchMatrix[13] += 2;
+            }
+            mat4.mul(dst, scratchMatrix, posMtx);
         }
     }
 
@@ -2308,7 +2350,7 @@ export class JPABaseParticle {
     public init_c(workData: JPAEmitterWorkData, parent: JPABaseParticle): void {
         const baseEmitter = workData.baseEmitter;
         const bem1 = baseEmitter.resData.res.bem1;
-        const ssp1 = baseEmitter.resData.res.ssp1;
+        const ssp1 = baseEmitter.resData.res.ssp1!;
 
         this.tick = -1;
         this.time = 0;
@@ -2664,7 +2706,7 @@ export class JPABaseParticle {
         if (!workData.baseEmitter.resData.supportedChild)
             return false;
 
-        const ssp1 = workData.baseEmitter.resData.res.ssp1;
+        const ssp1 = workData.baseEmitter.resData.res.ssp1!;
 
         const timing = this.tick - ((this.lifeTime - 1) * ssp1.timing);
         if (timing < 0)
@@ -2812,7 +2854,7 @@ export class JPABaseParticle {
             return false;
 
         const res = workData.baseEmitter.resData.res;
-        const ssp1 = res.ssp1;
+        const ssp1 = res.ssp1!;
 
         this.time = this.tick / this.lifeTime;
 
@@ -2862,11 +2904,11 @@ export class JPABaseParticle {
         return false;
     }
 
-    private loadTexMtx(dst: mat4, workData: JPAEmitterWorkData, posMtx: mat4): void {
+    private loadTexMtx(dst: mat4, textureMapping: TextureMapping, workData: JPAEmitterWorkData, posMtx: mat4): void {
         if (workData.forceTexMtxIdentity)
             return;
 
-        if (!calcTexCrdMtxPrj(dst, workData, posMtx)) {
+        if (!calcTexCrdMtxPrj(dst, workData, posMtx, textureMapping.flipY)) {
             const bsp1 = workData.baseEmitter.resData.res.bsp1;
             const isEnableTexScrollAnm = !!(bsp1.flags & 0x01000000);
             if (isEnableTexScrollAnm)
@@ -3047,7 +3089,7 @@ export class JPABaseParticle {
                 0, 0, rotateAngle,
                 scratchVec3a[0], scratchVec3a[1], scratchVec3a[2]);
             this.applyPivot(packetParams.u_PosMtx[0], workData);
-            this.loadTexMtx(materialParams.u_TexMtx[0], workData, packetParams.u_PosMtx[0]);
+            this.loadTexMtx(materialParams.u_TexMtx[0], materialParams.m_TextureMapping[0], workData, packetParams.u_PosMtx[0]);
 
             renderInst.setInputLayoutAndState(globalRes.inputLayout, globalRes.inputStateQuad);
             renderInst.drawIndexes(6, 0);
@@ -3090,10 +3132,8 @@ export class JPABaseParticle {
             }
 
             this.applyPivot(dst, workData);
-
             mat4.mul(dst, workData.posCamMtx, dst);
-
-            this.loadTexMtx(materialParams.u_TexMtx[0], workData, dst);
+            this.loadTexMtx(materialParams.u_TexMtx[0], materialParams.m_TextureMapping[0], workData, dst);
 
             renderInst.setInputLayoutAndState(globalRes.inputLayout, globalRes.inputStateQuad);
             if (shapeType === ShapeType.DirectionCross)
@@ -3112,7 +3152,7 @@ export class JPABaseParticle {
             dst[14] = this.position[2];
             this.applyPivot(dst, workData);
             mat4.mul(dst, workData.posCamMtx, dst);
-            this.loadTexMtx(materialParams.u_TexMtx[0], workData, dst);
+            this.loadTexMtx(materialParams.u_TexMtx[0], materialParams.m_TextureMapping[0], workData, dst);
 
             renderInst.setInputLayoutAndState(globalRes.inputLayout, globalRes.inputStateQuad);
             if (shapeType === ShapeType.RotationCross)
@@ -3149,7 +3189,7 @@ export class JPABaseParticle {
             dst[10] = 1;
             dst[14] = scratchVec3b[2];
             this.applyPivot(dst, workData);
-            this.loadTexMtx(materialParams.u_TexMtx[0], workData, dst);
+            this.loadTexMtx(materialParams.u_TexMtx[0], materialParams.m_TextureMapping[0], workData, dst);
 
             renderInst.setInputLayoutAndState(globalRes.inputLayout, globalRes.inputStateQuad);
             renderInst.drawIndexes(6, 0);
@@ -3188,7 +3228,7 @@ export class JPABaseParticle {
             dst[13] = scratchVec3b[1];
             dst[14] = scratchVec3b[2];
             this.applyPivot(dst, workData);
-            this.loadTexMtx(materialParams.u_TexMtx[0], workData, dst);
+            this.loadTexMtx(materialParams.u_TexMtx[0], materialParams.m_TextureMapping[0], workData, dst);
 
             renderInst.setInputLayoutAndState(globalRes.inputLayout, globalRes.inputStateQuad);
             renderInst.drawIndexes(6, 0);
@@ -3204,15 +3244,16 @@ export class JPABaseParticle {
     }
 
     public drawP(device: GfxDevice, renderInstManager: GfxRenderInstManager, workData: JPAEmitterWorkData, materialParams: MaterialParams): void {
-        const bsp1 = workData.baseEmitter.resData.res.bsp1;
-        const esp1 = workData.baseEmitter.resData.res.esp1;
+        const resData = workData.baseEmitter.resData;
+        const bsp1 = resData.res.bsp1;
+        const esp1 = resData.res.esp1;
 
         // mpDrawParticleFuncList
 
         const isEnableTextureAnm = !!(bsp1.texFlags & 0x00000001);
         const texCalcOnEmitter = !!(bsp1.flags & 0x00004000);
         if (isEnableTextureAnm && !texCalcOnEmitter)
-            workData.baseEmitter.resData.texData[this.texAnmIdx].fillTextureMapping(materialParams.m_TextureMapping[0]);
+            resData.fillTextureMapping(materialParams.m_TextureMapping[0], this.texAnmIdx);
 
         if (esp1 !== null) {
             workData.pivotX = esp1.pivotX;
@@ -3226,7 +3267,7 @@ export class JPABaseParticle {
     }
 
     public drawC(device: GfxDevice, renderInstManager: GfxRenderInstManager, workData: JPAEmitterWorkData, materialParams: MaterialParams): void {
-        const ssp1 = workData.baseEmitter.resData.res.ssp1;
+        const ssp1 = workData.baseEmitter.resData.res.ssp1!;
 
         // mpDrawParticleChildFuncList
 
@@ -3536,9 +3577,8 @@ function parseResource_JPAC1_00(res: JPAResourceRaw): JPAResource {
             if (shapeType === ShapeType.DirectionCross || shapeType === ShapeType.RotationCross)
                 planeType = PlaneType.X;
 
-            assertExists(bsp1);
             const isEnableDrawParent = !!(flags & 0x00080000);
-            bsp1.stopDrawParent = !isEnableDrawParent;
+            assertExists(bsp1).stopDrawParent = !isEnableDrawParent;
     
             const posRndm = view.getFloat32(dataBegin + 0x04);
             const baseVel = view.getFloat32(dataBegin + 0x08);

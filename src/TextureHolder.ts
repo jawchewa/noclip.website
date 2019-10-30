@@ -61,6 +61,7 @@ export interface LoadedTexture {
     viewerTexture: Viewer.Texture;
 }
 
+// TODO(jstpierre): TextureHolder needs to die.
 export abstract class TextureHolder<TextureType extends TextureBase> {
     public viewerTextures: Viewer.Texture[] = [];
     public gfxTextures: GfxTexture[] = [];
@@ -114,7 +115,8 @@ export abstract class TextureHolder<TextureType extends TextureBase> {
             return true;
         }
 
-        throw new Error(`Cannot find texture ${name}`);
+        // throw new Error(`Cannot find texture ${name}`);
+        return false;
     }
 
     public findTexture(name: string): TextureType | null {
@@ -133,7 +135,7 @@ export abstract class TextureHolder<TextureType extends TextureBase> {
 
     protected abstract loadTexture(device: GfxDevice, textureEntry: TextureType): LoadedTexture | null;
 
-    public addTextures(device: GfxDevice, textureEntries: TextureType[], overwrite: boolean = false): void {
+    public addTextures(device: GfxDevice, textureEntries: (TextureType | null)[], overwrite: boolean = false): void {
         for (let i = 0; i < textureEntries.length; i++) {
             const texture = textureEntries[i];
             if (texture === null)

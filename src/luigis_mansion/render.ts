@@ -32,10 +32,6 @@ class Command_Material {
             }
         }
     }
-
-    public destroy(device: GfxDevice): void {
-        this.materialHelper.destroy(device);
-    }
 }
 
 const bboxScratch = new AABB();
@@ -65,7 +61,7 @@ class Command_Batch {
         this.materialCommand.fillMaterialParams(materialParams);
         renderInst.setSamplerBindingsFromTextureMappings(materialParams.m_TextureMapping);
         this.materialCommand.materialHelper.setOnRenderInst(device, renderInstManager.gfxRenderCache, renderInst);
-        this.materialCommand.materialHelper.fillMaterialParamsData(renderInstManager, materialOffs, materialParams);
+        this.materialCommand.materialHelper.fillMaterialParamsDataOnInst(renderInst, materialOffs, materialParams);
         this.computeModelView(packetParams.u_PosMtx[0], viewerInput.camera);
         this.shapeHelper.fillPacketParams(packetParams, renderInst);
     }
@@ -107,7 +103,6 @@ class Command_Bin {
         this.gfxTextures.forEach((t) => device.destroyTexture(t));
         this.gfxSamplers.forEach((t) => device.destroySampler(t));
         this.batchCommands.forEach((t) => t.destroy(device));
-        this.materialCommands.forEach((t) => t.destroy(device));
         this.bufferCoalescer.destroy(device);
     }
 

@@ -10,7 +10,7 @@ import * as RARC from './rarc';
 import { BMDModel, BMDModelInstance, BTIData } from './render';
 import { EFB_WIDTH, EFB_HEIGHT, GXMaterialHacks } from '../gx/gx_material';
 import { readString, assertExists, leftPad, assert } from '../util';
-import { GfxDevice, GfxHostAccessPass, GfxRenderPass } from '../gfx/platform/GfxPlatform';
+import { GfxDevice, GfxHostAccessPass, GfxRenderPass, GfxFrontFaceMode } from '../gfx/platform/GfxPlatform';
 import { GXRenderHelperGfx, fillSceneParamsDataOnTemplate } from '../gx/gx_render';
 import { GfxRendererLayer } from '../gfx/render/GfxRenderer';
 import { BasicRenderTarget, ColorTexture, standardFullClearRenderPassDescriptor, depthClearRenderPassDescriptor, noClearRenderPassDescriptor } from '../gfx/helpers/RenderTargetHelpers';
@@ -23,8 +23,8 @@ import { SceneContext } from '../SceneBase';
 class ZTPExtraTextures {
     public extraTextures: BTIData[] = [];
 
-    public addBTI(device: GfxDevice, btiTexture: BTI_Texture): void {
-        this.extraTextures.push(new BTIData(device, btiTexture));
+    public addBTI(device: GfxDevice, cache: GfxRenderCache, btiTexture: BTI_Texture): void {
+        this.extraTextures.push(new BTIData(device, cache, btiTexture));
     }
 
     public destroy(device: GfxDevice): void {
@@ -47,7 +47,7 @@ const materialHacks: GXMaterialHacks = {
     lightingFudge: (p) => `(0.5 * (${p.ambSource} + 0.6) * ${p.matSource})`,
 };
 
-function createModelInstance(device: GfxDevice, cache: GfxRenderCache, extraTextures: ZTPExtraTextures, bmdFile: RARC.RARCFile, btkFile: RARC.RARCFile, brkFile: RARC.RARCFile, bckFile: RARC.RARCFile, bmtFile: RARC.RARCFile) {
+function createModelInstance(device: GfxDevice, cache: GfxRenderCache, extraTextures: ZTPExtraTextures, bmdFile: RARC.RARCFile, btkFile: RARC.RARCFile | null, brkFile: RARC.RARCFile | null, bckFile: RARC.RARCFile | null, bmtFile: RARC.RARCFile | null) {
     const bmd = BMD.parse(bmdFile.buffer);
     const bmt = bmtFile ? BMT.parse(bmtFile.buffer) : null;
     const bmdModel = new BMDModel(device, cache, bmd, bmt);
@@ -98,6 +98,14 @@ class TwilightPrincessRenderer implements Viewer.SceneGfx {
         this.renderHelper = new GXRenderHelperGfx(device);
     }
 
+    private setMirrored(mirror: boolean): void {
+        for (let i = 0; i < this.modelInstances.length; i++) {
+            this.modelInstances[i].modelMatrix[0] = mirror ? -1 : 1;
+            for (let j = 0; j < this.modelInstances[i].materialInstances.length; j++)
+                this.modelInstances[i].materialInstances[j].materialHelper.megaStateFlags.frontFace = mirror ? GfxFrontFaceMode.CCW : GfxFrontFaceMode.CW;
+        }
+    }
+
     public createPanels(): UI.Panel[] {
         const layers = new UI.LayerPanel();
         layers.setLayers(this.modelInstances);
@@ -105,6 +113,11 @@ class TwilightPrincessRenderer implements Viewer.SceneGfx {
         const renderHacksPanel = new UI.Panel();
         renderHacksPanel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR;
         renderHacksPanel.setTitle(UI.RENDER_HACKS_ICON, 'Render Hacks');
+        const mirrorCheckbox = new UI.Checkbox('Mirror Levels (Like Wii)');
+        mirrorCheckbox.onchanged = () => {
+            this.setMirrored(mirrorCheckbox.checked);
+        };
+        renderHacksPanel.contents.appendChild(mirrorCheckbox.elem);
         const enableVertexColorsCheckbox = new UI.Checkbox('Enable Vertex Colors', true);
         enableVertexColorsCheckbox.onchanged = () => {
             for (let i = 0; i < this.modelInstances.length; i++)
@@ -220,7 +233,7 @@ function getRoomListFromDZS(buffer: ArrayBufferSlice): number[] {
         chunkTableIdx += 0x0C;
     }
 
-    const { offs: rtblOffs, count: rtblCount } = chunkOffsets.get('RTBL');
+    const { offs: rtblOffs, count: rtblCount } = chunkOffsets.get('RTBL')!;
     let roomList = new Set<number>();
     for (let i = 0; i < rtblCount; i++) {
         const rtblEntryOffs = view.getUint32(rtblOffs + i * 0x04);
@@ -331,7 +344,7 @@ class ModelCache {
         let p = this.modelCache.get(modelPath);
 
         if (p === undefined) {
-            const bmdData = rarc.findFileData(modelPath);
+            const bmdData = assertExists(rarc.findFileData(modelPath));
             const bmd = BMD.parse(bmdData);
             if (hacks !== undefined)
                 hacks(bmd);
@@ -358,7 +371,7 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
 
     constructor(public name: string, public stageId: string, public roomNames: string[] | null = null) {
         if (roomNames !== null)
-            this.id = `${this.stageId}/${this.roomNames[0]}`;
+            this.id = `${this.stageId}/${roomNames[0]}`;
         else
             this.id = this.stageId;
     }
@@ -397,7 +410,7 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
             modelInstance.passMask = passMask;
             renderer.modelInstances.push(modelInstance);
         });
-        const dzrFile = rarc.findFileData('dzr/room.dzr');
+        const dzrFile = assertExists(rarc.findFileData('dzr/room.dzr'));
 
         this.spawnObjectsFromDZR(device, renderer, dzrFile, mat4.create());
     }
@@ -506,7 +519,7 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
             return objectRenderer;
         }
 
-        function parseBCK(rarc: RARC.RARC, path: string) { const g = BCK.parse(rarc.findFileData(path)).ank1; g.loopMode = LoopMode.REPEAT; return g; }
+        function parseBCK(rarc: RARC.RARC, path: string) { const g = BCK.parse(assertExists(rarc.findFileData(path))).ank1; g.loopMode = LoopMode.REPEAT; return g; }
 
         //Goat
         if (name === 'Cow') fetchArchive(`Cow.arc`).then((rarc: RARC.RARC) => {
@@ -1061,26 +1074,27 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
         const extraTextures = new ZTPExtraTextures();
         const modelCache = new ModelCache(dataFetcher);
 
-        return this.fetchRarc(`${stagePath}/STG_00.arc`, dataFetcher).then((stageRarc: RARC.RARC) => {
+        return this.fetchRarc(`${stagePath}/STG_00.arc`, dataFetcher).then((stageRarc_: RARC.RARC | null) => {
+            const stageRarc = assertExists(stageRarc_);
+
             // Load stage shared textures.
             const texcFolder = stageRarc.findDir(`texc`);
             const extraTextureFiles = texcFolder !== null ? texcFolder.files : [];
+
+            const renderer = new TwilightPrincessRenderer(device, modelCache, extraTextures, stageRarc);
+            const cache = renderer.renderHelper.renderInstManager.gfxRenderCache;
 
             for (let i = 0; i < extraTextureFiles.length; i++) {
                 const file = extraTextureFiles[i];
                 const name = file.name.split('.')[0];
                 const bti = BTI.parse(file.buffer, name).texture;
-                extraTextures.addBTI(device, bti);
+                extraTextures.addBTI(device, cache, bti);
             }
-
-            const renderer = new TwilightPrincessRenderer(device, modelCache, extraTextures, stageRarc);
-
-            const cache = renderer.renderHelper.renderInstManager.gfxRenderCache;
 
             [`vrbox_sora`, `vrbox_kasumim`].forEach((basename) => {
                 const bmdFile = stageRarc.findFile(`bmdp/${basename}.bmd`);
                 if (!bmdFile)
-                    return null;
+                    return;
                 const btkFile = stageRarc.findFile(`btk/${basename}.btk`);
                 const brkFile = stageRarc.findFile(`brk/${basename}.brk`);
                 const bckFile = stageRarc.findFile(`bck/${basename}.bck`);
@@ -1091,7 +1105,7 @@ class TwilightPrincessSceneDesc implements Viewer.SceneDesc {
             });
 
             // Pull out the dzs, get the scene definition.
-            const dzsBuffer = stageRarc.findFile(`dzs/stage.dzs`).buffer;
+            const dzsBuffer = stageRarc.findFile(`dzs/stage.dzs`)!.buffer;
 
             let roomNames: string[];
 

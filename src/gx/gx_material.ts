@@ -4,7 +4,7 @@
 import * as GX from './gx_enum';
 
 import { DeviceProgram } from '../Program';
-import { colorCopy, colorFromRGBA, colorNew, TransparentBlack, colorNewCopy } from '../Color';
+import { colorCopy, colorFromRGBA, TransparentBlack, colorNewCopy } from '../Color';
 import { GfxFormat } from '../gfx/platform/GfxPlatformFormat';
 import { GfxCompareMode, GfxFrontFaceMode, GfxBlendMode, GfxBlendFactor, GfxCullMode, GfxMegaStateDescriptor } from '../gfx/platform/GfxPlatform';
 import { vec3, vec4, mat4 } from 'gl-matrix';
@@ -256,7 +256,6 @@ export interface GXMaterialHacks {
     disableTextures?: boolean;
     disableVertexColors?: boolean;
     disableLighting?: boolean;
-    useTextureCoords?: boolean;
 }
 
 function colorChannelsEqual(a: ColorChannelControl, b: ColorChannelControl): boolean {
@@ -602,8 +601,13 @@ export class GX_Program extends DeviceProgram {
     }
 
     private generateTexCoordGetters(): string {
-        return this.material.texGens.map((n, i) => {
-            return `vec2 ReadTexCoord${i}() { return v_TexCoord${i}.xy / v_TexCoord${i}.z; }\n`;
+        return this.material.texGens.map((tg, i) => {
+            if (tg.type === GX.TexGenType.MTX2x4 || tg.type === GX.TexGenType.SRTG)
+                return `vec2 ReadTexCoord${i}() { return v_TexCoord${i}.xy; }\n`;
+            else if (tg.type === GX.TexGenType.MTX3x4)
+                return `vec2 ReadTexCoord${i}() { return v_TexCoord${i}.xy / v_TexCoord${i}.z; }\n`;
+            else
+                throw "whoops";
         }).join('');
     }
 
@@ -631,9 +635,6 @@ export class GX_Program extends DeviceProgram {
     }
 
     private generateTextureSample(index: number, coord: string): string {
-        if (this.hacks !== null && this.hacks.useTextureCoords)
-            return `vec4(${coord}.xy, 1.0, 1.0)`;
-
         return `texture(u_Texture[${index}], ${coord}, TextureLODBias(${index}))`;
     }
 
@@ -1159,8 +1160,9 @@ void main() {
     vec4 t_Color1    = u_Color[2];
     vec4 t_Color2    = u_Color[3];
 
-    vec2 t_TexCoord = vec2(0.0, 0.0);
 ${this.generateIndTexStages(indTexStages)}
+
+    vec2 t_TexCoord = vec2(0.0, 0.0);
     vec4 t_TevA, t_TevB, t_TevC, t_TevD;
 ${this.generateTevStages(tevStages)}
 

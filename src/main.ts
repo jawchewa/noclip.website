@@ -54,12 +54,15 @@ import * as Scenes_Test from './Scenes_Test';
 import * as Scenes_WiiSportsResort from './rres/Scenes_WiiSportsResort';
 import * as Scenes_Zelda_SkywardSword from './rres/Scenes_Zelda_SkywardSword';
 import * as Scenes_InteractiveExamples from './interactive_examples/Scenes';
+import * as Scenes_Pilotwings64 from './Pilotwings64/Scenes';
+import * as Scenes_Fez from './Fez/Scenes_Fez';
+import * as Scenes_SuperMarioOdyssey from './fres_nx/smo_scenes';
 
 import { DroppedFileSceneDesc } from './Scenes_FileDrops';
 
 import { UI, SaveStatesAction, Panel } from './ui';
 import { serializeCamera, deserializeCamera, FPSCameraController } from './Camera';
-import { hexdump } from './util';
+import { hexdump, assertExists } from './util';
 import { DataFetcher } from './DataFetcher';
 import { ZipFileEntry, makeZipFile } from './ZipFile';
 import { atob, btoa } from './Ascii85';
@@ -75,6 +78,7 @@ import { GIT_REVISION, IS_DEVELOPMENT } from './BuildVersion';
 import { SceneDesc, SceneGroup, SceneContext, getSceneDescs, Destroyable } from './SceneBase';
 import { prepareFrameDebugOverlayCanvas2D } from './DebugJunk';
 import { downloadBlob, downloadBufferSlice, downloadBuffer } from './DownloadUtils';
+import { DataShare } from './DataShare';
 
 const sceneGroups = [
     "Wii",
@@ -109,6 +113,7 @@ const sceneGroups = [
     "Nintendo 64",
     Scenes_BanjoKazooie.sceneGroup,
     Scenes_PaperMario64.sceneGroup,
+    Scenes_Pilotwings64.sceneGroup,
     "PlayStation 2",
     Scenes_KatamariDamacy.sceneGroup,
     Scenes_KingdomHearts.sceneGroup,
@@ -120,10 +125,12 @@ const sceneGroups = [
     Scenes_DarkSouls.sceneGroup,
     Scenes_DonkeyKongCountryReturns.sceneGroup,
     Scenes_Elebits.sceneGroup,
+    Scenes_Fez.sceneGroup,
     Scenes_MarioAndSonicAtThe2012OlympicGames.sceneGroup,
     Scenes_MetroidPrime.sceneGroupMP3,
     Scenes_Psychonauts.sceneGroup,
     Scenes_SonicColors.sceneGroup,
+    Scenes_SuperMarioOdyssey.sceneGroup,
     Scenes_Test.sceneGroup,
     Scenes_InteractiveExamples.sceneGroup,
 ];
@@ -133,7 +140,7 @@ function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
 }
 
 function convertCanvasToPNG(canvas: HTMLCanvasElement): Promise<Blob> {
-    return new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/png'));
+    return new Promise((resolve) => canvas.toBlob((b) => resolve(assertExists(b)), 'image/png'));
 }
 
 function writeString(d: Uint8Array, offs: number, m: string): number {
@@ -165,9 +172,10 @@ class Main {
     private currentSceneGroup: SceneGroup;
     private currentSceneDesc: SceneDesc;
 
-    private loadingSceneDesc: SceneDesc = null;
-    private abortController: AbortController | null = null;
+    private loadingSceneDesc: SceneDesc | null = null;
     private destroyablePool: Destroyable[] = [];
+    private dataShare = new DataShare();
+    private dataFetcher: DataFetcher;
 
     constructor() {
         this.toplevel = document.createElement('div');
@@ -207,6 +215,8 @@ class Main {
 
         this._makeUI();
 
+        this.dataFetcher = new DataFetcher(this.ui.sceneSelect);
+
         this.groups = sceneGroups;
 
         this.droppedFileGroup = { id: "drops", name: "Dropped Files", sceneDescs: [] };
@@ -243,8 +253,8 @@ class Main {
                 dsn: 'https://a3b5f6c50bc04555835f9a83d6e76b23@sentry.io/1448331',
                 beforeSend: (event) => {
                     // Filter out aborted XHRs.
-                    if (event.exception.values.length) {
-                        const exc = event.exception.values[0];
+                    if (event.exception!.values!.length) {
+                        const exc = event.exception!.values![0];
                         if (exc.type === 'AbortedError')
                             return null;
                     }
@@ -326,7 +336,7 @@ class Main {
     private _onDrop(e: DragEvent) {
         this.ui.dragHighlight.style.display = 'none';
         e.preventDefault();
-        const transfer = e.dataTransfer;
+        const transfer = assertExists(e.dataTransfer);
         if (transfer.files.length === 0)
             return;
         const file = transfer.files[0];
@@ -426,12 +436,15 @@ class Main {
 
         const group = this.groups.find((g) => typeof g !== 'string' && g.id === groupId) as SceneGroup;
         if (!group)
-            return null;
+            return;
 
         if (group.sceneIdMap !== undefined && group.sceneIdMap.has(sceneId))
-            sceneId = group.sceneIdMap.get(sceneId);
+            sceneId = group.sceneIdMap.get(sceneId)!;
 
         const desc = getSceneDescs(group).find((d) => d.id === sceneId);
+        if (!desc)
+            return;
+
         this._loadSceneDesc(group, desc, sceneState);
     }
 
@@ -471,7 +484,7 @@ class Main {
         return this.saveManager.getSaveStateSlotKey(this._getCurrentSceneDescId(), slotIndex);
     }
 
-    private _onSceneChanged(scene: SceneGfx, sceneStateStr: string): void {
+    private _onSceneChanged(scene: SceneGfx, sceneStateStr: string | null): void {
         scene.onstatechanged = () => {
             this._saveState();
         };
@@ -530,15 +543,15 @@ class Main {
         const device = this.viewer.gfxDevice;
 
         // Tear down old scene.
-        if (this.abortController !== null)
-            this.abortController.abort();
+        if (this.dataFetcher !== null)
+            this.dataFetcher.abort();
         this.ui.destroyScene();
         if (this.viewer.scene && !this.destroyablePool.includes(this.viewer.scene))
             this.destroyablePool.push(this.viewer.scene);
         this.viewer.setScene(null);
         for (let i = 0; i < this.destroyablePool.length; i++)
             this.destroyablePool[i].destroy(device);
-        this.abortController = new AbortController();
+        this.destroyablePool.length = 0;
         gfxDeviceGetImpl(this.viewer.gfxDevice).checkForLeaks();
 
         // Unhide any hidden scene groups upon being loaded.
@@ -551,15 +564,18 @@ class Main {
 
         this.ui.sceneSelect.setProgress(0);
 
-        const abortSignal = this.abortController.signal;
-        const progressMeter = this.ui.sceneSelect;
-        const dataFetcher = new DataFetcher(abortSignal, progressMeter);
+        const dataShare = this.dataShare;
+        const dataFetcher = this.dataFetcher;
+        dataFetcher.reset();
         const uiContainer: HTMLElement = document.createElement('div');
         this.ui.sceneUIContainer.appendChild(uiContainer);
         const destroyablePool: Destroyable[] = this.destroyablePool;
         const context: SceneContext = {
-            device, dataFetcher, uiContainer, destroyablePool,
+            device, dataFetcher, dataShare, uiContainer, destroyablePool,
         };
+
+        this.dataShare.pruneOldObjects(device);
+        this.dataShare.loadNewScene();
 
         this.loadingSceneDesc = sceneDesc;
         const promise = sceneDesc.createScene(device, context);
@@ -571,8 +587,8 @@ class Main {
 
         promise.then((scene: SceneGfx) => {
             if (this.loadingSceneDesc === sceneDesc) {
+                dataFetcher.setProgress();
                 this.loadingSceneDesc = null;
-                this.abortController = null;
                 this.viewer.setScene(scene);
                 this._onSceneChanged(scene, sceneStateStr);
             }

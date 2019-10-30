@@ -11,7 +11,7 @@ import { InputStream } from "./stream";
 export interface MetroidCharacter {
     charID: number;
     name: string;
-    model: CMDL;
+    model: CMDL | null;
     skinID: string;
     skelID: string;
 }

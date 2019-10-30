@@ -852,11 +852,6 @@
   resolved "https://registry.yarnpkg.com/@types/systemjs/-/systemjs-0.20.6.tgz#79838d2b4bce9c014330efa0b4c7b9345e830a72"
   integrity sha512-p3yv9sBBJXi3noUG216BpUI7VtVBUAvBIfZNTiDROUY31YBfsFHM4DreS7XMekN8IjtX0ysvCnm6r3WnirnNeA==
 
-"@types/webassembly-js-api@0.0.3":
-  version "0.0.3"
-  resolved "https://registry.yarnpkg.com/@types/webassembly-js-api/-/webassembly-js-api-0.0.3.tgz#c659516363288a3859465787ca91bd53d755a883"
-  integrity sha512-9c8QN9vJKF8PYeMeh459PbCfNJVF7rJN9F7AAv7zrLvkmFC8/9OhUTEDZnFl8JzyHDArqbEWaNh72EpmzBKo9Q==
-
 "@types/webgl2@0.0.4":
   version "0.0.4"
   resolved "https://registry.yarnpkg.com/@types/webgl2/-/webgl2-0.0.4.tgz#c3b0f9d6b465c66138e84e64cb3bdf8373c2c279"
@@ -1017,7 +1012,7 @@ asn1@~0.2.3:
 
 "assemblyscript@github:AssemblyScript/assemblyscript":
   version "0.7.0"
-  resolved "https://codeload.github.com/AssemblyScript/assemblyscript/tar.gz/678593d7bd8ee9573eadbd43e3635e0bc0b8e15e"
+  resolved "https://codeload.github.com/AssemblyScript/assemblyscript/tar.gz/3dd69307bb0401a3ac30e9486b9479f94154644c"
   dependencies:
     "@protobufjs/utf8" "^1.1.0"
     binaryen "84.0.0-nightly.20190522"
@@ -4812,7 +4807,15 @@ source-map-resolve@^0.5.0:
     source-map-url "^0.4.0"
     urix "^0.1.0"
 
-source-map-support@^0.5.12, source-map-support@~0.5.10, source-map-support@~0.5.12:
+source-map-support@^0.5.12:
+  version "0.5.16"
+  resolved "https://registry.yarnpkg.com/source-map-support/-/source-map-support-0.5.16.tgz#0ae069e7fe3ba7538c64c98515e35339eac5a042"
+  integrity sha512-efyLRJDr68D9hBBNIPWFjhpFzURh+KJykQwvMyW5UiZzYwoF6l4YMMDIJJEyFWxWCqfyxLzz6tSfUFR+kXXsVQ==
+  dependencies:
+    buffer-from "^1.0.0"
+    source-map "^0.6.0"
+
+source-map-support@~0.5.10, source-map-support@~0.5.12:
   version "0.5.12"
   resolved "https://registry.yarnpkg.com/source-map-support/-/source-map-support-0.5.12.tgz#b4f3b10d51857a5af0138d3ce8003b201613d599"
   integrity sha512-4h2Pbvyy15EE02G+JOZpUCmqWJuqrs+sEkzewTm++BPi7Hvn/HwcqLAcNxYAyI0x13CpPPn+kMjl+hplXMHITQ==
