@@ -216,7 +216,21 @@ export function drawWorldSpaceAABB(ctx: CanvasRenderingContext2D, camera: Camera
     ctx.stroke();
 }
 
-export function drawWorldSpacePoint(ctx: CanvasRenderingContext2D, camera: Camera, v: vec3, color: Color = Magenta, radius: number = 2): void {
+export function drawWorldSpacePoint(ctx: CanvasRenderingContext2D, camera: Camera, v: vec3, color: Color = Magenta, size: number = 4): void {
+    const cw = ctx.canvas.width;
+    const ch = ctx.canvas.height;
+    vec4.set(p[0], v[0], v[1], v[2], 1.0);
+    transformToClipSpace(ctx, camera, 1);
+    if (shouldCull(p[0])) return;
+
+    const x = ( p[0][0] + 1) * cw / 2;
+    const y = (-p[0][1] + 1) * ch / 2;
+    const rad = size >>> 1;
+    ctx.fillStyle = colorToCSS(color);
+    ctx.fillRect(x - rad, y - rad, size, size);
+}
+
+export function drawWorldSpaceText(ctx: CanvasRenderingContext2D, camera: Camera, v: vec3, text: string, color: Color = Magenta): void {
     const cw = ctx.canvas.width;
     const ch = ctx.canvas.height;
     vec4.set(p[0], v[0], v[1], v[2], 1.0);
@@ -226,7 +240,10 @@ export function drawWorldSpacePoint(ctx: CanvasRenderingContext2D, camera: Camer
     const x = ( p[0][0] + 1) * cw / 2;
     const y = (-p[0][1] + 1) * ch / 2;
     ctx.fillStyle = colorToCSS(color);
-    ctx.fillRect(x - radius, y - radius, radius, radius);
+    ctx.textBaseline = 'bottom';
+    ctx.textAlign = 'start';
+    ctx.font = '14pt monospace';
+    ctx.fillText(text, x, y);
 }
 
 export function drawScreenSpaceProjection(ctx: CanvasRenderingContext2D, proj: ScreenSpaceProjection, color: Color = Magenta): void {

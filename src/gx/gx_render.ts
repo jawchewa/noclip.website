@@ -84,7 +84,7 @@ export function fillLightData(d: Float32Array, offs: number, light: GX_Material.
 }
 
 export function fillTextureMappingInfo(d: Float32Array, offs: number, textureMapping: TextureMapping): number {
-    return fillVec4(d, offs, 1 / textureMapping.width, (textureMapping.flipY ? -1 : 1) / textureMapping.height, 0, textureMapping.lodBias);
+    return fillVec4(d, offs, textureMapping.width, (textureMapping.flipY ? -1 : 1) * textureMapping.height, 0, textureMapping.lodBias);
 }
 
 function fillMaterialParamsDataWithOptimizations(material: GX_Material.GXMaterial, d: Float32Array, bOffs: number, materialParams: MaterialParams): void {
@@ -506,13 +506,13 @@ export class GXShapeHelperGfx {
     }
 }
 
-export const bindingLayouts: GfxBindingLayoutDescriptor[] = [
+export const gxBindingLayouts: GfxBindingLayoutDescriptor[] = [
     { numUniformBuffers: 3, numSamplers: 8, },
 ];
 
 const sceneParams = new SceneParams();
 export function fillSceneParamsDataOnTemplate(renderInst: GfxRenderInst, viewerInput: Viewer.ViewerRenderInput, sceneParamsScratch = sceneParams): void {
-    fillSceneParams(sceneParamsScratch, viewerInput.camera, viewerInput.viewportWidth, viewerInput.viewportHeight);
+    fillSceneParams(sceneParamsScratch, viewerInput.camera, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
 
     let offs = renderInst.getUniformBufferOffset(ub_SceneParams);
     const d = renderInst.mapUniformBufferF32(ub_SceneParams);
@@ -522,7 +522,7 @@ export function fillSceneParamsDataOnTemplate(renderInst: GfxRenderInst, viewerI
 export class GXRenderHelperGfx extends GfxRenderHelper {
     public pushTemplateRenderInst(): GfxRenderInst {
         const template = super.pushTemplateRenderInst();
-        template.setBindingLayouts(bindingLayouts);
+        template.setBindingLayouts(gxBindingLayouts);
         template.allocateUniformBuffer(ub_SceneParams, u_SceneParamsBufferSize);
         return template;
     }
@@ -549,9 +549,8 @@ export abstract class BasicGXRendererHelper implements Viewer.SceneGfx {
         device.submitPass(hostAccessPass);
 
         const renderInstManager = this.renderHelper.renderInstManager;
-        this.renderTarget.setParameters(device, viewerInput.viewportWidth, viewerInput.viewportHeight);
-        const passRenderer = this.renderTarget.createRenderPass(device, this.clearRenderPassDescriptor);
-        passRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        this.renderTarget.setParameters(device, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
+        const passRenderer = this.renderTarget.createRenderPass(device, viewerInput.viewport, this.clearRenderPassDescriptor);
         renderInstManager.drawOnPassRenderer(device, passRenderer);
         renderInstManager.resetRenderInsts();
         return passRenderer;

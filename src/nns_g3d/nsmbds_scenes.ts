@@ -2,10 +2,6 @@
 // New Super Mario Bros DS
 
 import * as Viewer from '../viewer';
-import * as NSBMD from './nsbmd';
-import * as NSBTA from './nsbta';
-import * as NSBTP from './nsbtp';
-import * as NSBTX from './nsbtx';
 
 import { DataFetcher, DataFetcherFlags } from '../DataFetcher';
 import ArrayBufferSlice from '../ArrayBufferSlice';
@@ -18,6 +14,7 @@ import { FakeTextureHolder } from '../TextureHolder';
 import { GfxRenderInstManager } from '../gfx/render/GfxRenderer';
 import { GfxRenderDynamicUniformBuffer } from '../gfx/render/GfxRenderDynamicUniformBuffer';
 import { SceneContext } from '../SceneBase';
+import { BMD0, parseNSBMD, BTX0, parseNSBTX, BTP0, BTA0, parseNSBTP, parseNSBTA } from './NNS_G3D';
 
 export class WorldMapRenderer implements Viewer.SceneGfx {
     public renderTarget = new BasicRenderTarget();
@@ -52,18 +49,16 @@ export class WorldMapRenderer implements Viewer.SceneGfx {
         this.prepareToRender(device, hostAccessPass, viewerInput);
         device.submitPass(hostAccessPass);
 
-        this.renderTarget.setParameters(device, viewerInput.viewportWidth, viewerInput.viewportHeight);
+        this.renderTarget.setParameters(device, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
 
         // First, render the skybox.
-        const skyboxPassRenderer = this.renderTarget.createRenderPass(device, transparentBlackFullClearRenderPassDescriptor);
-        skyboxPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        const skyboxPassRenderer = this.renderTarget.createRenderPass(device, viewerInput.viewport, transparentBlackFullClearRenderPassDescriptor);
         this.renderInstManager.setVisibleByFilterKeyExact(G3DPass.SKYBOX);
         this.renderInstManager.drawOnPassRenderer(device, skyboxPassRenderer);
         skyboxPassRenderer.endPass(null);
         device.submitPass(skyboxPassRenderer);
         // Now do main pass.
-        const mainPassRenderer = this.renderTarget.createRenderPass(device, depthClearRenderPassDescriptor);
-        mainPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        const mainPassRenderer = this.renderTarget.createRenderPass(device, viewerInput.viewport, depthClearRenderPassDescriptor);
         this.renderInstManager.setVisibleByFilterKeyExact(G3DPass.MAIN);
         this.renderInstManager.drawOnPassRenderer(device, mainPassRenderer);
 
@@ -88,35 +83,35 @@ class NewSuperMarioBrosDSSceneDesc implements Viewer.SceneDesc {
     constructor(public worldNumber: number, public name: string, public id: string = '' + worldNumber) {
     }
 
-    private fetchBMD(path: string, dataFetcher: DataFetcher): Promise<NSBMD.BMD0 | null> {
+    private fetchBMD(path: string, dataFetcher: DataFetcher): Promise<BMD0 | null> {
         return dataFetcher.fetchData(path, DataFetcherFlags.ALLOW_404).then((buffer: ArrayBufferSlice) => {
             if (buffer.byteLength === 0)
                 return null;
-            return NSBMD.parse(buffer);
+            return parseNSBMD(buffer);
         });
     }
 
-    private fetchBTX(path: string, dataFetcher: DataFetcher): Promise<NSBTX.BTX0 | null> {
+    private fetchBTX(path: string, dataFetcher: DataFetcher): Promise<BTX0 | null> {
         return dataFetcher.fetchData(path, DataFetcherFlags.ALLOW_404).then((buffer: ArrayBufferSlice) => {
             if (buffer.byteLength === 0)
                 return null;
-            return NSBTX.parse(buffer);
+            return parseNSBTX(buffer);
         });
     }
 
-    private fetchBTA(path: string, dataFetcher: DataFetcher): Promise<NSBTA.BTA0 | null> {
+    private fetchBTA(path: string, dataFetcher: DataFetcher): Promise<BTA0 | null> {
         return dataFetcher.fetchData(path, DataFetcherFlags.ALLOW_404).then((buffer: ArrayBufferSlice) => {
             if (buffer.byteLength === 0)
                 return null;
-            return NSBTA.parse(buffer);
+            return parseNSBTA(buffer);
         });
     }
 
-    private fetchBTP(path: string, dataFetcher: DataFetcher): Promise<NSBTP.BTP0 | null> {
+    private fetchBTP(path: string, dataFetcher: DataFetcher): Promise<BTP0 | null> {
         return dataFetcher.fetchData(path, DataFetcherFlags.ALLOW_404).then((buffer: ArrayBufferSlice) => {
             if (buffer.byteLength === 0)
                 return null;
-            return NSBTP.parse(buffer);
+            return parseNSBTP(buffer);
         });
     }
 
@@ -131,10 +126,10 @@ class NewSuperMarioBrosDSSceneDesc implements Viewer.SceneDesc {
         if (_bmd === null)
             return null;
 
-        const bmd = assertExists(_bmd as NSBMD.BMD0 | null);
-        const btx = _btx as NSBTX.BTX0 | null;
-        const bta = _bta as NSBTA.BTA0 | null;
-        const btp = _btp as NSBTP.BTP0 | null;
+        const bmd = assertExists(_bmd as BMD0 | null);
+        const btx = _btx as BTX0 | null;
+        const bta = _bta as BTA0 | null;
+        const btp = _btp as BTP0 | null;
         assert(bmd.models.length === 1);
 
         return new ObjectData(bmd, btx, bta, btp);
@@ -224,7 +219,7 @@ class NewSuperMarioBrosDSSceneDesc implements Viewer.SceneDesc {
 const enum WorldMapObjType { ROUTE_POINT, START_POINT, TOWER, CASTLE, BIG_CASTLE };
 
 class ObjectData {
-    constructor(public bmd: NSBMD.BMD0, public btx: NSBTX.BTX0 | null, public bta: NSBTA.BTA0 | null, public btp: NSBTP.BTP0 | null) {
+    constructor(public bmd: BMD0, public btx: BTX0 | null, public bta: BTA0 | null, public btp: BTP0 | null) {
     }
 }
 

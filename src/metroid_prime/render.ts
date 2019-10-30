@@ -295,6 +295,19 @@ class MaterialGroupInstance {
                 const z = (scratchMatrix[13] * 0.05 * uvAnimation.phi) % 1.0;
                 const a = uvAnimation.theta * 0.5;
                 texEnvMtx(postMtx, a, -a, xy, z);
+            } else if (uvAnimation.type === UVAnimationType.SRT) {
+                const theta = uvAnimation.rotationStatic + (animTime * uvAnimation.rotationScroll);
+                const sinR = Math.sin(theta);
+                const cosR = Math.cos(theta);
+                texMtx[0] = uvAnimation.scaleS * cosR;
+                texMtx[1] = uvAnimation.scaleT * -sinR;
+                texMtx[4] = uvAnimation.scaleS * sinR;
+                texMtx[5] = uvAnimation.scaleT * cosR;
+                // Bug in the original game: Seems like a copy/paste error caused transTStatic to be used for both
+                // translations here...
+                texMtx[12] = uvAnimation.scaleS * (uvAnimation.transTStatic + (uvAnimation.transSScroll * animTime)) + (0.5 - (0.5 * (cosR - sinR)));
+                texMtx[13] = uvAnimation.scaleT * (uvAnimation.transTStatic + (uvAnimation.transTScroll * animTime)) + (0.5 - (0.5 * (sinR + cosR)));
+                // TODO: Handle uvAnimation.transformType
             }
         }
 
@@ -527,7 +540,7 @@ export class MREARenderer {
                     const actor = new Actor(ent, cmdlRenderer);
                     this.actors.push(actor);
                 }
-
+ 
                 if (ent.type === MP1EntityType.AreaAttributes || ent.type === "REAA") {
                     const areaAttributes = ent as AreaAttributes;
 

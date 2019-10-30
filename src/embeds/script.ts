@@ -13,7 +13,7 @@ import { mat4 } from "gl-matrix";
 import { BMDModelInstance, BMDModel } from "../j3d/render";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderGraph";
 import { standardFullClearRenderPassDescriptor, BasicRenderTarget } from "../gfx/helpers/RenderTargetHelpers";
-import { bindingLayouts, ub_SceneParams, u_SceneParamsBufferSize, fillSceneParamsDataOnTemplate } from "../gx/gx_render";
+import { gxBindingLayouts, ub_SceneParams, u_SceneParamsBufferSize, fillSceneParamsDataOnTemplate } from "../gx/gx_render";
 import { OrbitCameraController } from "../Camera";
 import { getDataURLForPath } from "../DataFetcher";
 
@@ -49,7 +49,7 @@ class J3DGraphNode extends BMDModelInstance implements GraphBase {
 
     public prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: ViewerRenderInput): void {
         const template = renderInstManager.pushTemplateRenderInst();
-        template.setBindingLayouts(bindingLayouts);
+        template.setBindingLayouts(gxBindingLayouts);
         template.allocateUniformBuffer(ub_SceneParams, u_SceneParamsBufferSize);
         fillSceneParamsDataOnTemplate(template, viewerInput);
         super.prepareToRender(device, renderInstManager, viewerInput);
@@ -91,9 +91,8 @@ class ScriptRenderer implements SceneGfx {
         device.submitPass(hostAccessPass);
     
         const renderInstManager = this.renderHelper.renderInstManager;
-        this.renderTarget.setParameters(device, viewerInput.viewportWidth, viewerInput.viewportHeight);
-        const passRenderer = this.renderTarget.createRenderPass(device, this.clearRenderPassDescriptor);
-        passRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        this.renderTarget.setParameters(device, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
+        const passRenderer = this.renderTarget.createRenderPass(device, viewerInput.viewport, this.clearRenderPassDescriptor);
         renderInstManager.drawOnPassRenderer(device, passRenderer);
         renderInstManager.resetRenderInsts();
         return passRenderer;

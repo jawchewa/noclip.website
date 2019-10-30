@@ -1,6 +1,6 @@
 
 import * as Viewer from '../viewer';
-import * as Yaz0 from '../compression/Yaz0';
+import * as Yaz0 from '../Common/Compression/Yaz0';
 import * as BYML from '../byml';
 import { DataFetcher, DataFetcherFlags } from '../DataFetcher';
 import * as SARC from './sarc';
@@ -9,7 +9,7 @@ import { GfxDevice } from '../gfx/platform/GfxPlatform';
 import { BRTITextureHolder, BasicFRESRenderer, FMDLRenderer, FMDLData } from './render';
 import ArrayBufferSlice from '../ArrayBufferSlice';
 import { assert, assertExists } from '../util';
-import { mat4, quat, vec3 } from 'gl-matrix';
+import { mat4 } from 'gl-matrix';
 import { SceneContext } from '../SceneBase';
 import { computeModelMatrixSRT, MathConstants } from '../MathHelpers';
 
@@ -105,7 +105,7 @@ class ResourceSystem {
     }
 }
 
-type StageMap = { ObjectList: StageObject[], ZoneList?: StageObject[] }[];
+type StageMap = { ObjectList?: StageObject[], ZoneList?: StageObject[] }[];
 type Vector = { X: number, Y: number, Z: number };
 type StageObject = {
     UnitConfigName: string,
@@ -178,25 +178,27 @@ class OdysseySceneDesc implements Viewer.SceneDesc {
             const scenarioIndex = scenarioNum > 0 ? scenarioNum - 1 : 0;
             const entry = stageMap[scenarioIndex];
 
-            for (let i = 0; i < entry.ObjectList.length; i++)
-                resourceSystem.fetchData(device, dataFetcher, `ObjectData/${entry.ObjectList[i].UnitConfigName}`);
-            if (entry.ZoneList !== undefined) {
+            if (entry.ObjectList !== undefined)
+                for (let i = 0; i < entry.ObjectList.length; i++)
+                    resourceSystem.fetchData(device, dataFetcher, `ObjectData/${entry.ObjectList[i].UnitConfigName}`);
+            if (entry.ZoneList !== undefined)
                 for (let i = 0; i < entry.ZoneList.length; i++)
                     resourceSystem.fetchData(device, dataFetcher, `StageData/${entry.ZoneList[i].UnitConfigName}Map`);
-            }
 
             await resourceSystem.waitForLoad();
 
-            for (let i = 0; i < entry.ObjectList.length; i++) {
-                const stageObject = entry.ObjectList[i];
-                const fmdlData = resourceSystem.getFMDLData(device, `ObjectData/${stageObject.UnitConfigName}`);
-                if (fmdlData === null)
-                    continue;
+            if (entry.ObjectList !== undefined) {
+                for (let i = 0; i < entry.ObjectList.length; i++) {
+                    const stageObject = entry.ObjectList[i];
+                    const fmdlData = resourceSystem.getFMDLData(device, `ObjectData/${stageObject.UnitConfigName}`);
+                    if (fmdlData === null)
+                        continue;
 
-                const fmdlRenderer = new FMDLRenderer(device, cache, resourceSystem.textureHolder, fmdlData);
-                calcModelMtxFromTRSVectors(fmdlRenderer.modelMatrix, stageObject.Translate, stageObject.Rotate, stageObject.Scale);
-                mat4.mul(fmdlRenderer.modelMatrix, placement, fmdlRenderer.modelMatrix);
-                sceneRenderer.fmdlRenderers.push(fmdlRenderer);
+                    const fmdlRenderer = new FMDLRenderer(device, cache, resourceSystem.textureHolder, fmdlData);
+                    calcModelMtxFromTRSVectors(fmdlRenderer.modelMatrix, stageObject.Translate, stageObject.Rotate, stageObject.Scale);
+                    mat4.mul(fmdlRenderer.modelMatrix, placement, fmdlRenderer.modelMatrix);
+                    sceneRenderer.fmdlRenderers.push(fmdlRenderer);
+                }
             }
 
             if (entry.ZoneList !== undefined) {

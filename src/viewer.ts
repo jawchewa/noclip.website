@@ -4,7 +4,7 @@ import * as UI from './ui';
 import InputManager from './InputManager';
 import { CameraController, Camera } from './Camera';
 import { TextureHolder } from './TextureHolder';
-import { GfxDevice, GfxSwapChain, GfxRenderPass, GfxDebugGroup } from './gfx/platform/GfxPlatform';
+import { GfxDevice, GfxSwapChain, GfxRenderPass, GfxDebugGroup, GfxLoadDisposition } from './gfx/platform/GfxPlatform';
 import { createSwapChainForWebGL2, gfxDeviceGetImpl, getPlatformTexture } from './gfx/platform/GfxPlatformWebGL2';
 import { downloadTextureToCanvas } from './Screenshot';
 import { RenderStatistics, RenderStatisticsTracker } from './RenderStatistics';
@@ -20,8 +20,9 @@ export interface ViewerRenderInput {
     camera: Camera;
     time: number;
     deltaTime: number;
-    viewportWidth: number;
-    viewportHeight: number;
+    backbufferWidth: number;
+    backbufferHeight: number;
+    viewport: NormalizedViewportCoords;
 }
 
 export interface SceneGfx {
@@ -44,6 +45,12 @@ function resetGfxDebugGroup(group: GfxDebugGroup): void {
     group.triangleCount = 0;
 }
 
+export function resizeCanvas(canvas: HTMLCanvasElement, width: number, height: number, devicePixelRatio: number): void {
+    canvas.setAttribute('style', `width: ${width}px; height: ${height}px;`);
+    canvas.width = width * devicePixelRatio;
+    canvas.height = height * devicePixelRatio;
+}
+
 export class Viewer {
     public inputManager: InputManager;
     public cameraController: CameraController | null = null;
@@ -59,6 +66,7 @@ export class Viewer {
     public gfxDevice: GfxDevice;
     public viewerRenderInput: ViewerRenderInput;
     public renderStatisticsTracker = new RenderStatisticsTracker();
+    public viewport: NormalizedViewportCoords = { x: 0, y: 0, w: 1, h: 1 };
 
     public scene: SceneGfx | null = null;
 
@@ -77,8 +85,9 @@ export class Viewer {
             camera: this.camera,
             time: this.sceneTime,
             deltaTime: 0,
-            viewportWidth: 0,
-            viewportHeight: 0,
+            backbufferWidth: 0,
+            backbufferHeight: 0,
+            viewport: this.viewport,
         };
     }
 
@@ -100,8 +109,8 @@ export class Viewer {
 
     private renderGfxPlatform(): void {
         this.viewerRenderInput.time = this.sceneTime;
-        this.viewerRenderInput.viewportWidth = this.canvas.width;
-        this.viewerRenderInput.viewportHeight = this.canvas.height;
+        this.viewerRenderInput.backbufferWidth = this.canvas.width;
+        this.viewerRenderInput.backbufferHeight = this.canvas.height;
         this.gfxSwapChain.configureSwapChain(this.canvas.width, this.canvas.height);
 
         this.renderStatisticsTracker.beginFrame();
@@ -115,6 +124,7 @@ export class Viewer {
             renderPass.endPass(onscreenTexture);
             this.gfxDevice.submitPass(renderPass);
         }
+
         this.gfxSwapChain.present();
 
         this.gfxDevice.popDebugGroup();
@@ -166,7 +176,7 @@ export class Viewer {
         const aspect = this.canvas.width / this.canvas.height;
         camera.fovY = this.fovY;
         camera.aspect = aspect;
-        camera.setClipPlanes(10);
+        camera.setClipPlanes(5);
 
         if (this.cameraController) {
             const updated = this.cameraController.update(this.inputManager, dt);
@@ -187,7 +197,7 @@ export class Viewer {
         this.viewerRenderInput.deltaTime = 0;
     }
 
-    public takeScreenshotToCanvas(): HTMLCanvasElement {
+    public takeScreenshotToCanvas(opaque: boolean): HTMLCanvasElement {
         const canvas = document.createElement('canvas');
 
         // TODO(jstpierre)
@@ -199,7 +209,7 @@ export class Viewer {
             // TODO(jstpierre): Implement in Gfx somehow.
             const gl = gfxDeviceGetImpl(this.gfxDevice).gl;
             const width = gl.drawingBufferWidth, height = gl.drawingBufferHeight;
-            downloadTextureToCanvas(gl, getPlatformTexture(this.gfxSwapChain.getOnscreenTexture()), width, height, canvas);
+            downloadTextureToCanvas(gl, getPlatformTexture(this.gfxSwapChain.getOnscreenTexture()), width, height, canvas, opaque);
         }
 
         return canvas;
@@ -207,6 +217,7 @@ export class Viewer {
 }
 
 import { SceneDesc, SceneGroup } from "./SceneBase"
+import { NormalizedViewportCoords, standardFullClearRenderPassDescriptor } from './gfx/helpers/RenderTargetHelpers';
 export { SceneDesc, SceneGroup };
 
 interface ViewerOut {

@@ -1,20 +1,17 @@
 
-import { mat4, mat2d } from "gl-matrix";
+import { mat4, mat2d, vec3 } from "gl-matrix";
 import { GfxFormat, GfxDevice, GfxProgram, GfxBindingLayoutDescriptor, GfxHostAccessPass, GfxTexture, GfxBlendMode, GfxBlendFactor, GfxMipFilterMode, GfxTexFilterMode, GfxSampler, GfxTextureDimension, GfxMegaStateDescriptor } from '../gfx/platform/GfxPlatform';
 import * as Viewer from '../viewer';
-import * as NSBMD from './nsbmd';
-import * as NSBTA from "./nsbta";
-import * as NSBTP from "./nsbtp";
-import * as NITRO_GX from '../sm64ds/nitro_gx';
-import { readTexture, getFormatName, Texture, parseTexImageParamWrapModeS, parseTexImageParamWrapModeT, textureFormatIsTranslucent } from "../sm64ds/nitro_tex";
-import { NITRO_Program, VertexData } from '../sm64ds/render';
+import * as NITRO_GX from '../SuperMario64DS/nitro_gx';
+import { readTexture, getFormatName, Texture, parseTexImageParamWrapModeS, parseTexImageParamWrapModeT, textureFormatIsTranslucent } from "../SuperMario64DS/nitro_tex";
+import { NITRO_Program, VertexData } from '../SuperMario64DS/render';
 import { GfxRenderInstManager, GfxRenderInst, GfxRendererLayer, makeSortKeyOpaque } from "../gfx/render/GfxRenderer";
-import { TEX0, TEX0Texture } from "./nsbtx";
 import { TextureMapping } from "../TextureHolder";
 import { fillMatrix4x3, fillMatrix4x4, fillMatrix3x2, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 import { computeViewMatrix, computeViewMatrixSkybox, computeModelMatrixYBillboard } from "../Camera";
 import AnimationController from "../AnimationController";
 import { nArray, assertExists } from "../util";
+import { TEX0Texture, SRT0TexMtxAnimator, PAT0TexAnimator, TEX0, MDL0Model, MDL0Material, SRT0, PAT0, bindPAT0, bindSRT0, MDL0Node, MDL0Shape } from "./NNS_G3D";
 
 function textureToCanvas(bmdTex: TEX0Texture, pixels: Uint8Array, name: string): Viewer.Texture {
     const canvas = document.createElement("canvas");
@@ -41,12 +38,12 @@ class MaterialInstance {
     private textureMappings: TextureMapping[] = nArray(1, () => new TextureMapping());
     public viewerTextures: Viewer.Texture[] = [];
     public baseCtx: NITRO_GX.Context;
-    public srt0Animator: NSBTA.SRT0TexMtxAnimator | null = null;
-    public pat0Animator: NSBTP.PAT0TexAnimator | null = null;
+    public srt0Animator: SRT0TexMtxAnimator | null = null;
+    public pat0Animator: PAT0TexAnimator | null = null;
     private sortKey: number;
     private megaStateFlags: Partial<GfxMegaStateDescriptor>;
 
-    constructor(device: GfxDevice, tex0: TEX0, private model: NSBMD.MDL0Model, public material: NSBMD.MDL0Material) {
+    constructor(device: GfxDevice, tex0: TEX0, private model: MDL0Model, public material: MDL0Material) {
         this.texture = assertExists(tex0.textures.find((t) => t.name === this.material.textureName));
         this.translateTexture(device, tex0, this.material.textureName, this.material.paletteName);
         this.baseCtx = { color: { r: 0xFF, g: 0xFF, b: 0xFF }, alpha: this.material.alpha };
@@ -85,12 +82,12 @@ class MaterialInstance {
         };
     }
 
-    public bindSRT0(animationController: AnimationController, srt0: NSBTA.SRT0): void {
-        this.srt0Animator = NSBTA.bindSRT0(animationController, srt0, this.material.name);
+    public bindSRT0(animationController: AnimationController, srt0: SRT0): void {
+        this.srt0Animator = bindSRT0(animationController, srt0, this.material.name);
     }
 
-    public bindPAT0(animationController: AnimationController, pat0: NSBTP.PAT0): boolean {
-        this.pat0Animator = NSBTP.bindPAT0(animationController, pat0, this.material.name);
+    public bindPAT0(animationController: AnimationController, pat0: PAT0): boolean {
+        this.pat0Animator = bindPAT0(animationController, pat0, this.material.name);
         return this.pat0Animator !== null;
     }
 
@@ -170,28 +167,82 @@ class MaterialInstance {
 
 class Node {
     public modelMatrix = mat4.create();
-    public billboardY: boolean = false;
+    public billboardMode = BillboardMode.NONE;
 
-    constructor(public node: NSBMD.MDL0Node) {
+    constructor(public node: MDL0Node) {
     }
 
-    public calcMatrix(baseModelMatrix: mat4, viewerInput: Viewer.ViewerRenderInput): void {
-        if (this.billboardY) {
-            computeModelMatrixYBillboard(this.modelMatrix, viewerInput.camera);
-            mat4.mul(this.modelMatrix, this.node.jointMatrix, this.modelMatrix);
-        } else {
-            mat4.copy(this.modelMatrix, this.node.jointMatrix);
-        }
-
-        mat4.mul(this.modelMatrix, baseModelMatrix, this.modelMatrix);
+    public calcMatrix(baseModelMatrix: mat4): void {
+        mat4.mul(this.modelMatrix, baseModelMatrix, this.node.jointMatrix);
     }
+}
+
+function calcBBoardMtx(dst: mat4, m: mat4): void {
+    // The column vectors lengths here are the scale.
+    const mx = Math.hypot(m[0], m[1], m[2]);
+    const my = Math.hypot(m[4], m[5], m[6]);
+    const mz = Math.hypot(m[8], m[9], m[10]);
+
+    dst[0] = mx;
+    dst[4] = 0;
+    dst[8] = 0;
+    dst[12] = m[12];
+
+    dst[1] = 0;
+    dst[5] = my;
+    dst[9] = 0;
+    dst[13] = m[13];
+
+    dst[2] = 0;
+    dst[6] = 0;
+    dst[10] = mz;
+    dst[14] = m[14];
+
+    // Fill with junk to try and signal when something has gone horribly wrong. This should go unused,
+    // since this is supposed to generate a mat4x3 matrix.
+    dst[3] = 9999.0;
+    dst[7] = 9999.0;
+    dst[11] = 9999.0;
+    dst[15] = 9999.0;
+}
+
+const scratchVec3 = vec3.create();
+function calcYBBoardMtx(dst: mat4, m: mat4, v: vec3 = scratchVec3): void {
+    // The column vectors lengths here are the scale.
+    const mx = Math.hypot(m[0], m[1], m[2]);
+    const mz = Math.hypot(m[8], m[9], m[10]);
+
+    vec3.set(v, 0.0, -m[6], m[5]);
+    vec3.normalize(v, v);
+
+    dst[0] = mx;
+    dst[4] = m[4];
+    dst[8] = 0;
+    dst[12] = m[12];
+
+    dst[1] = 0;
+    dst[5] = m[5];
+    dst[9] = v[1] * mz;
+    dst[13] = m[13];
+
+    dst[2] = 0;
+    dst[6] = m[6];
+    dst[10] = v[2] * mz;
+    dst[14] = m[14];
+
+    // Fill with junk to try and signal when something has gone horribly wrong. This should go unused,
+    // since this is supposed to generate a mat4x3 matrix.
+    m[3] = 9999.0;
+    m[7] = 9999.0;
+    m[11] = 9999.0;
+    m[15] = 9999.0;
 }
 
 const scratchMat4 = mat4.create();
 class ShapeInstance {
     private vertexData: VertexData;
 
-    constructor(device: GfxDevice, private materialInstance: MaterialInstance, public node: Node, public shape: NSBMD.MDL0Shape, posScale: number) {
+    constructor(device: GfxDevice, private materialInstance: MaterialInstance, public node: Node, public shape: MDL0Shape, posScale: number) {
         const baseCtx = this.materialInstance.baseCtx;
         const nitroVertexData = NITRO_GX.readCmds(shape.dlBuffer, baseCtx, posScale);
         this.vertexData = new VertexData(device, nitroVertexData);
@@ -205,6 +256,11 @@ class ShapeInstance {
         }
 
         mat4.mul(dst, dst, this.node.modelMatrix);
+
+        if (this.node.billboardMode === BillboardMode.BB)
+            calcBBoardMtx(dst, dst);
+        else if (this.node.billboardMode === BillboardMode.BBY)
+            calcYBBoardMtx(dst, dst);
     }
 
     public prepareToRender(renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, isSkybox: boolean): void {
@@ -240,6 +296,10 @@ export const enum G3DPass {
 
 const bindingLayouts: GfxBindingLayoutDescriptor[] = [{ numUniformBuffers: 3, numSamplers: 1 }];
 
+const enum BillboardMode {
+    NONE, BB, BBY,
+}
+
 export class MDL0Renderer {
     public modelMatrix = mat4.create();
     public isSkybox: boolean = false;
@@ -251,7 +311,7 @@ export class MDL0Renderer {
     private nodes: Node[] = [];
     public viewerTextures: Viewer.Texture[] = [];
 
-    constructor(device: GfxDevice, public model: NSBMD.MDL0Model, private tex0: TEX0) {
+    constructor(device: GfxDevice, public model: MDL0Model, private tex0: TEX0) {
         const program = new NITRO_Program();
         program.defines.set('USE_VERTEX_COLOR', '1');
         program.defines.set('USE_TEXTURE', '1');
@@ -272,12 +332,12 @@ export class MDL0Renderer {
         this.execSBC(device);
     }
 
-    public bindSRT0(srt0: NSBTA.SRT0, animationController: AnimationController = this.animationController): void {
+    public bindSRT0(srt0: SRT0, animationController: AnimationController = this.animationController): void {
         for (let i = 0; i < this.materialInstances.length; i++)
             this.materialInstances[i].bindSRT0(animationController, srt0);
     }
 
-    public bindPAT0(device: GfxDevice, pat0: NSBTP.PAT0, animationController: AnimationController = this.animationController): void {
+    public bindPAT0(device: GfxDevice, pat0: PAT0, animationController: AnimationController = this.animationController): void {
         const hostAccessPass = device.createHostAccessPass();
         for (let i = 0; i < this.materialInstances.length; i++) {
             if (this.materialInstances[i].bindPAT0(animationController, pat0))
@@ -328,12 +388,15 @@ export class MDL0Renderer {
                 if (opt & 0x02)
                     srcIdx = view.getUint8(idx++);
             } else if (cmd === Op.BB) {
-                const nodeId = view.getUint8(idx++);
+                const nodeIdx = view.getUint8(idx++);
                 let destIdx = -1, srcIdx = -1;
                 if (opt & 0x01)
                     destIdx = view.getUint8(idx++);
                 if (opt & 0x02)
                     srcIdx = view.getUint8(idx++);
+
+                if (opt === 0)
+                    this.nodes[nodeIdx].billboardMode = BillboardMode.BB;
             } else if (cmd === Op.BBY) {
                 const nodeIdx = view.getUint8(idx++);
                 let destIdx = -1, srcIdx = -1;
@@ -343,7 +406,7 @@ export class MDL0Renderer {
                     srcIdx = view.getUint8(idx++);
 
                 if (opt === 0)
-                    this.nodes[nodeIdx].billboardY = true;
+                    this.nodes[nodeIdx].billboardMode = BillboardMode.BBY;
             } else if (cmd === Op.POSSCALE) {
                 //
             } else {
@@ -356,7 +419,7 @@ export class MDL0Renderer {
         this.animationController.setTimeInMilliseconds(viewerInput.time);
 
         for (let i = 0; i < this.nodes.length; i++)
-            this.nodes[i].calcMatrix(this.modelMatrix, viewerInput);
+            this.nodes[i].calcMatrix(this.modelMatrix);
 
         const template = renderInstManager.pushTemplateRenderInst();
         template.setBindingLayouts(bindingLayouts);

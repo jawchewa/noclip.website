@@ -4,7 +4,7 @@ import * as CMAB from './cmab';
 import * as CSAB from './csab';
 import * as ZAR from './zar';
 import * as ZSI from './zsi';
-import * as LzS from '../compression/LzS';
+import * as LzS from '../Common/Compression/LzS';
 
 import * as Viewer from '../viewer';
 import * as UI from '../ui';
@@ -53,17 +53,15 @@ export class OoT3DRenderer implements Viewer.SceneGfx {
         this.prepareToRender(device, hostAccessPass, viewerInput);
         device.submitPass(hostAccessPass);
 
-        this.renderTarget.setParameters(device, viewerInput.viewportWidth, viewerInput.viewportHeight);
+        this.renderTarget.setParameters(device, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
 
         // First, render the skybox.
-        const skyboxPassRenderer = this.renderTarget.createRenderPass(device, standardFullClearRenderPassDescriptor);
-        skyboxPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        const skyboxPassRenderer = this.renderTarget.createRenderPass(device, viewerInput.viewport, standardFullClearRenderPassDescriptor);
         executeOnPass(this.renderHelper.renderInstManager, device, skyboxPassRenderer, OoT3DPass.SKYBOX);
         skyboxPassRenderer.endPass(null);
         device.submitPass(skyboxPassRenderer);
         // Now do main pass.
-        const mainPassRenderer = this.renderTarget.createRenderPass(device, depthClearRenderPassDescriptor);
-        mainPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        const mainPassRenderer = this.renderTarget.createRenderPass(device, viewerInput.viewport, depthClearRenderPassDescriptor);
         executeOnPass(this.renderHelper.renderInstManager, device, mainPassRenderer, OoT3DPass.MAIN);
         this.renderHelper.renderInstManager.resetRenderInsts();
         return mainPassRenderer;
@@ -879,7 +877,7 @@ class SceneDesc implements Viewer.SceneDesc {
             else if (whichModel === 0x0C) //room 11's invisible spikes/hookshot
                 buildModel(zar, `model/m_HADinv0b_model.cmb`, 0.1);
             else
-                throw "whoops";
+                console.warn(`unimplemented: Bg_Haka_Megane ${hexzero(whichModel, 0x08)}`);
         }
         else if (actor.actorId === ActorId.Bg_Haka_Sgami) {
             const whichModel = actor.variable & 0xFFFF;

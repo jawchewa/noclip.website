@@ -340,3 +340,42 @@ export function computeUnitSphericalCoordinates(dst: vec3, azimuthal: number, po
     dst[1] = Math.cos(polar);
     dst[2] = sinP * Math.sin(azimuthal);
 }
+
+export function range(start: number, count: number): number[] {
+    const L: number[] = [];
+    for (let i = start; i < start + count; i++)
+        L.push(i);
+    return L;
+}
+
+export function normToLength(dst: vec3, len: number): void {
+    const vlen = vec3.length(dst);
+    if (vlen > 0) {
+        const inv = len / vlen;
+        dst[0] = dst[0] * inv;
+        dst[1] = dst[1] * inv;
+        dst[2] = dst[2] * inv;
+    }
+}
+
+export function normToLengthAndAdd(dst: vec3, a: vec3, len: number): void {
+    const vlen = vec3.length(a);
+    if (vlen > 0) {
+        const inv = len / vlen;
+        dst[0] += a[0] * inv;
+        dst[1] += a[1] * inv;
+        dst[2] += a[2] * inv;
+    }
+}
+
+export function isNearZero(v: number, min: number): boolean {
+    return v > -min && v < min;
+}
+
+export function isNearZeroVec3(v: vec3, min: number): boolean {
+    return (
+        v[0] > -min && v[0] < min &&
+        v[1] > -min && v[1] < min &&
+        v[2] > -min && v[2] < min
+    );
+}

@@ -56,7 +56,7 @@ export default class InputManager {
         this.toplevel.addEventListener('wheel', this._onWheel, { passive: false });
         this.toplevel.addEventListener('mousedown', (e) => {
             this.button = e.button;
-            GlobalGrabManager.takeGrab(this, e, { takePointerLock: this.usePointerLock });
+            GlobalGrabManager.takeGrab(this, e, { takePointerLock: this.usePointerLock, useGrabbingCursor: true, releaseOnMouseUp: true });
             if (this.onisdraggingchanged !== null)
                 this.onisdraggingchanged();
         });
@@ -156,14 +156,14 @@ export default class InputManager {
         this.callScrollListeners();
     };
 
-    public onMotion = (dx: number, dy: number): void => {
+    public onMotion (dx: number, dy: number) {
         this.dx += dx;
         this.dy += dy;
-    };
+    }
 
-    public onGrabReleased = (): void => {
+    public onGrabReleased () {
         this.button = -1;
         if (this.onisdraggingchanged !== null)
             this.onisdraggingchanged();
-    };
+    }
 }

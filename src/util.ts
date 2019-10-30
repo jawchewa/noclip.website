@@ -2,7 +2,10 @@
 import ArrayBufferSlice from './ArrayBufferSlice';
 
 export function assert(b: boolean, message: string = ""): void {
-    if (!b) { console.error(new Error().stack); throw new Error(`Assert fail: ${message}`); }
+    if (!b) {
+        console.error(new Error().stack);
+        throw new Error(`Assert fail: ${message}`);
+    }
 }
 
 function makeTextDecoder(encoding: string): TextDecoder | null {
@@ -108,4 +111,8 @@ export function wordCountFromByteCount(byteCount: number): number {
 export function concat<T>(dst: T[], src: T[]): void {
     for (let i = 0; i < src.length; i++)
         dst.push(src[i]);
+}
+
+export function fallback<T>(v: T | null, fallback: T): T {
+    return v !== null ? v : fallback;
 }

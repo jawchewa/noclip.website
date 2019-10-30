@@ -4,16 +4,17 @@
 import * as Viewer from './viewer';
 import { assertExists, assert } from './util';
 import { CameraControllerClass, OrbitCameraController, FPSCameraController, OrthoCameraController } from './Camera';
-import { Color, colorToCSS } from './Color';
+import { Color, colorToCSS, objIsColor } from './Color';
 import { TextureHolder } from './TextureHolder';
 import { GITHUB_REVISION_URL, GITHUB_URL, GIT_SHORT_REVISION } from './BuildVersion';
-import { SaveManager, GlobalSaveManager, SaveStateLocation } from "./SaveManager";
+import { SaveManager, GlobalSaveManager } from "./SaveManager";
 import { RenderStatistics } from './RenderStatistics';
-import InputManager from './InputManager';
 import { GlobalGrabManager } from './GrabManager';
+import { clamp } from './MathHelpers';
+import "reflect-metadata";
 
 // @ts-ignore
-import logoURL from './logo.png';
+import logoURL from './assets/logo.png';
 
 export const HIGHLIGHT_COLOR = 'rgb(210, 30, 30)';
 export const COOL_BLUE_COLOR = 'rgb(20, 105, 215)';
@@ -23,9 +24,22 @@ export function createDOMFromString(s: string): DocumentFragment {
     return document.createRange().createContextualFragment(s);
 }
 
+const enum FontelloIcon {
+    share = '\ue800',
+    resize_full = '\ue801',
+    pause = '\ue802',
+    resize_small = '\ue803',
+    play = '\ue804',
+    fast_backward = '\ue805',
+};
+
+function setFontelloIcon(elem: HTMLElement, icon: FontelloIcon): void {
+    elem.style.fontFamily = 'fontello';
+    elem.textContent = icon;
+}
+
 const OPEN_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 2 92 92" height="20" fill="white"><path d="M84.3765045,45.2316481 L77.2336539,75.2316205 L77.2336539,75.2316205 C77.1263996,75.6820886 76.7239081,76 76.2608477,76 L17.8061496,76 C17.2538649,76 16.8061496,75.5522847 16.8061496,75 C16.8061496,74.9118841 16.817796,74.8241548 16.8407862,74.739091 L24.7487983,45.4794461 C24.9845522,44.607157 25.7758952,44.0012839 26.6794815,44.0012642 L83.4036764,44.0000276 L83.4036764,44.0000276 C83.9559612,44.0000156 84.4036862,44.4477211 84.4036982,45.0000058 C84.4036999,45.0780163 84.3945733,45.155759 84.3765045,45.2316481 L84.3765045,45.2316481 Z M15,24 L26.8277004,24 L26.8277004,24 C27.0616369,24 27.2881698,24.0820162 27.4678848,24.2317787 L31.799078,27.8411064 L31.799078,27.8411064 C32.697653,28.5899189 33.8303175,29 35,29 L75,29 C75.5522847,29 76,29.4477153 76,30 L76,38 L76,38 C76,38.5522847 75.5522847,39 75,39 L25.3280454,39 L25.3280454,39 C23.0690391,39 21.0906235,40.5146929 20.5012284,42.6954549 L14.7844016,63.8477139 L14.7844016,63.8477139 C14.7267632,64.0609761 14.5071549,64.1871341 14.2938927,64.1294957 C14.1194254,64.0823423 13.9982484,63.9240598 13.9982563,63.7433327 L13.9999561,25 L14,25 C14.0000242,24.4477324 14.4477324,24.0000439 15,24.0000439 L15,24 Z"/></svg>`;
 const SEARCH_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 21 26.25" height="20" fill="white"><path d="M8.6953,14.3916 C5.5543,14.3916 3.0003,11.8356 3.0003,8.6956 C3.0003,5.5546 5.5543,2.9996 8.6953,2.9996 C11.8363,2.9996 14.3913,5.5546 14.3913,8.6956 C14.3913,11.8356 11.8363,14.3916 8.6953,14.3916 L8.6953,14.3916 Z M15.8423,13.7216 L15.6073,13.9566 C16.7213,12.4956 17.3913,10.6756 17.3913,8.6956 C17.3913,3.8936 13.4983,-0.0004 8.6953,-0.0004 C3.8933,-0.0004 0.0003,3.8936 0.0003,8.6956 C0.0003,13.4976 3.8933,17.3916 8.6953,17.3916 C10.6753,17.3916 12.4953,16.7216 13.9573,15.6076 L13.7213,15.8426 L18.3343,20.4546 L20.4553,18.3336 L15.8423,13.7216 Z"/></svg>`;
-const SAVE_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-8 -8 116 116" height="20" fill="white"><path fill="none" d="M35.763,37.954l30.977-0.021c2.118-0.001,4.296-2.033,4.296-4.15l-0.017-24.37L31.642,9.442l0.016,24.368   C31.658,35.928,33.645,37.955,35.763,37.954z M56.121,13.159l8.078-0.004c1.334-0.003,2.41,1.076,2.413,2.407l0.011,16.227   c-0.001,1.331-1.078,2.412-2.409,2.412l-8.082,0.005c-1.329,0.003-2.408-1.077-2.41-2.408l-0.01-16.23   C53.71,14.24,54.788,13.159,56.121,13.159z"/><path fill="none" d="M76.351,49.009H23.647c-2.457,0-4.449,2.079-4.449,4.644v34.044h61.605V53.652   C80.802,51.088,78.81,49.009,76.351,49.009z"/><path d="M56.132,34.206l8.082-0.005c1.331,0,2.408-1.081,2.409-2.412l-0.011-16.227c-0.003-1.331-1.08-2.411-2.413-2.407   l-8.078,0.004c-1.333,0-2.411,1.081-2.41,2.409l0.01,16.23C53.724,33.129,54.803,34.208,56.132,34.206z"/><path d="M92.756,22.267c-0.002-1.555-0.376-2.831-1.378-3.83c-0.645-0.644-7.701-7.692-11.327-11.318   c-1.279-1.271-3.68-2.121-5.468-2.12c-1.789,0.001-60.258,0.04-60.258,0.04C10.387,5.044,7.198,8.236,7.2,12.172l0.051,75.703   c0.003,3.939,3.197,7.126,7.134,7.125l71.29-0.048c3.937-0.001,7.127-3.197,7.126-7.131C92.8,87.82,92.756,23.228,92.756,22.267z    M71.019,9.414l0.017,24.37c0,2.117-2.178,4.148-4.296,4.15l-30.977,0.021c-2.117,0.001-4.104-2.026-4.104-4.144L31.642,9.442   L71.019,9.414z M80.802,87.697H19.198V53.652c0-2.564,1.992-4.644,4.449-4.644h52.704c2.459,0,4.451,2.079,4.451,4.644V87.697z"/></svg>`;
 const TEXTURES_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" height="20" fill="white"><path d="M143.5,143.5v300h300v-300H143.5z M274.8,237.2c10.3,0,18.7,8.4,18.7,18.9c0,10.3-8.4,18.7-18.7,18.7   c-10.3,0-18.7-8.4-18.7-18.7C256,245.6,264.4,237.2,274.8,237.2z M406,406H181v-56.2l56.2-56.1l37.5,37.3l75-74.8l56.2,56.1V406z"/><polygon points="387.2,68.6 68.5,68.6 68.5,368.5 106,368.5 106,106 387.2,106"/></svg>`;
 const FRUSTUM_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" height="20" fill="white"><polygon points="48.2573,19.8589 33.8981,15.0724 5,67.8384 48.2573,90.3684" /><polygon points="51.5652,19.8738 51.5652,90.3734 95,67.8392 65.9366,15.2701" /><polygon points="61.3189,13.2756 49.9911,9.6265 38.5411,13.1331 49.9213,16.9268" /></svg>`;
 const STATISTICS_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="5 0 55 60" height="16" fill="white"><g><polygon points="6.9,11.5 6.9,56 55.4,56 55.4,53 9.9,53 9.9,11.5"/><path d="M52.7,15.8c-2.7,0-4.9,2.2-4.9,4.9c0,1,0.3,1.8,0.8,2.6l-5,6.8c-0.4-0.1-0.9-0.2-1.3-0.2c-1.5,0-2.9,0.7-3.8,1.8l-5.6-2.8   c0-0.2,0.1-0.5,0.1-0.8c0-2.7-2.2-4.9-4.9-4.9s-4.9,2.2-4.9,4.9c0,1.1,0.3,2,0.9,2.8l-3.9,5.1c-0.5-0.2-1.1-0.3-1.7-0.3   c-2.7,0-4.9,2.2-4.9,4.9s2.2,4.9,4.9,4.9s4.9-2.2,4.9-4.9c0-1-0.3-2-0.8-2.7l4-5.2c0.5,0.2,1.1,0.3,1.6,0.3c1.4,0,2.6-0.6,3.5-1.5   l5.8,2.9c0,0.1,0,0.2,0,0.3c0,2.7,2.2,4.9,4.9,4.9c2.7,0,4.9-2.2,4.9-4.9c0-1.2-0.4-2.2-1.1-3.1l4.8-6.5c0.6,0.2,1.2,0.4,1.9,0.4   c2.7,0,4.9-2.2,4.9-4.9S55.4,15.8,52.7,15.8z"/></g></svg>`;
@@ -36,6 +50,7 @@ export const LAYER_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 
 export const TIME_OF_DAY_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" height="20" fill="white"><path d="M50,93.4C74,93.4,93.4,74,93.4,50C93.4,26,74,6.6,50,6.6C26,6.6,6.6,26,6.6,50C6.6,74,26,93.4,50,93.4z M37.6,22.8  c-0.6,2.4-0.9,5-0.9,7.6c0,18.2,14.7,32.9,32.9,32.9c2.6,0,5.1-0.3,7.6-0.9c-4.7,10.3-15.1,17.4-27.1,17.4  c-16.5,0-29.9-13.4-29.9-29.9C20.3,37.9,27.4,27.5,37.6,22.8z"/></svg>`;
 export const RENDER_HACKS_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 110 105" height="20" fill="white"><path d="M95,5v60H65c0-16.6-13.4-30-30-30V5H95z"/><path d="M65,65c0,16.6-13.4,30-30,30C18.4,95,5,81.6,5,65c0-16.6,13.4-30,30-30v30H65z"/></svg>`;
 export const SAND_CLOCK_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" height="20" fill="white"><g><path d="M79.3,83.3h-6.2H24.9h-6.2c-1.7,0-3,1.3-3,3s1.3,3,3,3h60.6c1.7,0,3-1.3,3-3S81,83.3,79.3,83.3z"/><path d="M18.7,14.7h6.2h48.2h6.2c1.7,0,3-1.3,3-3s-1.3-3-3-3H18.7c-1.7,0-3,1.3-3,3S17,14.7,18.7,14.7z"/><path d="M73.1,66c0-0.9-0.4-1.8-1.1-2.4L52.8,48.5L72,33.4c0.7-0.6,1.1-1.4,1.1-2.4V20.7H24.9V31c0,0.9,0.4,1.8,1.1,2.4l19.1,15.1   L26,63.6c-0.7,0.6-1.1,1.4-1.1,2.4v11.3h48.2V66z"/></g></svg>';
+export const VR_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" height="20" fill="white"><g><path d="M29,8H3A1,1,0,0,0,2,9V23a1,1,0,0,0,1,1H13a1,1,0,0,0,1-.83l.66-4A1.36,1.36,0,0,1,16,18a1.38,1.38,0,0,1,1.36,1.26L18,23.17A1,1,0,0,0,19,24H29a1,1,0,0,0,1-1V9A1,1,0,0,0,29,8ZM8.5,19A3.5,3.5,0,1,1,12,15.5,3.5,3.5,0,0,1,8.5,19Zm15,0A3.5,3.5,0,1,1,27,15.5,3.5,3.5,0,0,1,23.5,19Z"/></g></svg>`;
 
 export function setChildren(parent: Element, children: Element[]): void {
     // We want to swap children around without removing them, since removing them will cause
@@ -101,7 +116,7 @@ function svgStringToCSSBackgroundImage(svgString: string) {
     return `url(data:image/svg+xml,${encodeURI(svgString)})`;
 }
 
-class TextField implements Widget {
+export class TextField implements Widget {
     public textarea: HTMLInputElement;
     public elem: HTMLElement;
 
@@ -119,6 +134,7 @@ class TextField implements Widget {
 
     public selectAll() {
         this.textarea.setSelectionRange(0, this.textarea.value.length);
+        this.textarea.scrollLeft = 0;
     }
 
     public getValue() {
@@ -163,7 +179,6 @@ export class TextEntry implements Widget {
         };
         textarea.oninput = () => {
             this.textChanged();
-            this.syncClearButtonVisible();
         };
         this.toplevel.appendChild(this.textfield.elem);
 
@@ -246,7 +261,6 @@ export abstract class ScrollSelect implements Widget {
         this.setHeight(`200px`);
         this.scrollContainer.style.overflow = 'auto';
         this.scrollContainer.style.userSelect = 'none';
-        this.scrollContainer.style.webkitUserSelect = 'none';
         this.toplevel.appendChild(this.scrollContainer);
 
         this.elem = this.toplevel;
@@ -288,11 +302,13 @@ export abstract class ScrollSelect implements Widget {
 
             if (item.type === ScrollSelectItemType.Selectable) {
                 outer.style.cursor = 'pointer';
-                outer.style.paddingLeft = hasHeader ? '20px' : '';
+                outer.style.paddingLeft = hasHeader ? '24px' : '';
 
                 const selector = document.createElement('div');
                 selector.classList.add('selector');
                 selector.style.display = 'list-item';
+                selector.style.lineHeight = '24px';
+                selector.style.textShadow = `0 0 8px black`;
                 outer.appendChild(selector);
                 const textSpan = document.createElement('span');
                 textSpan.classList.add('text');
@@ -326,6 +342,10 @@ export abstract class ScrollSelect implements Widget {
                 const textSpan = document.createElement('span');
                 textSpan.classList.add('header');
                 textSpan.style.fontWeight = 'bold';
+                textSpan.style.lineHeight = `36px`;
+                textSpan.style.textShadow = `0 0 8px black`;
+                textSpan.style.paddingLeft = `8px`;
+                textSpan.style.verticalAlign = `baseline`;
                 textSpan.innerHTML = item.html;
                 outer.appendChild(textSpan);
                 hasHeader = true;
@@ -529,7 +549,6 @@ export class SingleSelect extends ScrollSelect {
         if (this.setHighlightFlair && this.highlightedIndex >= 0) {
             const flair = ensureFlairIndex(flairs, this.highlightedIndex);
             flair.background = HIGHLIGHT_COLOR;
-            flair.color = 'black';
             flair.fontWeight = 'bold';
         }
         this.setInternalFlairs(flairs);
@@ -553,6 +572,7 @@ export class MultiSelect extends ScrollSelect {
     cursor: pointer;
     background: #666;
     font-weight: bold;
+    user-select: none;
 }
 </style>
 <div class="AllButton">All</div><div class="NoneButton">None</div>
@@ -720,13 +740,12 @@ export class Panel implements Widget {
 
         this.header = document.createElement('h1');
         this.header.style.lineHeight = '28px';
-        this.header.style.width = '400px';
+        this.header.style.width = '440px';
         this.header.style.margin = '0';
         this.header.style.fontSize = '100%';
         this.header.style.textAlign = 'center';
         this.header.style.cursor = 'pointer';
         this.header.style.userSelect = 'none';
-        this.header.style.webkitUserSelect = 'none';
         this.header.style.display = 'grid';
         this.header.style.gridTemplateColumns = '28px 1fr';
         this.header.style.alignItems = 'center';
@@ -743,7 +762,7 @@ export class Panel implements Widget {
         this.headerContainer.appendChild(this.header);
 
         this.contents = document.createElement('div');
-        this.contents.style.width = '400px';
+        this.contents.style.width = '440px';
         this.mainPanel.appendChild(this.contents);
 
         this.elem = this.toplevel;
@@ -759,7 +778,7 @@ export class Panel implements Widget {
 
     private syncSize() {
         const widthExpanded = this.expanded || this.mainPanel.matches(':hover');
-        this.mainPanel.style.width = widthExpanded ? '400px' : '28px';
+        this.mainPanel.style.width = widthExpanded ? '440px' : '28px';
 
         const heightExpanded = this.expanded;
         if (heightExpanded) {
@@ -863,6 +882,7 @@ export class FloatingPanel implements Widget {
         this.toplevel.style.position = 'absolute';
         this.toplevel.style.left = '82px';
         this.toplevel.style.top = '32px';
+        this.toplevel.style.pointerEvents = 'auto';
         this.toplevel.tabIndex = -1;
 
         this.mainPanel = document.createElement('div');
@@ -881,14 +901,13 @@ export class FloatingPanel implements Widget {
         this.header.style.textAlign = 'center';
         this.header.style.cursor = 'pointer';
         this.header.style.userSelect = 'none';
-        this.header.style.webkitUserSelect = 'none';
         this.header.style.display = 'grid';
         this.header.style.gridTemplateColumns = '28px 1fr';
         this.header.style.alignItems = 'center';
         this.header.style.justifyItems = 'center';
         this.header.style.gridAutoFlow = 'column';
         this.header.addEventListener('mousedown', (e) => {
-            GlobalGrabManager.takeGrab(this, e, { takePointerLock: false });
+            GlobalGrabManager.takeGrab(this, e, { takePointerLock: false, useGrabbingCursor: true, releaseOnMouseUp: true });
         });
 
         this.headerContainer.appendChild(this.header);
@@ -901,6 +920,14 @@ export class FloatingPanel implements Widget {
         this.setWidth(400);
 
         this.elem = this.toplevel;
+
+        this.elem.onmouseover = () => {
+            this.elem.style.opacity = '1';
+        };
+        this.elem.onmouseout = () => {
+            this.elem.style.opacity = '0.2';
+        };
+        this.elem.style.opacity = '0.2';
     }
 
     public setWidth(v: number): void {
@@ -1168,7 +1195,6 @@ class SceneSelect extends Panel {
         if (selectedDescIndex >= 0) {
             const flair = ensureFlairIndex(sceneDescFlairs, selectedDescIndex);
             flair.background = this.getLoadingGradient('transparent');
-            flair.color = this.loadProgress > 0.5 ? 'black' : undefined;
             flair.fontWeight = 'bold';
             const pct = `${Math.round(this.loadProgress * 100)}%`;
             flair.extraHTML = this.loadProgress < 1.0 ? `<span style="font-weight: bold; color: #aaa">${pct}</span>` : ``;
@@ -1212,188 +1238,6 @@ function makeHashSafe(s: string): string {
 function buildShareURL(saveState: string): string {
     const loc = window.location;
     return `${loc.origin}${loc.pathname}#${makeHashSafe(saveState)}`;
-}
-
-export const enum SaveStatesAction { Load, LoadDefault, Save, Delete };
-
-export class SaveStatesPanel extends Panel {
-    public currentShareURLEntry: TextField;
-    public currentSceneDescIdEntry: TextField;
-    private currentSceneDescId: string;
-    private stateButtonsHeader: HTMLElement;
-    private stateButtons: HTMLElement[] = [];
-    private defaultStateButtons: HTMLElement[] = [];
-
-    public onsavestatesaction: (action: SaveStatesAction, key: string) => void;
-
-    constructor(private inputManager: InputManager) {
-        super();
-
-        this.setTitle(SAVE_ICON, 'Save States and Sharing');
-
-        GlobalSaveManager.addSaveStateListener(this._onSaveStateChanged.bind(this));
-        this.inputManager.addListener(this._onKeyEvent.bind(this));
-
-        this.stateButtonsHeader = document.createElement('div');
-        this.stateButtonsHeader.style.fontWeight = 'bold';
-        this.contents.appendChild(this.stateButtonsHeader);
-
-        const stateButtons = document.createElement('div');
-        stateButtons.style.display = 'grid';
-        stateButtons.style.gridAutoFlow = 'column';
-        stateButtons.style.gridGap = '8px';
-        for (let i = 1; i <= 9; i++) {
-            const button = document.createElement('div');
-            button.textContent = '' + i;
-            button.style.textAlign = 'center';
-            button.style.lineHeight = '1.2em';
-            button.style.userSelect = 'none';
-            this.stateButtons.push(button);
-            stateButtons.appendChild(button);
-        }
-        this.contents.appendChild(stateButtons);
-
-        const defaultStateButtonsHeader = document.createElement('div');
-        defaultStateButtonsHeader.textContent = 'Load Default Save State';
-        defaultStateButtonsHeader.style.fontWeight = 'bold';
-        defaultStateButtonsHeader.style.marginTop = '1em';
-        this.contents.appendChild(defaultStateButtonsHeader);
-
-        const defaultStateButtons = document.createElement('div');
-        defaultStateButtons.style.display = 'grid';
-        defaultStateButtons.style.gridAutoFlow = 'column';
-        defaultStateButtons.style.gridGap = '8px';
-        for (let i = 1; i <= 9; i++) {
-            const button = document.createElement('div');
-            button.textContent = '' + i;
-            button.style.textAlign = 'center';
-            button.style.lineHeight = '1.2em';
-            button.style.userSelect = 'none';
-            this.defaultStateButtons.push(button);
-            defaultStateButtons.appendChild(button);
-        }
-        this.contents.appendChild(defaultStateButtons);
-
-        const shareURLHeader = document.createElement('div');
-        shareURLHeader.textContent = 'Share URL';
-        shareURLHeader.style.fontWeight = 'bold';
-        shareURLHeader.style.marginTop = '1em';
-        this.contents.appendChild(shareURLHeader);
-
-        this.currentShareURLEntry = new TextField();
-        this.currentShareURLEntry.textarea.readOnly = true;
-        this.currentShareURLEntry.textarea.onfocus = () => {
-            this.currentShareURLEntry.selectAll();
-        };
-        this.contents.appendChild(this.currentShareURLEntry.elem);
-
-        const sceneDescIdHeader = document.createElement('div');
-        sceneDescIdHeader.textContent = 'Internal Scene ID';
-        sceneDescIdHeader.style.fontWeight = 'bold';
-        sceneDescIdHeader.style.marginTop = '1em';
-        this.contents.appendChild(sceneDescIdHeader);
-
-        this.currentSceneDescIdEntry = new TextField();
-        this.currentSceneDescIdEntry.textarea.readOnly = true;
-        this.currentSceneDescIdEntry.textarea.onfocus = () => {
-            this.currentSceneDescIdEntry.selectAll();
-        };
-        this.contents.appendChild(this.currentSceneDescIdEntry.elem);
-
-        const helpText = document.createElement('div');
-        helpText.style.marginTop = '1em';
-        helpText.innerHTML = `
-Hold <b>Shift</b> to save new save states<br>
-Hold <b>Alt</b> to delete saves you made<br>
-Use <b>&lt;Num&gt;</b> on keyboard for quick access
-`.trim();
-        this.contents.appendChild(helpText);
-    }
-
-    public pickSaveStatesAction(inputManager: InputManager): SaveStatesAction {
-        if (inputManager.isKeyDown('ShiftLeft'))
-            return SaveStatesAction.Save;
-        else if (inputManager.isKeyDown('AltLeft'))
-            return SaveStatesAction.Delete;
-        else
-            return SaveStatesAction.Load;
-    }
-
-    private initLoadStateButton(button: HTMLElement, action: SaveStatesAction, saveManager: SaveManager, key: string): void {
-        let active = false;
-        if (action !== SaveStatesAction.LoadDefault && saveManager.hasStateInLocation(key, SaveStateLocation.LocalStorage)) {
-            button.style.backgroundColor = COOL_BLUE_COLOR;
-            button.style.fontWeight = 'bold';
-            button.style.color = '';
-            active = true;
-        } else if (action === SaveStatesAction.LoadDefault && saveManager.hasStateInLocation(key, SaveStateLocation.Defaults)) {
-            button.style.backgroundColor = '#8fa88f';
-            button.style.fontWeight = 'bold';
-            button.style.color = '';
-            active = true;
-        } else if (action === SaveStatesAction.Save) {
-            button.style.backgroundColor = '#666';
-            button.style.fontWeight = 'bold';
-            button.style.color = 'white';
-            active = true;
-        } else {
-            button.style.backgroundColor = '#333';
-            button.style.fontWeight = '';
-            button.style.color = '#aaa';
-        }
-
-        if (active) {
-            button.style.cursor = 'pointer';
-            button.onclick = () => {
-                this.onsavestatesaction(action, key);
-            };
-        } else {
-            button.style.cursor = 'default';
-            button.onclick = null;
-        }
-    }
-
-    private initButtons(saveManager: SaveManager): void {
-        const sceneDescId = this.currentSceneDescId;
-        const action = this.pickSaveStatesAction(this.inputManager);
-
-        if (action === SaveStatesAction.Load)
-            this.stateButtonsHeader.textContent = `Load Save State`;
-        else if (action === SaveStatesAction.Save)
-            this.stateButtonsHeader.textContent = `Save Save State`;
-        else if (action === SaveStatesAction.Delete)
-            this.stateButtonsHeader.textContent = `Delete Save State`;
-
-        for (let i = 0; i < this.stateButtons.length; i++) {
-            const key = saveManager.getSaveStateSlotKey(sceneDescId, i + 1);
-            this.initLoadStateButton(this.stateButtons[i], action, saveManager, key);
-            this.initLoadStateButton(this.defaultStateButtons[i], SaveStatesAction.LoadDefault, saveManager, key);
-        }
-    }
-
-    private _onSaveStateChanged(saveManager: SaveManager): void {
-        this.initButtons(saveManager);
-    }
-
-    private _onKeyEvent(): void {
-        this.initButtons(GlobalSaveManager);
-    }
-
-    public expandAndFocus(): void {
-        this.setExpanded(true);
-        this.setAutoClosed(false);
-        this.currentShareURLEntry.textarea.focus({ preventScroll: true });
-    }
-
-    public setCurrentSceneDescId(sceneDescId: string): void {
-        this.currentSceneDescId = sceneDescId;
-        this.currentSceneDescIdEntry.setValue(sceneDescId);
-        this.initButtons(GlobalSaveManager);
-    }
-
-    public setSaveState(saveState: string) {
-        this.currentShareURLEntry.setValue(buildShareURL(saveState));
-    }
 }
 
 function cloneCanvas(dst: HTMLCanvasElement, src: HTMLCanvasElement): void {
@@ -1605,7 +1449,7 @@ export class Slider implements Widget {
 }
 </style>
 <div style="display: grid; grid-template-columns: 1fr 1fr; align-items: center">
-<div style="font-weight: bold" class="Label"></div>
+<div style="font-weight: bold; user-select: none" class="Label"></div>
 <input class="Slider" type="range">
 </div>
 `;
@@ -1658,7 +1502,7 @@ class ViewerSettings extends Panel {
     private invertYCheckbox: Checkbox;
     private invertXCheckbox: Checkbox;
 
-    constructor(private viewer: Viewer.Viewer) {
+    constructor(private ui: UI, private viewer: Viewer.Viewer) {
         super();
 
         this.setTitle(FRUSTUM_ICON, 'Viewer Settings');
@@ -1698,7 +1542,7 @@ class ViewerSettings extends Panel {
         this.camSpeedSlider = new Slider();
         this.camSpeedSlider.setLabel("Camera Speed");
         this.camSpeedSlider.setRange(0, 200);
-        this.camSpeedSlider.onvalue = this.updateCameraSpeed.bind(this);
+        this.camSpeedSlider.onvalue = this.updateCameraSpeedFromSlider.bind(this);
         sliderContainer.appendChild(this.camSpeedSlider.elem);
 
         this.viewer.addKeyMoveSpeedListener(this.onCameraController.bind(this));
@@ -1736,24 +1580,30 @@ class ViewerSettings extends Panel {
     }
 
     private onCameraController(): void {
-        this.camSpeedSlider.setValue(this.viewer.cameraController!.getKeyMoveSpeed());
-    }
-
-    private onScrollWheel(): void {
-        const v = this.camSpeedSlider.getValue() + Math.sign(this.viewer.inputManager.dz)*4;
-        this.camSpeedSlider.setValue(v);
-        this.updateCameraSpeed();
+        const keyMoveSpeed = this.viewer.cameraController!.getKeyMoveSpeed();
+        if (keyMoveSpeed !== null) {
+            setElementVisible(this.camSpeedSlider.elem, true);
+            this.camSpeedSlider.setValue(keyMoveSpeed);
+            this.ui.cameraSpeedIndicator.setCameraSpeed(keyMoveSpeed);
+        } else {
+            setElementVisible(this.camSpeedSlider.elem, false);
+        }
     }
 
     private setCameraControllerClass(cameraControllerClass: CameraControllerClass) {
         this.viewer.setCameraController(new cameraControllerClass());
         this.cameraControllerSelected(cameraControllerClass);
-        this.updateCameraSpeed();
+        this.updateCameraSpeedFromSlider();
     }
 
-    private updateCameraSpeed(): void {
-        if (this.viewer.cameraController !== null)
-            this.viewer.cameraController.setKeyMoveSpeed(this.camSpeedSlider.getValue());
+    private onScrollWheel(): void {
+        const v = clamp(this.camSpeedSlider.getValue() + Math.sign(this.viewer.inputManager.dz)*4, 0, 200);
+        this.ui.setMouseActive();
+        this.viewer.setKeyMoveSpeed(v);
+    }
+
+    private updateCameraSpeedFromSlider(): void {
+        this.viewer.setKeyMoveSpeed(this.camSpeedSlider.getValue());
     }
 
     public cameraControllerSelected(cameraControllerClass: CameraControllerClass) {
@@ -1762,7 +1612,6 @@ class ViewerSettings extends Panel {
         setElementHighlighted(this.cameraControllerOrtho, cameraControllerClass === OrthoCameraController);
 
         setElementVisible(this.fovSlider.elem, cameraControllerClass === FPSCameraController);
-        setElementVisible(this.camSpeedSlider.elem, cameraControllerClass === FPSCameraController);
     }
 
     private invertYChanged(saveManager: SaveManager, key: string): void {
@@ -2149,6 +1998,7 @@ used under Creative Commons CC-BY:</p>
 <li> Search <span>by</span> Alain W.
 <li> Save <span>by</span> Prime Icons
 <li> Overlap <span>by</span> Zach Bogart
+<li> VR <span>by</span> Fauzan Adaiima
 </ul>
 `;
 
@@ -2224,6 +2074,7 @@ export class LayerPanel extends Panel {
         const strings = layers.map((layer) => layer.name);
         this.multiSelect.setStrings(strings);
         this.syncLayerVisibility();
+        this.setVisible(layers.length > 1);
     }
 }
 
@@ -2249,7 +2100,7 @@ class TimeScrubber implements Widget {
         this.toplevel.style.cursor = 'grab';
         this.toplevel.style.position = 'relative';
         this.toplevel.addEventListener('mousedown', (e) => {
-            GlobalGrabManager.takeGrab(this, e, { takePointerLock: true });
+            GlobalGrabManager.takeGrab(this, e, { takePointerLock: true, useGrabbingCursor: true, releaseOnMouseUp: true });
         });
 
         this.track = document.createElement('canvas');
@@ -2350,9 +2201,10 @@ export class TimePanel extends Panel {
     private scrubber: TimeScrubber;
     private rewindButton: HTMLElement;
     private pausePlayButton: HTMLElement;
-    private isPlaying: boolean = true;
     private normalSceneTimeScale = 1;
+    public isPlaying: boolean = true;
 
+    public onplaypause: ((isPlaying: boolean) => void) | null = null;
     public ontimescrub: ((adj: number) => void) | null = null;
     public onrewind: (() => void) | null = null;
 
@@ -2421,8 +2273,10 @@ export class TimePanel extends Panel {
         return this.normalSceneTimeScale;
     }
 
-    public togglePausePlay(): void {
-        this.isPlaying = !this.isPlaying;
+    public togglePausePlay(shouldBePlaying: boolean = !this.isPlaying): void {
+        this.isPlaying = shouldBePlaying;
+        if (this.onplaypause !== null)
+            this.onplaypause(this.isPlaying);
         this.sync();
     }
 
@@ -2432,6 +2286,388 @@ export class TimePanel extends Panel {
             return;
 
         this.scrubber.update(sceneTime, timeScale);
+    }
+}
+
+class CameraSpeedIndicator implements BottomBarWidget {
+    public elem: HTMLElement;
+
+    private currentAnimation: Animation | null = null;
+
+    constructor() {
+        this.elem = document.createElement('div');
+        this.elem.style.opacity = '0';
+        this.elem.style.textShadow = `0 0 8px black`;
+        this.elem.style.padding = '0 8px';
+        this.elem.style.font = 'bold 16px monospace';
+        this.elem.style.color = 'white';
+        this.elem.style.pointerEvents = 'none';
+        this.elem.style.lineHeight = '32px';
+    }
+
+    public setArea(): void {
+    }
+
+    public isAnyPanelExpanded(): boolean {
+        return false;
+    }
+
+    public setCameraSpeed(v: number, displayIndicator: boolean = true): void {
+        const dispV = Math.max(v, 1);
+        this.elem.textContent = `Camera Speed: ${dispV.toFixed(0)}`;
+
+        const pct = `${(dispV / 200) * 100}%`;
+        this.elem.style.backgroundImage = `linear-gradient(to right, ${HIGHLIGHT_COLOR} ${pct}, rgba(0, 0, 0, 0.75) ${pct})`;
+
+        if (displayIndicator) {
+            if (this.currentAnimation !== null)
+                this.currentAnimation.cancel();
+
+            this.currentAnimation = this.elem.animate([
+                { opacity: 1, offset: 0 },
+                { opacity: 1, offset: 0.5 },
+                { opacity: 0, offset: 1.0 },
+            ], 2000);
+        }
+    }
+}
+
+const enum BottomBarArea { Left, Center, Right }
+
+function setAreaAnchor(elem: HTMLElement, area: BottomBarArea) {
+    if (area === BottomBarArea.Left) {
+        elem.style.transform = '';
+        elem.style.marginLeft = '';
+        elem.style.right = '';
+    } else if (area === BottomBarArea.Center) {
+        elem.style.transform = 'translate(-50%, 0)';
+        elem.style.marginLeft = '16px';
+        elem.style.right = '';
+    } else if (area === BottomBarArea.Right) {
+        elem.style.transform = '';
+        elem.style.marginLeft = '';
+        elem.style.right = '0';
+    }
+}
+
+interface BottomBarWidget {
+    elem: HTMLElement;
+    setArea(area: BottomBarArea): void;
+    isAnyPanelExpanded(): boolean;
+}
+
+class BottomBar {
+    public elem: HTMLElement;
+    public widgets: BottomBarWidget[] = [];
+
+    constructor() {
+        this.elem = document.createElement('div');
+        this.elem.style.position = 'absolute';
+        this.elem.style.bottom = '32px';
+        this.elem.style.left = '32px';
+        this.elem.style.right = '32px';
+        this.elem.style.display = 'grid';
+        this.elem.style.gridTemplateColumns = '1fr 1fr 1fr';
+        this.elem.style.gridGap = '8px';
+        this.elem.style.transition = '.1s ease-out';
+        this.elem.style.pointerEvents = 'none';
+
+        const leftArea = this.newArea();
+        leftArea.style.justifySelf = 'start';
+        this.elem.appendChild(leftArea);
+
+        const centerArea = this.newArea();
+        centerArea.style.justifySelf = 'center';
+        this.elem.appendChild(centerArea);
+
+        const rightArea = this.newArea();
+        rightArea.style.justifySelf = 'end';
+        this.elem.appendChild(rightArea);
+    }
+
+    private newArea(): HTMLElement {
+        const area = document.createElement('div');
+        area.style.display = 'grid';
+        area.style.gridAutoFlow = 'column';
+        area.style.gridGap = '8px';
+        return area;
+    }
+
+    public addWidgets(area: BottomBarArea, widget: BottomBarWidget): void {
+        widget.setArea(area);
+        this.widgets.push(widget);
+        this.elem.children.item(area)!.appendChild(widget.elem);
+    }
+
+    public isAnyPanelExpanded(): boolean {
+        for (let i = 0; i < this.widgets.length; i++)
+            if (this.widgets[i].isAnyPanelExpanded())
+                return true;
+        return false;
+    }
+
+    public setVisible(active: boolean): void {
+        this.elem.style.opacity = active ? '1' : '0';
+    }
+}
+
+abstract class SingleIconButton implements BottomBarWidget {
+    public elem: HTMLElement;
+    public icon: HTMLElement;
+    public tooltipElem: HTMLElement;
+    public isOpen: boolean = false;
+    public isHover: boolean = false;
+
+    constructor() {
+        this.elem = document.createElement('div');
+        this.elem.style.position = 'relative';
+        this.elem.style.transition = '.1s ease-out';
+        this.elem.style.width = '32px';
+        this.elem.style.height = '32px';
+        this.elem.style.pointerEvents = 'auto';
+        this.elem.onclick = this.onClick.bind(this);
+        this.elem.onmouseover = () => {
+            this.isHover = true;
+            this.syncStyle();
+        };
+        this.elem.onmouseout = () => {
+            this.isHover = false;
+            this.syncStyle();
+        };
+
+        this.icon = document.createElement('div');
+        this.icon.style.width = '32px';
+        this.icon.style.height = '32px';
+        this.icon.style.cursor = 'pointer';
+        this.icon.style.font = '16px monospace';
+        this.icon.style.color = 'white';
+        this.icon.style.lineHeight = '32px';
+        this.icon.style.textAlign = 'center';
+        this.icon.style.textShadow = '0px 0px 6px rgba(0, 0, 0, 0.5)';
+        this.icon.style.transition = '0.1s ease-out';
+        this.icon.style.userSelect = 'none';
+        this.elem.appendChild(this.icon);
+
+        this.tooltipElem = document.createElement('div');
+        this.tooltipElem.style.position = 'absolute';
+        this.tooltipElem.style.top = '0';
+        this.tooltipElem.style.marginTop = '-32px';
+        this.tooltipElem.style.padding = '0 8px';
+        this.tooltipElem.style.background = 'rgba(0, 0, 0, 0.75)';
+        this.tooltipElem.style.font = 'bold 16px monospace';
+        this.tooltipElem.style.lineHeight = '32px';
+        this.tooltipElem.style.color = 'white';
+        this.tooltipElem.style.textShadow = `0 0 8px black`;
+        this.tooltipElem.style.transition = '0.1s ease-out';
+        this.tooltipElem.style.pointerEvents = 'none';
+        this.tooltipElem.style.userSelect = 'none';
+        this.tooltipElem.style.opacity = '0';
+        this.elem.appendChild(this.tooltipElem);
+    }
+
+    public setArea(area: BottomBarArea): void {
+        setAreaAnchor(this.tooltipElem, area);
+    }
+
+    public isAnyPanelExpanded(): boolean {
+        return this.isOpen;
+    }
+
+    public abstract onClick(e: MouseEvent): void;
+
+    public setIsOpen(v: boolean): void {
+        this.isOpen = v;
+        this.syncStyle();
+    }
+
+    public syncStyle(): void {
+        if (this.isOpen) {
+            this.icon.style.background = 'rgba(0, 0, 0, 0.75)';
+            this.icon.style.color = HIGHLIGHT_COLOR;
+            this.tooltipElem.style.opacity = '0';
+        } else if (this.isHover) {
+            this.icon.style.background = 'rgba(0, 0, 0, 0.75)';
+            this.icon.style.color = 'white';
+            this.tooltipElem.style.opacity = '1';
+        } else {
+            this.icon.style.background = 'rgba(0, 0, 0, 0.0)';
+            this.icon.style.color = 'white';
+            this.tooltipElem.style.opacity = '0';
+        }
+    }
+}
+
+class PanelButton extends SingleIconButton {
+    protected panel: HTMLElement;
+
+    constructor() {
+        super();
+
+        this.panel = document.createElement('div');
+        this.panel.style.position = 'absolute';
+        this.panel.style.top = '0';
+        this.panel.style.marginTop = '-32px';
+        this.panel.style.lineHeight = '32px';
+        this.panel.style.background = 'rgba(0, 0, 0, 0.75)';
+        this.panel.style.transition = '0.1s ease-out';
+
+        this.elem.appendChild(this.panel);
+
+        this.syncStyle();
+    }
+
+    public setArea(area: BottomBarArea): void {
+        super.setArea(area);
+        setAreaAnchor(this.panel, area);
+    }
+
+    public onClick(e: MouseEvent): void {
+        if (!this.isOpen) {
+            this.setIsOpen(true);
+            GlobalGrabManager.takeGrab(this, e, { takePointerLock: false, useGrabbingCursor: false, releaseOnMouseUp: false, grabElement: this.panel });
+        }
+    }
+
+    public onMotion(): void {
+        // Doesn't matter.
+    }
+
+    public onGrabReleased(): void {
+        this.setIsOpen(false);
+    }
+
+    public syncStyle(): void {
+        super.syncStyle();
+
+        if (this.isOpen) {
+            this.panel.style.opacity = '1';
+            this.panel.style.pointerEvents = '';
+        } else {
+            this.panel.style.opacity = '0';
+            this.panel.style.pointerEvents = 'none';
+        }
+    }
+}
+
+class ShareButton extends PanelButton {
+    public currentShareURLEntry: TextField;
+    public copyButton: HTMLElement;
+    private copyButtonState: 'copy' | 'copied';
+
+    constructor() {
+        super();
+        this.tooltipElem.textContent = 'Share';
+        setFontelloIcon(this.icon, FontelloIcon.share);
+
+        this.panel.style.display = 'grid';
+        this.panel.style.width = '400px';
+        this.panel.style.gridAutoFlow = 'column';
+
+        this.currentShareURLEntry = new TextField();
+        this.currentShareURLEntry.textarea.readOnly = true;
+        this.currentShareURLEntry.textarea.onfocus = () => {
+            this.currentShareURLEntry.selectAll();
+        };
+        this.currentShareURLEntry.elem.style.width = 'auto';
+        this.currentShareURLEntry.elem.style.lineHeight = '32px';
+        this.currentShareURLEntry.elem.style.padding = '0 16px';
+        this.panel.appendChild(this.currentShareURLEntry.elem);
+
+        this.copyButton = document.createElement('div');
+        this.copyButton.style.font = '16px monospace';
+        this.copyButton.style.textShadow = '0px 0px 6px rgba(0, 0, 0, 0.5)';
+        this.copyButton.style.color = 'white';
+        this.copyButton.style.lineHeight = '32px';
+        this.copyButton.style.textAlign = 'center';
+        this.copyButton.style.userSelect = 'none';
+        this.copyButton.onclick = () => {
+            if (this.copyButtonState === 'copy') {
+                window.navigator.clipboard.writeText(this.currentShareURLEntry.getValue());
+                this.currentShareURLEntry.selectAll();
+                this.setCopyButtonState('copied');
+            }
+        };
+        this.setCopyButtonState('copy');
+        this.panel.appendChild(this.copyButton);
+    }
+
+    private setCopyButtonState(state: 'copy' | 'copied'): void {
+        this.copyButtonState = state;
+        if (state === 'copy') {
+            this.copyButton.style.backgroundColor = HIGHLIGHT_COLOR;
+            this.copyButton.style.cursor = 'pointer';
+            this.copyButton.textContent = 'COPY';
+        } else {
+            this.copyButton.style.backgroundColor = '#666';
+            this.copyButton.style.cursor = '';
+            this.copyButton.textContent = 'COPIED';
+        }
+    }
+
+    public setShareURL(shareURL: string) {
+        this.setCopyButtonState('copy');
+        this.currentShareURLEntry.setValue(shareURL);
+    }
+}
+
+class FullscreenButton extends SingleIconButton {
+    constructor() {
+        super();
+        document.addEventListener('fullscreenchange', this.syncStyle.bind(this));
+        this.syncStyle();
+    }
+
+    private isFS() {
+        return document.fullscreenElement === document.body;
+    }
+
+    public syncStyle() {
+        super.syncStyle();
+        setFontelloIcon(this.icon, this.isFS() ? FontelloIcon.resize_small : FontelloIcon.resize_full);
+        this.tooltipElem.textContent = this.isFS() ? 'Unfullscreen' : 'Fullscreen';
+    }
+
+    public onClick() {
+        if (this.isFS())
+            document.exitFullscreen();
+        else
+            document.body.requestFullscreen();
+    }
+}
+
+class RewindButton extends SingleIconButton {
+    public onrewind: (() => void) | null = null;
+
+    constructor() {
+        super();
+        setFontelloIcon(this.icon, FontelloIcon.fast_backward);
+        this.tooltipElem.textContent = 'Rewind';
+    }
+
+    public onClick() {
+        if (this.onrewind !== null)
+            this.onrewind();
+    }
+}
+
+class PlayPauseButton extends SingleIconButton {
+    public onplaypause: ((shouldBePlaying: boolean) => void) | null = null;
+    public isPlaying: boolean;
+
+    public syncStyle(): void {
+        super.syncStyle();
+        setFontelloIcon(this.icon, this.isPlaying ? FontelloIcon.pause : FontelloIcon.play);
+        this.tooltipElem.textContent = this.isPlaying ? 'Pause' : 'Play';
+    }
+
+    public setIsPlaying(isPlaying: boolean): void {
+        this.isPlaying = isPlaying;
+        this.syncStyle();
+    }
+
+    public onClick() {
+        if (this.onplaypause !== null)
+            this.onplaypause(!this.isPlaying);
     }
 }
 
@@ -2450,7 +2686,6 @@ export class UI {
     private panelContainer: HTMLElement;
 
     public sceneSelect: SceneSelect;
-    public saveStatesPanel: SaveStatesPanel;
     public textureViewer: TextureViewer;
     public viewerSettings: ViewerSettings;
     public statisticsPanel: StatisticsPanel;
@@ -2458,6 +2693,16 @@ export class UI {
     public panels: Panel[];
     private about: About;
     private faqPanel: FAQPanel;
+
+    public cameraSpeedIndicator = new CameraSpeedIndicator();
+    private bottomBar = new BottomBar();
+    private rewindButton = new RewindButton();
+    private playPauseButton = new PlayPauseButton();
+    private shareButton = new ShareButton();
+    private fullscreenButton = new FullscreenButton();
+
+    private isDragging: boolean = false;
+    private lastMouseActiveTime: number = -1;
 
     constructor(public viewer: Viewer.Viewer) {
         this.toplevel = document.createElement('div');
@@ -2506,29 +2751,61 @@ export class UI {
         this.floatingPanelContainer = document.createElement('div');
         this.toplevel.appendChild(this.floatingPanelContainer);
 
+        this.toplevel.appendChild(this.bottomBar.elem);
+        this.bottomBar.addWidgets(BottomBarArea.Left, this.cameraSpeedIndicator);
+        this.bottomBar.addWidgets(BottomBarArea.Center, this.rewindButton);
+        this.bottomBar.addWidgets(BottomBarArea.Center, this.playPauseButton);
+        this.bottomBar.addWidgets(BottomBarArea.Right, this.shareButton);
+        this.bottomBar.addWidgets(BottomBarArea.Right, this.fullscreenButton);
+
         this.sceneSelect = new SceneSelect(viewer);
-        this.saveStatesPanel = new SaveStatesPanel(viewer.inputManager);
         this.textureViewer = new TextureViewer();
-        this.viewerSettings = new ViewerSettings(viewer);
+        this.viewerSettings = new ViewerSettings(this, viewer);
         this.statisticsPanel = new StatisticsPanel(viewer);
         this.timePanel = new TimePanel();
         this.about = new About();
 
-        this.about.onfaq = () => {
-            this._onFAQ();
-        };
-
         this.faqPanel = new FAQPanel();
         this.faqPanel.elem.style.display = 'none';
         this.toplevel.appendChild(this.faqPanel.elem);
+
+        this.rewindButton.onrewind = () => {
+            // Trigger the same callback as the time panel.
+            this.timePanel.onrewind!();
+        };
+        this.playPauseButton.onplaypause = (shouldBePlaying) => {
+            this.timePanel.togglePausePlay(shouldBePlaying);
+        };
+        this.timePanel.onplaypause = (isPlaying) => {
+            this.playPauseButton.setIsPlaying(isPlaying);
+        };
+        this.playPauseButton.setIsPlaying(this.timePanel.isPlaying);
+
+        this.about.onfaq = () => {
+            this.faqPanel.elem.style.display = 'block';
+        };
+
+        window.onmousemove = () => {
+            this.setMouseActive();
+        };
+        this.setMouseActive();
 
         this.setScenePanels(null);
 
         this.elem = this.toplevel;
     }
 
-    private _onFAQ(): void {
-        this.faqPanel.elem.style.display = 'block';
+    public setMouseActive(): void {
+        this.lastMouseActiveTime = window.performance.now();
+    }
+
+    public update(): void {
+        this.syncBottomRightBarVisibility();
+    }
+
+    public setSaveState(saveState: string) {
+        const shareURL = buildShareURL(saveState);
+        this.shareButton.setShareURL(shareURL);
     }
 
     public sceneChanged() {
@@ -2551,6 +2828,8 @@ export class UI {
     }
 
     public destroyScene(): void {
+        this.setScenePanels([]);
+
         setChildren(this.sceneUIContainer, []);
 
         for (let i = 0; i < this.floatingPanels.length; i++)
@@ -2560,7 +2839,7 @@ export class UI {
 
     public setScenePanels(scenePanels: Panel[] | null): void {
         if (scenePanels !== null)
-            this.setPanels([this.sceneSelect, ...scenePanels, this.textureViewer, this.timePanel, this.saveStatesPanel, this.viewerSettings, this.statisticsPanel, this.about]);
+            this.setPanels([this.sceneSelect, ...scenePanels, this.textureViewer, this.timePanel, this.viewerSettings, this.statisticsPanel, this.about]);
         else
             this.setPanels([this.sceneSelect, this.about]);
     }
@@ -2577,10 +2856,31 @@ export class UI {
         return true;
     }
 
+    private shouldBottomRightBarBeVisible(): boolean {
+        if (this.bottomBar.isAnyPanelExpanded())
+            return true;
+
+        if (this.isDragging)
+            return true;
+
+        // Hide after one second of mouse inactivity
+        const lastMouseActiveHideThreshold = 1000;
+        if (window.performance.now() > this.lastMouseActiveTime + lastMouseActiveHideThreshold)
+            return false;
+
+        return true;
+    }
+
+    private syncBottomRightBarVisibility(): void {
+        this.bottomBar.setVisible(this.shouldBottomRightBarBeVisible());
+    }
+
     public setIsDragging(isDragging: boolean): void {
+        this.isDragging = isDragging;
         this.elem.style.pointerEvents = isDragging ? 'none' : '';
         if (isDragging && this.shouldPanelsAutoClose())
             this.setPanelsAutoClosed(true);
+        this.syncBottomRightBarVisibility();
     }
 
     public makeFloatingPanel(title: string = 'Floating Panel', icon: string = RENDER_HACKS_ICON): FloatingPanel {
@@ -2599,24 +2899,39 @@ export class UI {
         return this.debugFloater;
     }
 
-    public bindSlider(obj: { [k: string]: number }, panel: FloatingPanel, paramName: string, min = 0, max = 1, labelName: string = paramName): void {
+    public bindSlider(obj: { [k: string]: number }, panel: FloatingPanel, paramName: string, labelName: string = paramName): void {
         let value = obj[paramName];
         assert(typeof value === "number");
 
+        const range = Reflect.getMetadata('df:range', obj, paramName);
+        let min: number = 0, max: number = 1, step: number = 0.01;
+        if (range !== undefined) {
+            min = range.min;
+            max = range.max;
+            step = range.step;
+        }
+
+        const fracDig = Math.max(0, -Math.log10(step));
         const slider = new Slider();
         slider.onvalue = (newValue: number) => {
             obj[paramName] = newValue;
-            (window as any).debugObj = obj;
             update();
         };
         update();
 
         function update() {
             value = obj[paramName];
-            slider.setLabel(`${labelName} = ${value.toFixed(2)}`);
-            min = Math.min(value, min);
-            max = Math.max(value, max);
-            slider.setRange(min, max);
+            slider.setLabel(`${labelName} = ${value.toFixed(fracDig)}`);
+            const localMin = Math.min(value, min);
+            const localMax = Math.max(value, max);
+
+            // Automatically update if we don't have any declarative range values.
+            if (range === undefined) {
+                min = localMin;
+                max = localMax;
+            }
+
+            slider.setRange(localMin, localMax, step);
             slider.setValue(value);
         }
 
@@ -2631,11 +2946,14 @@ export class UI {
     private bindSlidersRecurse(obj: { [k: string]: any }, panel: FloatingPanel, parentName: string, keys: string[]): void {
         for (let i = 0; i < keys.length; i++) {
             const keyName = keys[i];
+            const visibility = Reflect.getMetadata('df:visibility', obj, keyName);
+            if (visibility === false)
+                continue;
             const v = obj[keyName];
             if (typeof v === "number")
-                this.bindSlider(obj, panel, keyName, 0, 1, `${parentName}.${keyName}`);
-            if (v instanceof Float32Array)
-                this.bindSlidersRecurse(v, panel, `${parentName}.${keyName}`, keys);
+                this.bindSlider(obj, panel, keyName, `${parentName}.${keyName}`);
+            if (visibility === true || v instanceof Float32Array || objIsColor(v))
+                this.bindSlidersRecurse(v, panel, `${parentName}.${keyName}`, Object.keys(v));
         }
     }
 
@@ -2647,7 +2965,21 @@ export class UI {
             panel.contents.removeChild(panel.contents.firstChild);
 
         this.bindSlidersRecurse(obj, panel, '', keys);
-
-        (window as any).debugObj = obj;
     }
+}
+
+export function dfRange(min: number = 0, max: number = 1, step: number = (max - min) / 100) {
+    return Reflect.metadata('df:range', { min, max, step });
+}
+
+export function dfShow() {
+    return Reflect.metadata('df:visibility', true);
+}
+
+export function dfHide() {
+    return Reflect.metadata('df:visibility', false);
+}
+
+export function dfSigFigs(v: number = 2) {
+    return Reflect.metadata('df:sigfigs', v);
 }

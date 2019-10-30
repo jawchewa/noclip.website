@@ -4,6 +4,7 @@ import InputManager from './InputManager';
 import { Frustum, AABB } from './Geometry';
 import { clampRange, computeProjectionMatrixFromFrustum, computeUnitSphericalCoordinates, computeProjectionMatrixFromCuboid, texProjPerspMtx, texProjOrthoMtx, lerpAngle, lerp, MathConstants } from './MathHelpers';
 import { reverseDepthForOrthographicProjectionMatrix, reverseDepthForPerspectiveProjectionMatrix } from './gfx/helpers/ReversedDepthHelpers';
+import { NormalizedViewportCoords } from './gfx/helpers/RenderTargetHelpers';
 
 export class Camera {
     // Converts to view space from world space.
@@ -276,7 +277,7 @@ export interface CameraController {
     forceUpdate: boolean;
     cameraUpdateForced(): void;
     update(inputManager: InputManager, dt: number): boolean;
-    getKeyMoveSpeed(): number;
+    getKeyMoveSpeed(): number | null;
     setKeyMoveSpeed(speed: number): void;
 }
 
@@ -316,7 +317,7 @@ export class FPSCameraController implements CameraController {
         this.keyMoveSpeed = speed;
     }
 
-    public getKeyMoveSpeed(): number {
+    public getKeyMoveSpeed(): number | null {
         return this.keyMoveSpeed;
     }
 
@@ -467,8 +468,8 @@ export class OrbitCameraController implements CameraController {
     public setKeyMoveSpeed(speed: number): void {
     }
 
-    public getKeyMoveSpeed(): number {
-        return 1;
+    public getKeyMoveSpeed(): number | null {
+        return null;
     }
 
     public update(inputManager: InputManager, dt: number): boolean {
@@ -482,7 +483,10 @@ export class OrbitCameraController implements CameraController {
         }
 
         if (inputManager.isKeyDownEventTriggered('KeyB')) {
+            this.shouldOrbit = false;
+            this.xVel = this.yVel = 0;
             this.txVel = this.tyVel = 0;
+            this.xVel = this.yVel = this.zVel = 0;
             vec3.set(this.translation, 0, 0, 0);
         }
 
@@ -564,7 +568,8 @@ export class OrbitCameraController implements CameraController {
             this.forceUpdate = false;
         }
 
-        return updated;
+        // Don't bother updating the Orbit camera since we don't read it from URL.
+        return false;
     }
 }
 
@@ -603,8 +608,8 @@ export class OrthoCameraController implements CameraController {
     public setKeyMoveSpeed(speed: number): void {
     }
 
-    public getKeyMoveSpeed(): number {
-        return 1;
+    public getKeyMoveSpeed(): number | null {
+        return null;
     }
 
     public update(inputManager: InputManager, dt: number): boolean {
@@ -655,8 +660,8 @@ export class OrthoCameraController implements CameraController {
             this.txVel += inputManager.dx * (-10 - Math.min(this.z, 0.01)) / -5000;
             this.tyVel += inputManager.dy * (-10 - Math.min(this.z, 0.01)) /  5000;
         } else if (inputManager.isDragging()) {
-            this.xTarget += inputManager.dx / -200 * invertXMult;
-            this.yTarget += inputManager.dy / -200 * invertYMult;
+            this.xTarget += inputManager.dx / 200 * invertXMult;
+            this.yTarget += inputManager.dy / 200 * invertYMult;
         } else if (shouldOrbit) {
             this.xTarget += this.orbitSpeed * 1/25;
         }
@@ -743,52 +748,66 @@ export class OrthoCameraController implements CameraController {
     }
 }
 
-export function serializeMat4(dst: Float32Array, offs: number, m: mat4): number {
-    dst[offs++] = m[0];
-    dst[offs++] = m[4];
-    dst[offs++] = m[8];
-    dst[offs++] = m[12];
-    dst[offs++] = m[1];
-    dst[offs++] = m[5];
-    dst[offs++] = m[9];
-    dst[offs++] = m[13];
-    dst[offs++] = m[2];
-    dst[offs++] = m[6];
-    dst[offs++] = m[10];
-    dst[offs++] = m[14];
-    return 4*3;
+export function serializeMat4(view: DataView, byteOffs: number, m: mat4): number {
+    view.setFloat32(byteOffs + 0x00, m[0],  true);
+    view.setFloat32(byteOffs + 0x04, m[4],  true);
+    view.setFloat32(byteOffs + 0x08, m[8],  true);
+    view.setFloat32(byteOffs + 0x0C, m[12], true);
+    view.setFloat32(byteOffs + 0x10, m[1],  true);
+    view.setFloat32(byteOffs + 0x14, m[5],  true);
+    view.setFloat32(byteOffs + 0x18, m[9],  true);
+    view.setFloat32(byteOffs + 0x1C, m[13], true);
+    view.setFloat32(byteOffs + 0x20, m[2],  true);
+    view.setFloat32(byteOffs + 0x24, m[6],  true);
+    view.setFloat32(byteOffs + 0x28, m[10], true);
+    view.setFloat32(byteOffs + 0x2C, m[14], true);
+    return 0x04*4*3;
 }
 
-export function serializeCamera(dst: Float32Array, offs: number, camera: Camera): number {
-    return serializeMat4(dst, offs, camera.worldMatrix);
+export function serializeCamera(view: DataView, byteOffs: number, camera: Camera): number {
+    return serializeMat4(view, byteOffs, camera.worldMatrix);
 }
 
-export function deserializeCamera(camera: Camera, src: Float32Array, offs: number): number {
+export function deserializeCamera(camera: Camera, view: DataView, byteOffs: number): number {
     const m = camera.worldMatrix;
-    m[0]  = src[offs++];
-    m[4]  = src[offs++];
-    m[8]  = src[offs++];
-    m[12] = src[offs++];
-    m[1]  = src[offs++];
-    m[5]  = src[offs++];
-    m[9]  = src[offs++];
-    m[13] = src[offs++];
-    m[2]  = src[offs++];
-    m[6]  = src[offs++];
-    m[10] = src[offs++];
-    m[14] = src[offs++];
+    m[0]  = view.getFloat32(byteOffs + 0x00, true);
+    m[4]  = view.getFloat32(byteOffs + 0x04, true);
+    m[8]  = view.getFloat32(byteOffs + 0x08, true);
+    m[12] = view.getFloat32(byteOffs + 0x0C, true);
+    m[1]  = view.getFloat32(byteOffs + 0x10, true);
+    m[5]  = view.getFloat32(byteOffs + 0x14, true);
+    m[9]  = view.getFloat32(byteOffs + 0x18, true);
+    m[13] = view.getFloat32(byteOffs + 0x1C, true);
+    m[2]  = view.getFloat32(byteOffs + 0x20, true);
+    m[6]  = view.getFloat32(byteOffs + 0x24, true);
+    m[10] = view.getFloat32(byteOffs + 0x28, true);
+    m[14] = view.getFloat32(byteOffs + 0x2C, true);
     m[3]  = 0;
     m[7]  = 0;
     m[11] = 0;
     m[15] = 1;
     mat4.invert(camera.viewMatrix, camera.worldMatrix);
     camera.worldMatrixUpdated();
-    return 4*3;
+    return 0x04*4*3;
 }
 
-export function texProjCamera(dst: mat4, camera: Camera, scaleS: number, scaleT: number, transS: number, transT: number): void {
+function texProjCamera(dst: mat4, camera: Camera, scaleS: number, scaleT: number, transS: number, transT: number): void {
     if (camera.isOrthographic)
         texProjOrthoMtx(dst, camera.frustum.left, camera.frustum.right, camera.frustum.bottom, camera.frustum.top, scaleS, scaleT, transS, transT);
     else
         texProjPerspMtx(dst, camera.fovY, camera.aspect, scaleS, scaleT, transS, transT);
+}
+
+export function texProjCameraSceneTex(dst: mat4, camera: Camera, viewport: NormalizedViewportCoords, flipYScale: number = -1): void {
+    // Map from -1 to 1, to viewport coords.
+
+    // Map from -1 to 1 to 0 to 1.
+    let scaleS = 0.5, scaleT = -0.5 * flipYScale, transS = 0.5, transT = 0.5;
+    // Map from 0 to 1 to viewport.
+    scaleS = scaleS * viewport.w;
+    scaleT = scaleT * viewport.h;
+    transS = transS * viewport.w + viewport.x;
+    transT = transT * viewport.h + viewport.y;
+
+    texProjCamera(dst, camera, scaleS, scaleT, transS, transT);
 }

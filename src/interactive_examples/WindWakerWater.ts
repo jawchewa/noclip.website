@@ -10,7 +10,7 @@ import * as GX_Material from '../gx/gx_material';
 import { BMD, BTK } from '../j3d/j3d';
 import * as RARC from '../j3d/rarc';
 import { BMDModel, MaterialInstance, MaterialInstanceState, ShapeInstanceState, MaterialData, BMDModelInstance } from '../j3d/render';
-import * as Yaz0 from '../compression/Yaz0';
+import * as Yaz0 from '../Common/Compression/Yaz0';
 import { ub_PacketParams, PacketParams, u_PacketParamsBufferSize, fillPacketParamsData, ub_MaterialParams, ColorKind, fillSceneParamsDataOnTemplate } from '../gx/gx_render';
 import { GXRenderHelperGfx } from '../gx/gx_render';
 import AnimationController from '../AnimationController';
@@ -22,7 +22,7 @@ import { GfxRenderCache } from '../gfx/render/GfxRenderCache';
 import { BasicRenderTarget, standardFullClearRenderPassDescriptor, depthClearRenderPassDescriptor } from '../gfx/helpers/RenderTargetHelpers';
 import { SceneDesc, SceneContext } from '../SceneBase';
 import { readString, nArray, concat, assertExists } from '../util';
-import { getColorsFromDZS, Colors } from '../j3d/WindWaker/zww_scenes';
+import { getKyankoColorsFromDZS, KyankoColors } from '../j3d/WindWaker/zww_scenes';
 import { GfxRenderInstManager, setSortKeyDepth } from '../gfx/render/GfxRenderer';
 import { FakeTextureHolder } from '../TextureHolder';
 
@@ -132,7 +132,7 @@ class Plane {
         // Make it go fast.
         this.animationController.fps = 30;
 
-        this.materialInstanceState.textureMappings = this.bmdModel.createDefaultTextureMappings();
+        this.materialInstanceState.textureMappings = this.bmdModel.modelMaterialData.createDefaultTextureMappings();
 
         const mat = bmdModel.bmd.mat3.materialEntries[materialIndex];
         const matData = new MaterialData(mat);
@@ -155,7 +155,7 @@ class Plane {
         computeViewMatrix(this.shapeInstanceState.worldToViewMatrix, viewerInput.camera);
         mat4.mul(packetParams.u_PosMtx[0], this.shapeInstanceState.worldToViewMatrix, this.modelMatrix);
 
-        this.materialInstance.fillMaterialParams(template, this.materialInstanceState, this.shapeInstanceState.worldToViewMatrix, this.modelMatrix, viewerInput.camera, packetParams);
+        this.materialInstance.fillMaterialParams(template, this.materialInstanceState, this.shapeInstanceState.worldToViewMatrix, this.modelMatrix, viewerInput.camera, viewerInput.viewport, packetParams);
 
         const depth = computeViewSpaceDepthFromWorldSpacePointAndViewMatrix(packetParams.u_PosMtx[0], this.origin);
         this.plane.prepareToRender(renderInstManager, packetParams, depth);
@@ -175,7 +175,7 @@ function createModelInstance(device: GfxDevice, cache: GfxRenderCache, rarc: RAR
     if (!bdlFile)
         return null;
     const bdl = BMD.parse(bdlFile.buffer);
-    const bmdModel = new BMDModel(device, cache, bdl, null);
+    const bmdModel = new BMDModel(device, cache, bdl);
     const modelInstance = new BMDModelInstance(bmdModel);
     modelInstance.passMask = isSkybox ? WindWakerPass.SKYBOX : WindWakerPass.MAIN;
     modelInstance.isSkybox = isSkybox;
@@ -188,8 +188,6 @@ const enum WindWakerPass {
 }
 
 export class WindWakerRenderer implements SceneGfx {
-    public defaultCameraController = OrbitCameraController;
-
     private renderTarget = new BasicRenderTarget();
     public renderHelper: GXRenderHelperGfx;
 
@@ -201,7 +199,7 @@ export class WindWakerRenderer implements SceneGfx {
     public modelData: BMDModel[] = [];
     public textureHolder = new FakeTextureHolder([]);
 
-    constructor(device: GfxDevice, private stageRarc: RARC.RARC, colors: Colors) {
+    constructor(device: GfxDevice, private stageRarc: RARC.RARC, colors: KyankoColors) {
         this.renderHelper = new GXRenderHelperGfx(device);
         const cache = this.renderHelper.renderInstManager.gfxRenderCache;
 
@@ -210,10 +208,10 @@ export class WindWakerRenderer implements SceneGfx {
         this.vr_kasumi_mae = createModelInstance(device, cache, stageRarc, `vr_kasumi_mae`, true)!;
         this.vr_back_cloud = createModelInstance(device, cache, stageRarc, `vr_back_cloud`, true)!;
 
-        this.vr_sky.setColorOverride(ColorKind.K0, colors.vr_sky);
-        this.vr_uso_umi.setColorOverride(ColorKind.K0, colors.vr_uso_umi);
-        this.vr_kasumi_mae.setColorOverride(ColorKind.C0, colors.vr_kasumi_mae);
-        this.vr_back_cloud.setColorOverride(ColorKind.K0, colors.vr_back_cloud, true);
+        this.vr_sky.setColorOverride(ColorKind.K0, colors.virtColors!.vr_sky);
+        this.vr_uso_umi.setColorOverride(ColorKind.K0, colors.virtColors!.vr_uso_umi);
+        this.vr_kasumi_mae.setColorOverride(ColorKind.C0, colors.virtColors!.vr_kasumi_mae);
+        this.vr_back_cloud.setColorOverride(ColorKind.K0, colors.virtColors!.vr_back_cloud, true);
     }
 
     public createCameraController() {
@@ -244,18 +242,16 @@ export class WindWakerRenderer implements SceneGfx {
         this.prepareToRender(device, hostAccessPass, viewerInput);
         device.submitPass(hostAccessPass);
 
-        this.renderTarget.setParameters(device, viewerInput.viewportWidth, viewerInput.viewportHeight);
+        this.renderTarget.setParameters(device, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
 
         // First, render the skybox.
-        const skyboxPassRenderer = this.renderTarget.createRenderPass(device, standardFullClearRenderPassDescriptor);
-        skyboxPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        const skyboxPassRenderer = this.renderTarget.createRenderPass(device, viewerInput.viewport, standardFullClearRenderPassDescriptor);
         renderInstManager.setVisibleByFilterKeyExact(WindWakerPass.SKYBOX);
         renderInstManager.drawOnPassRenderer(device, skyboxPassRenderer);
         skyboxPassRenderer.endPass(null);
         device.submitPass(skyboxPassRenderer);
         // Now do main pass.
-        const mainPassRenderer = this.renderTarget.createRenderPass(device, depthClearRenderPassDescriptor);
-        mainPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        const mainPassRenderer = this.renderTarget.createRenderPass(device, viewerInput.viewport, depthClearRenderPassDescriptor);
         renderInstManager.setVisibleByFilterKeyExact(WindWakerPass.MAIN);
         renderInstManager.drawOnPassRenderer(device, mainPassRenderer);
         renderInstManager.resetRenderInsts();
@@ -298,24 +294,22 @@ export class WindWakerWater implements SceneDesc {
             fetchArc(`j3d/ww/Stage/sea/Room44.arc`, dataFetcher),
         ]).then(([stageRarc, roomRarc]) => {
             const dzsFile = stageRarc.findFileData(`dzs/stage.dzs`)!;
-            const colors = assertExists(getColorsFromDZS(dzsFile, 0, 2));
+            const colors = assertExists(getKyankoColorsFromDZS(dzsFile, 0, 2));
     
             const renderer = new WindWakerRenderer(device, stageRarc, colors);
 
             const cache = renderer.renderHelper.renderInstManager.gfxRenderCache;
             const model_bmd = new BMDModel(device, cache, BMD.parse(roomRarc.findFileData('bdl/model.bdl')!));
-            concat(renderer.textureHolder.viewerTextures, model_bmd.tex1Data.viewerTextures);
+            concat(renderer.textureHolder.viewerTextures, model_bmd.modelMaterialData.tex1Data.viewerTextures);
             renderer.modelData.push(model_bmd);
             const model1_bmd = new BMDModel(device, cache, BMD.parse(roomRarc.findFileData('bdl/model1.bdl')!));
-            concat(renderer.textureHolder.viewerTextures, model1_bmd.tex1Data.viewerTextures);
+            concat(renderer.textureHolder.viewerTextures, model1_bmd.modelMaterialData.tex1Data.viewerTextures);
             renderer.modelData.push(model1_bmd);
             const model1_btk = BTK.parse(roomRarc.findFileData('btk/model1.btk')!);
 
             function setEnvColors(p: Plane): void {
-                p.materialInstanceState.colorOverrides[ColorKind.K0] = colors.ocean;
-                p.materialInstanceState.colorOverrides[ColorKind.C0] = colors.wave;
-                p.materialInstanceState.colorOverrides[ColorKind.C1] = colors.splash;
-                p.materialInstanceState.colorOverrides[ColorKind.K1] = colors.splash2;
+                p.materialInstanceState.colorOverrides[ColorKind.K0] = colors.bg1K0;
+                p.materialInstanceState.colorOverrides[ColorKind.C0] = colors.bg1C0;
             }
 
             const seaPlane = new Plane(device, cache, model1_bmd, model1_btk, 0);

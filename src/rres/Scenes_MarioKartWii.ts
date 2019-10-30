@@ -5,7 +5,7 @@ import * as Viewer from '../viewer';
 import * as UI from '../ui';
 import * as BRRES from './brres';
 import * as U8 from './u8';
-import * as Yaz0 from '../compression/Yaz0';
+import * as Yaz0 from '../Common/Compression/Yaz0';
 
 import { assert, readString, hexzero, assertExists } from '../util';
 import ArrayBufferSlice from '../ArrayBufferSlice';
@@ -530,7 +530,7 @@ class MarioKartWiiSceneDesc implements Viewer.SceneDesc {
         } else if (gobj.objectId === 0x01fb) { // Crane
             spawnObject(`Crane`);
         } else if (gobj.objectId === 0x01fc) { // VolcanoPiece
-            spawnObject(`VolcanoPiece1`);
+            spawnObject(`VolcanoPiece1`, `VolcanoPiece${gobj.objectArg0}`);
         } else if (gobj.objectId === 0x01fd) { // FlamePole
             spawnObject(`FlamePole`);
         } else if (gobj.objectId === 0x01fe) { // TwistedWay

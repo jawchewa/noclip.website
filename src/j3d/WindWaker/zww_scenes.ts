@@ -8,29 +8,33 @@ import { DataFetcher } from '../../DataFetcher';
 import * as Viewer from '../../viewer';
 import * as BYML from '../../byml';
 import * as RARC from '../rarc';
-import * as Yaz0 from '../../compression/Yaz0';
+import * as Yaz0 from '../../Common/Compression/Yaz0';
 import * as UI from '../../ui';
 
 import * as DZB from './DZB';
 import * as JPA from '../JPA';
 import { BMD, BTK, BRK, BCK, BTI, LoopMode, BMT } from '../j3d';
-import { BMDModelInstance, BMDModel, BTIData } from '../render';
-import { Camera, computeViewMatrix } from '../../Camera';
+import { BMDModelInstance, BMDModel, BTIData, BMDModelMaterialData } from '../render';
+import { Camera, computeViewMatrix, texProjCameraSceneTex } from '../../Camera';
 import { DeviceProgram } from '../../Program';
-import { colorToCSS, Color, colorNew } from '../../Color';
+import { Color, colorNew, colorLerp, colorCopy, TransparentBlack, colorNewCopy } from '../../Color';
 import { ColorKind, fillSceneParamsDataOnTemplate } from '../../gx/gx_render';
 import { GXRenderHelperGfx } from '../../gx/gx_render';
-import { GfxDevice, GfxRenderPass, GfxHostAccessPass, GfxBufferUsage, GfxFormat, GfxVertexAttributeFrequency, GfxInputLayout, GfxInputState, GfxBuffer, GfxProgram, GfxBindingLayoutDescriptor, GfxCompareMode, GfxBufferFrequencyHint, GfxVertexAttributeDescriptor } from '../../gfx/platform/GfxPlatform';
-import { GfxRenderInstManager, GfxRendererLayer, GfxRenderInst } from '../../gfx/render/GfxRenderer';
-import { BasicRenderTarget, standardFullClearRenderPassDescriptor, depthClearRenderPassDescriptor } from '../../gfx/helpers/RenderTargetHelpers';
+import { GfxDevice, GfxRenderPass, GfxHostAccessPass, GfxBufferUsage, GfxFormat, GfxVertexAttributeFrequency, GfxInputLayout, GfxInputState, GfxBuffer, GfxProgram, GfxBindingLayoutDescriptor, GfxCompareMode, GfxBufferFrequencyHint, GfxVertexAttributeDescriptor, GfxTexture } from '../../gfx/platform/GfxPlatform';
+import { GfxRenderInstManager, GfxRendererLayer } from '../../gfx/render/GfxRenderer';
+import { BasicRenderTarget, standardFullClearRenderPassDescriptor, depthClearRenderPassDescriptor, ColorTexture, noClearRenderPassDescriptor } from '../../gfx/helpers/RenderTargetHelpers';
 import { makeStaticDataBuffer } from '../../gfx/helpers/BufferHelpers';
 import { fillMatrix4x4, fillMatrix4x3, fillColor } from '../../gfx/helpers/UniformBufferHelpers';
 import { makeTriangleIndexBuffer, GfxTopology } from '../../gfx/helpers/TopologyHelpers';
 import AnimationController from '../../AnimationController';
 import { GfxRenderCache } from '../../gfx/render/GfxRenderCache';
-import { ObjectRenderer, BMDObjectRenderer, SymbolMap, WhiteFlowerData, FlowerObjectRenderer, PinkFlowerData, BessouFlowerData, FlowerData } from './Actors';
+import { ObjectRenderer, BMDObjectRenderer, SymbolMap, WhiteFlowerData, FlowerObjectRenderer, PinkFlowerData, BessouFlowerData, FlowerData, settingTevStruct, LightTevColorType } from './Actors';
 import { SceneContext } from '../../SceneBase';
 import { reverseDepthForCompareMode } from '../../gfx/helpers/ReversedDepthHelpers';
+import { computeModelMatrixSRT, range } from '../../MathHelpers';
+import { TextureMapping } from '../../TextureHolder';
+import { EFB_WIDTH, EFB_HEIGHT } from '../../gx/gx_material';
+import { getTimeFrames } from '../../SuperMarioGalaxy/Main';
 
 class ZWWExtraTextures {
     constructor(public ZAtoon: BTIData, public ZBtoonEX: BTIData) {
@@ -52,20 +56,25 @@ class ZWWExtraTextures {
     }
 }
 
-export interface Colors {
-    actorShadow: Color;
-    actorAmbient: Color;
-    amb: Color;
-    light: Color;
-    ocean: Color;
-    wave: Color;
-    splash: Color;
-    splash2: Color;
-    doors: Color;
+interface VirtColors {
     vr_back_cloud: Color;
     vr_sky: Color;
     vr_uso_umi: Color;
     vr_kasumi_mae: Color;
+}
+
+export interface KyankoColors {
+    actorC0: Color;
+    actorK0: Color;
+    bg0C0: Color;
+    bg0K0: Color;
+    bg1C0: Color;
+    bg1K0: Color;
+    bg2C0: Color;
+    bg2K0: Color;
+    bg3C0: Color;
+    bg3K0: Color;
+    virtColors: VirtColors | null;
 }
 
 interface DZSChunkHeader {
@@ -91,20 +100,38 @@ function parseDZSHeaders(buffer: ArrayBufferSlice): Map<string, DZSChunkHeader> 
     return chunkHeaders;
 }
 
-export function getColorsFromDZS(buffer: ArrayBufferSlice, roomIdx: number, timeOfDay: number): Colors | undefined {
+function kyankoColorsLerp(dst: KyankoColors, a: KyankoColors, b: KyankoColors, t: number): void {
+    colorLerp(dst.actorK0, a.actorK0, b.actorK0, t);
+    colorLerp(dst.actorC0, a.actorC0, b.actorC0, t);
+    colorLerp(dst.bg0C0, a.bg0C0, b.bg0C0, t);
+    colorLerp(dst.bg0K0, a.bg0K0, b.bg0K0, t);
+    colorLerp(dst.bg1C0, a.bg1C0, b.bg1C0, t);
+    colorLerp(dst.bg1K0, a.bg1K0, b.bg1K0, t);
+    colorLerp(dst.bg2C0, a.bg2C0, b.bg2C0, t);
+    colorLerp(dst.bg2K0, a.bg2K0, b.bg2K0, t);
+    colorLerp(dst.bg3C0, a.bg3C0, b.bg3C0, t);
+    colorLerp(dst.bg3K0, a.bg3K0, b.bg3K0, t);
+
+    if (dst.virtColors !== null) {
+        const aVirt = assertExists(a.virtColors);
+        const bVirt = assertExists(b.virtColors);
+
+        colorLerp(dst.virtColors.vr_back_cloud, aVirt.vr_back_cloud, bVirt.vr_back_cloud, t);
+        colorLerp(dst.virtColors.vr_kasumi_mae, aVirt.vr_kasumi_mae, bVirt.vr_kasumi_mae, t);
+        colorLerp(dst.virtColors.vr_sky, aVirt.vr_sky, bVirt.vr_sky, t);
+        colorLerp(dst.virtColors.vr_uso_umi, aVirt.vr_uso_umi, bVirt.vr_uso_umi, t);
+    }
+}
+
+export function getKyankoColorsFromDZS(buffer: ArrayBufferSlice, roomIdx: number, timeOfDay: number): KyankoColors {
     const view = buffer.createDataView();
     const chunkHeaders = parseDZSHeaders(buffer);
-
-    if (!chunkHeaders.has('Virt'))
-        return undefined;
 
     const coloIdx = view.getUint8(chunkHeaders.get('EnvR')!.offs + (roomIdx * 0x08));
     const coloOffs = chunkHeaders.get('Colo')!.offs + (coloIdx * 0x0C);
     const whichPale = timeOfDay;
     const paleIdx = view.getUint8(coloOffs + whichPale);
     const paleOffs = chunkHeaders.get('Pale')!.offs + (paleIdx * 0x2C);
-    const virtIdx = view.getUint8(paleOffs + 0x21);
-    const virtOffs = chunkHeaders.get('Virt')!.offs + (virtIdx * 0x24);
 
     const actorShadowR = view.getUint8(paleOffs + 0x00) / 0xFF;
     const actorShadowG = view.getUint8(paleOffs + 0x01) / 0xFF;
@@ -116,63 +143,80 @@ export function getColorsFromDZS(buffer: ArrayBufferSlice, roomIdx: number, time
     const actorAmbientB = view.getUint8(paleOffs + 0x05) / 0xFF;
     const actorAmbient = colorNew(actorAmbientR, actorAmbientG, actorAmbientB, 1);
 
-    const ambR = view.getUint8(paleOffs + 0x06) / 0xFF;
-    const ambG = view.getUint8(paleOffs + 0x07) / 0xFF;
-    const ambB = view.getUint8(paleOffs + 0x08) / 0xFF;
-    const amb = colorNew(ambR, ambG, ambB, 1);
+    const bg0C0R = view.getUint8(paleOffs + 0x06) / 0xFF;
+    const bg0C0G = view.getUint8(paleOffs + 0x07) / 0xFF;
+    const bg0C0B = view.getUint8(paleOffs + 0x08) / 0xFF;
+    const bg0C0 = colorNew(bg0C0R, bg0C0G, bg0C0B, 1);
 
-    const lightR = view.getUint8(paleOffs + 0x09) / 0xFF;
-    const lightG = view.getUint8(paleOffs + 0x0A) / 0xFF;
-    const lightB = view.getUint8(paleOffs + 0x0B) / 0xFF;
-    const light = colorNew(lightR, lightG, lightB, 1);
+    const bg0K0R = view.getUint8(paleOffs + 0x09) / 0xFF;
+    const bg0K0G = view.getUint8(paleOffs + 0x0A) / 0xFF;
+    const bg0K0B = view.getUint8(paleOffs + 0x0B) / 0xFF;
+    const bg0K0 = colorNew(bg0K0R, bg0K0G, bg0K0B, 1);
 
-    const waveR = view.getUint8(paleOffs + 0x0C) / 0xFF;
-    const waveG = view.getUint8(paleOffs + 0x0D) / 0xFF;
-    const waveB = view.getUint8(paleOffs + 0x0E) / 0xFF;
-    const wave = colorNew(waveR, waveG, waveB, 1);
+    const bg1C0R = view.getUint8(paleOffs + 0x0C) / 0xFF;
+    const bg1C0G = view.getUint8(paleOffs + 0x0D) / 0xFF;
+    const bg1C0B = view.getUint8(paleOffs + 0x0E) / 0xFF;
+    const bg1C0 = colorNew(bg1C0R, bg1C0G, bg1C0B, 1);
 
-    const oceanR = view.getUint8(paleOffs + 0x0F) / 0xFF;
-    const oceanG = view.getUint8(paleOffs + 0x10) / 0xFF;
-    const oceanB = view.getUint8(paleOffs + 0x11) / 0xFF;
-    const ocean = colorNew(oceanR, oceanG, oceanB, 1);
+    const bg1K0R = view.getUint8(paleOffs + 0x0F) / 0xFF;
+    const bg1K0G = view.getUint8(paleOffs + 0x10) / 0xFF;
+    const bg1K0B = view.getUint8(paleOffs + 0x11) / 0xFF;
+    const bg1K0 = colorNew(bg1K0R, bg1K0G, bg1K0B, 1);
 
-    const splashR = view.getUint8(paleOffs + 0x12) / 0xFF;
-    const splashG = view.getUint8(paleOffs + 0x13) / 0xFF;
-    const splashB = view.getUint8(paleOffs + 0x14) / 0xFF;
-    const splash = colorNew(splashR, splashG, splashB, 1);
+    const bg2C0R = view.getUint8(paleOffs + 0x12) / 0xFF;
+    const bg2C0G = view.getUint8(paleOffs + 0x13) / 0xFF;
+    const bg2C0B = view.getUint8(paleOffs + 0x14) / 0xFF;
+    const bg2C0 = colorNew(bg2C0R, bg2C0G, bg2C0B, 1);
 
-    const splash2R = view.getUint8(paleOffs + 0x15) / 0xFF;
-    const splash2G = view.getUint8(paleOffs + 0x16) / 0xFF;
-    const splash2B = view.getUint8(paleOffs + 0x17) / 0xFF;
-    const splash2 = colorNew(splash2R, splash2G, splash2B, 1);
+    const bg2K0R = view.getUint8(paleOffs + 0x15) / 0xFF;
+    const bg2K0G = view.getUint8(paleOffs + 0x16) / 0xFF;
+    const bg2K0B = view.getUint8(paleOffs + 0x17) / 0xFF;
+    const bg2K0 = colorNew(bg2K0R, bg2K0G, bg2K0B, 1);
 
-    const doorsR = view.getUint8(paleOffs + 0x18) / 0xFF;
-    const doorsG = view.getUint8(paleOffs + 0x19) / 0xFF;
-    const doorsB = view.getUint8(paleOffs + 0x1A) / 0xFF;
-    const doors = colorNew(doorsR, doorsG, doorsB, 1);
+    const bg3C0R = view.getUint8(paleOffs + 0x18) / 0xFF;
+    const bg3C0G = view.getUint8(paleOffs + 0x19) / 0xFF;
+    const bg3C0B = view.getUint8(paleOffs + 0x1A) / 0xFF;
+    const bg3C0 = colorNew(bg3C0R, bg3C0G, bg3C0B, 1);
 
-    const vr_back_cloudR = view.getUint8(virtOffs + 0x10) / 0xFF;
-    const vr_back_cloudG = view.getUint8(virtOffs + 0x11) / 0xFF;
-    const vr_back_cloudB = view.getUint8(virtOffs + 0x12) / 0xFF;
-    const vr_back_cloudA = view.getUint8(virtOffs + 0x13) / 0xFF;
-    const vr_back_cloud = colorNew(vr_back_cloudR, vr_back_cloudG, vr_back_cloudB, vr_back_cloudA);
+    const bg3K0R = view.getUint8(paleOffs + 0x1B) / 0xFF;
+    const bg3K0G = view.getUint8(paleOffs + 0x1C) / 0xFF;
+    const bg3K0B = view.getUint8(paleOffs + 0x1D) / 0xFF;
+    const bg3K0 = colorNew(bg3K0R, bg3K0G, bg3K0B, 1);
 
-    const vr_skyR = view.getUint8(virtOffs + 0x18) / 0xFF;
-    const vr_skyG = view.getUint8(virtOffs + 0x19) / 0xFF;
-    const vr_skyB = view.getUint8(virtOffs + 0x1A) / 0xFF;
-    const vr_sky = colorNew(vr_skyR, vr_skyG, vr_skyB, 1);
+    let virtColors: VirtColors | null = null;
+    if (chunkHeaders.has('Virt')) {
+        const virtIdx = view.getUint8(paleOffs + 0x21);
+        const virtOffs = chunkHeaders.get('Virt')!.offs + (virtIdx * 0x24);
+        const vr_back_cloudR = view.getUint8(virtOffs + 0x10) / 0xFF;
+        const vr_back_cloudG = view.getUint8(virtOffs + 0x11) / 0xFF;
+        const vr_back_cloudB = view.getUint8(virtOffs + 0x12) / 0xFF;
+        const vr_back_cloudA = view.getUint8(virtOffs + 0x13) / 0xFF;
+        const vr_back_cloud = colorNew(vr_back_cloudR, vr_back_cloudG, vr_back_cloudB, vr_back_cloudA);
 
-    const vr_uso_umiR = view.getUint8(virtOffs + 0x1B) / 0xFF;
-    const vr_uso_umiG = view.getUint8(virtOffs + 0x1C) / 0xFF;
-    const vr_uso_umiB = view.getUint8(virtOffs + 0x1D) / 0xFF;
-    const vr_uso_umi = colorNew(vr_uso_umiR, vr_uso_umiG, vr_uso_umiB, 1);
+        const vr_skyR = view.getUint8(virtOffs + 0x18) / 0xFF;
+        const vr_skyG = view.getUint8(virtOffs + 0x19) / 0xFF;
+        const vr_skyB = view.getUint8(virtOffs + 0x1A) / 0xFF;
+        const vr_sky = colorNew(vr_skyR, vr_skyG, vr_skyB, 1);
 
-    const vr_kasumi_maeG = view.getUint8(virtOffs + 0x1F) / 0xFF;
-    const vr_kasumi_maeR = view.getUint8(virtOffs + 0x1E) / 0xFF;
-    const vr_kasumi_maeB = view.getUint8(virtOffs + 0x20) / 0xFF;
-    const vr_kasumi_mae = colorNew(vr_kasumi_maeR, vr_kasumi_maeG, vr_kasumi_maeB, 1);
+        const vr_uso_umiR = view.getUint8(virtOffs + 0x1B) / 0xFF;
+        const vr_uso_umiG = view.getUint8(virtOffs + 0x1C) / 0xFF;
+        const vr_uso_umiB = view.getUint8(virtOffs + 0x1D) / 0xFF;
+        const vr_uso_umi = colorNew(vr_uso_umiR, vr_uso_umiG, vr_uso_umiB, 1);
 
-    return { actorShadow, actorAmbient, amb, light, wave, ocean, splash, splash2, doors, vr_back_cloud, vr_sky, vr_uso_umi, vr_kasumi_mae };
+        const vr_kasumi_maeG = view.getUint8(virtOffs + 0x1F) / 0xFF;
+        const vr_kasumi_maeR = view.getUint8(virtOffs + 0x1E) / 0xFF;
+        const vr_kasumi_maeB = view.getUint8(virtOffs + 0x20) / 0xFF;
+        const vr_kasumi_mae = colorNew(vr_kasumi_maeR, vr_kasumi_maeG, vr_kasumi_maeB, 1);
+        virtColors = { vr_back_cloud, vr_sky, vr_uso_umi, vr_kasumi_mae };
+    } else {
+        virtColors = null;
+    }
+
+    return {
+        actorC0: actorShadow, actorK0: actorAmbient,
+        bg0C0, bg0K0, bg1C0, bg1K0, bg2C0, bg2K0, bg3C0, bg3K0,
+        virtColors,
+    };
 }
 
 function createModelInstance(device: GfxDevice, cache: GfxRenderCache, extraTextures: ZWWExtraTextures, rarc: RARC.RARC, name: string, isSkybox: boolean = false): BMDModelInstance | null {
@@ -185,7 +229,7 @@ function createModelInstance(device: GfxDevice, cache: GfxRenderCache, extraText
     const brkFile = rarc.findFile(`brk/${name}.brk`);
     const bckFile = rarc.findFile(`bck/${name}.bck`);
     const bdl = BMD.parse(bdlFile.buffer);
-    const bmdModel = new BMDModel(device, cache, bdl, null);
+    const bmdModel = new BMDModel(device, cache, bdl);
     const modelInstance = new BMDModelInstance(bmdModel);
     extraTextures.fillExtraTextures(modelInstance);
     modelInstance.passMask = isSkybox ? WindWakerPass.SKYBOX : WindWakerPass.MAIN;
@@ -210,10 +254,10 @@ function createModelInstance(device: GfxDevice, cache: GfxRenderCache, extraText
 }
 
 class WindWakerRoomRenderer {
-    public model: BMDModelInstance;
-    public model1: BMDModelInstance;
-    public model2: BMDModelInstance;
-    public model3: BMDModelInstance;
+    public model: BMDModelInstance | null;
+    public model1: BMDModelInstance | null;
+    public model2: BMDModelInstance | null;
+    public model3: BMDModelInstance | null;
     public name: string;
     public visible: boolean = true;
     public objectsVisible = true;
@@ -225,29 +269,29 @@ class WindWakerRoomRenderer {
 
         this.dzb = DZB.parse(assertExists(roomRarc.findFileData(`dzb/room.dzb`)));
 
-        this.model = createModelInstance(device, cache, extraTextures, roomRarc, `model`)!;
+        this.model = createModelInstance(device, cache, extraTextures, roomRarc, `model`);
 
         // Ocean.
-        this.model1 = createModelInstance(device, cache, extraTextures, roomRarc, `model1`)!;
+        this.model1 = createModelInstance(device, cache, extraTextures, roomRarc, `model1`);
 
         // Special effects / Skybox as seen in Hyrule.
-        this.model2 = createModelInstance(device, cache, extraTextures, roomRarc, `model2`)!;
+        this.model2 = createModelInstance(device, cache, extraTextures, roomRarc, `model2`);
 
         // Windows / doors.
-        this.model3 = createModelInstance(device, cache, extraTextures, roomRarc, `model3`)!;
+        this.model3 = createModelInstance(device, cache, extraTextures, roomRarc, `model3`);
     }
 
     public prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput): void {
         if (!this.visible)
             return;
 
-        if (this.model)
+        if (this.model !== null)
             this.model.prepareToRender(device, renderInstManager, viewerInput);
-        if (this.model1)
+        if (this.model1 !== null)
             this.model1.prepareToRender(device, renderInstManager, viewerInput);
-        if (this.model2)
+        if (this.model2 !== null)
             this.model2.prepareToRender(device, renderInstManager, viewerInput);
-        if (this.model3)
+        if (this.model3 !== null)
             this.model3.prepareToRender(device, renderInstManager, viewerInput);
 
         if (this.objectsVisible)
@@ -256,87 +300,78 @@ class WindWakerRoomRenderer {
     }
 
     public setModelMatrix(modelMatrix: mat4): void {
-        if (this.model)
+        if (this.model !== null)
             mat4.copy(this.model.modelMatrix, modelMatrix);
-        if (this.model1)
+        if (this.model1 !== null)
             mat4.copy(this.model1.modelMatrix, modelMatrix);
-        if (this.model3)
+        if (this.model3 !== null)
             mat4.copy(this.model3.modelMatrix, modelMatrix);
     }
 
-    public setColors(colors?: Colors): void {
-        if (colors !== undefined) {
-            if (this.model) {
-                this.model.setColorOverride(ColorKind.K0, colors.light);
-                this.model.setColorOverride(ColorKind.C0, colors.amb);
-            }
+    public setKyankoColors(colors: KyankoColors): void {
+        if (this.model !== null)
+            settingTevStruct(this.model, LightTevColorType.BG0, colors);
 
-            if (this.model1) {
-                this.model1.setColorOverride(ColorKind.K0, colors.ocean);
-                this.model1.setColorOverride(ColorKind.C0, colors.wave);
-                this.model1.setColorOverride(ColorKind.C1, colors.splash);
-                this.model1.setColorOverride(ColorKind.K1, colors.splash2);
-            }
-            if (this.model3)
-                this.model3.setColorOverride(ColorKind.C0, colors.doors);
+        if (this.model1 !== null)
+            settingTevStruct(this.model1, LightTevColorType.BG1, colors);
 
-            for (let i = 0; i < this.objectRenderers.length; i++)
-                this.objectRenderers[i].setColors(colors);
-        } else {
-            if (this.model) {
-                this.model.setColorOverride(ColorKind.K0, undefined);
-                this.model.setColorOverride(ColorKind.C0, undefined);
-            }
+        if (this.model2 !== null)
+            settingTevStruct(this.model2, LightTevColorType.BG2, colors);
 
-            if (this.model1) {
-                this.model1.setColorOverride(ColorKind.K0, undefined);
-                this.model1.setColorOverride(ColorKind.C0, undefined);
-                this.model1.setColorOverride(ColorKind.C1, undefined);
-                this.model1.setColorOverride(ColorKind.K1, undefined);
-            }
-            if (this.model3)
-                this.model3.setColorOverride(ColorKind.C0, undefined);
-        }
+        if (this.model3 !== null)
+            settingTevStruct(this.model3, LightTevColorType.BG3, colors);
+
+        for (let i = 0; i < this.objectRenderers.length; i++)
+            this.objectRenderers[i].setKyankoColors(colors);
     }
 
     public setVisible(v: boolean): void {
         this.visible = v;
     }
 
+    public setVisibleLayerMask(m: number): void {
+        for (let i = 0; i < this.objectRenderers.length; i++) {
+            const o = this.objectRenderers[i];
+            if (o.layer >= 0) {
+                const v = !!(m & (1 << o.layer));
+                o.visible = v;
+            }
+        }
+    }
     public setVertexColorsEnabled(v: boolean): void {
-        if (this.model)
+        if (this.model !== null)
             this.model.setVertexColorsEnabled(v);
-        if (this.model1)
+        if (this.model1 !== null)
             this.model1.setVertexColorsEnabled(v);
-        if (this.model2)
+        if (this.model2 !== null)
             this.model2.setVertexColorsEnabled(v);
-        if (this.model3)
+        if (this.model3 !== null)
             this.model3.setVertexColorsEnabled(v);
         for (let i = 0; i < this.objectRenderers.length; i++)
             this.objectRenderers[i].setVertexColorsEnabled(v);
     }
 
     public setTexturesEnabled(v: boolean): void {
-        if (this.model)
+        if (this.model !== null)
             this.model.setTexturesEnabled(v);
-        if (this.model1)
+        if (this.model1 !== null)
             this.model1.setTexturesEnabled(v);
-        if (this.model2)
+        if (this.model2 !== null)
             this.model2.setTexturesEnabled(v);
-        if (this.model3)
+        if (this.model3 !== null)
             this.model3.setTexturesEnabled(v);
         for (let i = 0; i < this.objectRenderers.length; i++)
             this.objectRenderers[i].setTexturesEnabled(v);
     }
 
     public destroy(device: GfxDevice): void {
-        if (this.model)
+        if (this.model !== null)
             this.model.destroy(device);
-        if (this.model1)
+        if (this.model1 !== null)
             this.model1.destroy(device);
-        if (this.model2)
+        if (this.model2 !== null)
             this.model2.destroy(device);
-        if (this.model3)
+        if (this.model3 !== null)
             this.model3.destroy(device);
         for (let i = 0; i < this.objectRenderers.length; i++)
             this.objectRenderers[i].destroy(device);
@@ -376,7 +411,7 @@ class SeaPlane {
     private inputState: GfxInputState;
     private gfxProgram: GfxProgram;
     private modelMatrix = mat4.create();
-    private color: Color;
+    private color = colorNewCopy(TransparentBlack);
 
     constructor(device: GfxDevice, cache: GfxRenderCache) {
         this.createBuffers(device);
@@ -411,8 +446,8 @@ class SeaPlane {
         offs += fillColor(d, offs, this.color);
     }
 
-    public setColor(color: Color): void {
-        this.color = color;
+    public setKyankoColors(kyankoColors: KyankoColors): void {
+        colorCopy(this.color, kyankoColors.bg1K0);
     }
 
     public destroy(device: GfxDevice) {
@@ -449,24 +484,54 @@ class SeaPlane {
     }
 }
 
+function setTextureMappingIndirect(m: TextureMapping, sceneTexture: GfxTexture): void {
+    m.gfxTexture = sceneTexture;
+    m.width = EFB_WIDTH;
+    m.height = EFB_HEIGHT;
+    m.flipY = true;
+}
+
 class SimpleEffectSystem {
     private emitterManager: JPA.JPAEmitterManager;
     private drawInfo = new JPA.JPADrawInfo();
-    private jpacData: JPA.JPACData;
+    private jpacData: JPA.JPACData[] = [];
     private resourceDatas = new Map<number, JPA.JPAResourceData>();
 
-    constructor(device: GfxDevice, private jpac: JPA.JPAC) {
+    constructor(device: GfxDevice, private jpac: JPA.JPAC[]) {
         this.emitterManager = new JPA.JPAEmitterManager(device, 6000, 300);
-        this.jpacData = new JPA.JPACData(this.jpac);
+        for (let i = 0; i < this.jpac.length; i++)
+            this.jpacData.push(new JPA.JPACData(this.jpac[i]));
+    }
+
+    private findResourceData(userIndex: number): [JPA.JPACData, JPA.JPAResourceRaw] | null {
+        for (let i = 0; i < this.jpacData.length; i++) {
+            const r = this.jpacData[i].jpac.effects.find((resource) => resource.resourceId === userIndex);
+            if (r !== undefined)
+                return [this.jpacData[i], r];
+        }
+
+        return null;
     }
 
     private getResourceData(device: GfxDevice, cache: GfxRenderCache, userIndex: number): JPA.JPAResourceData | null {
         if (!this.resourceDatas.has(userIndex)) {
-            const resData = new JPA.JPAResourceData(device, cache, this.jpacData, this.jpac.effects.find((resource) => resource.resourceId === userIndex)!);
-            this.resourceDatas.set(userIndex, resData);
+            const data = this.findResourceData(userIndex);
+            if (data !== null) {
+                const [jpacData, jpaResRaw] = data;
+                const resData = new JPA.JPAResourceData(device, cache, jpacData, jpaResRaw);
+                this.resourceDatas.set(userIndex, resData);
+            }
         }
 
         return this.resourceDatas.get(userIndex)!;
+    }
+
+    public setOpaqueSceneTexture(opaqueSceneTexture: GfxTexture): void {
+        for (let i = 0; i < this.jpacData.length; i++) {
+            const m = this.jpacData[i].getTextureMappingReference('AK_kagerouSwap00');
+            if (m !== null)
+                setTextureMappingIndirect(m, opaqueSceneTexture);
+        }
     }
 
     public setDrawInfo(posCamMtx: mat4, prjMtx: mat4, texPrjMtx: mat4 | null): void {
@@ -480,12 +545,29 @@ class SimpleEffectSystem {
         this.emitterManager.calc(inc);
     }
 
-    public draw(device: GfxDevice, renderInstManager: GfxRenderInstManager, drawGroupId: number = 0): void {
+    public draw(device: GfxDevice, renderInstManager: GfxRenderInstManager, drawGroupId: number): void {
         this.emitterManager.draw(device, renderInstManager, this.drawInfo, drawGroupId);
     }
 
-    public createEmitter(device: GfxDevice, cache: GfxRenderCache, resourceId: number = 0x14) {
-        const emitter = this.emitterManager.createEmitter(assertExists(this.getResourceData(device, cache, resourceId)));
+    public createBaseEmitter(device: GfxDevice, cache: GfxRenderCache, resourceId: number): JPA.JPABaseEmitter {
+        const resData = assertExists(this.getResourceData(device, cache, resourceId));
+        const emitter = this.emitterManager.createEmitter(resData)!;
+
+        // This seems to mark it as an indirect particle (???) for simple particles.
+        // ref. d_paControl_c::readCommon / readRoomScene
+        if (!!(resourceId & 0x4000)) {
+            emitter.drawGroupId = WindWakerPass.EFFECT_INDIRECT;
+        } else {
+            emitter.drawGroupId = WindWakerPass.EFFECT_MAIN;
+        }
+
+        return emitter;
+    }
+
+    public createEmitterTest(resourceId: number = 0x14) {
+        const device: GfxDevice = window.main.viewer.gfxDevice;
+        const cache: GfxRenderCache = window.main.scene.renderHelper.getCache();
+        const emitter = this.createBaseEmitter(device, cache, resourceId);
         if (emitter !== null) {
             emitter.globalTranslation[0] = -275;
             emitter.globalTranslation[1] = 150;
@@ -507,14 +589,17 @@ class SimpleEffectSystem {
     }
 
     public destroy(device: GfxDevice): void {
-        this.jpacData.destroy(device);
+        for (let i = 0; i < this.jpacData.length; i++)
+            this.jpacData[i].destroy(device);
         this.emitterManager.destroy(device);
     }
 }
 
 const enum WindWakerPass {
-    MAIN = 0x01,
-    SKYBOX = 0x02,
+    MAIN,
+    SKYBOX,
+    EFFECT_MAIN,
+    EFFECT_INDIRECT,
 }
 
 class SkyEnvironment {
@@ -522,7 +607,7 @@ class SkyEnvironment {
     private vr_uso_umi: BMDModelInstance | null;
     private vr_kasumi_mae: BMDModelInstance | null;
     private vr_back_cloud: BMDModelInstance | null;
-    
+
     constructor(device: GfxDevice, cache: GfxRenderCache, extraTextures: ZWWExtraTextures, stageRarc: RARC.RARC) {
         this.vr_sky = createModelInstance(device, cache, extraTextures, stageRarc, `vr_sky`, true);
         this.vr_uso_umi = createModelInstance(device, cache, extraTextures, stageRarc, `vr_uso_umi`, true);
@@ -530,64 +615,58 @@ class SkyEnvironment {
         this.vr_back_cloud = createModelInstance(device, cache, extraTextures, stageRarc, `vr_back_cloud`, true);
     }
 
-    public setColorOverrides(colors: Colors | undefined): void {
-        if (colors !== undefined) {
-            if (this.vr_sky)
-                this.vr_sky.setColorOverride(ColorKind.K0, colors.vr_sky);
-            if (this.vr_uso_umi)
-                this.vr_uso_umi.setColorOverride(ColorKind.K0, colors.vr_uso_umi);
-            if (this.vr_kasumi_mae)
-                this.vr_kasumi_mae.setColorOverride(ColorKind.C0, colors.vr_kasumi_mae);
-            if (this.vr_back_cloud)
-                this.vr_back_cloud.setColorOverride(ColorKind.K0, colors.vr_back_cloud, true);
-        } else {
-            if (this.vr_sky)
-                this.vr_sky.setColorOverride(ColorKind.K0, undefined);
-            if (this.vr_uso_umi)
-                this.vr_uso_umi.setColorOverride(ColorKind.K0, undefined);
-            if (this.vr_kasumi_mae)
-                this.vr_kasumi_mae.setColorOverride(ColorKind.C0, undefined);
-            if (this.vr_back_cloud)
-                this.vr_back_cloud.setColorOverride(ColorKind.K0, undefined);
-        }
+    public setKyankoColors(colors: KyankoColors): void {
+        const virtColors = colors.virtColors;
+        if (virtColors === null)
+            return;
+
+        if (this.vr_sky !== null)
+            this.vr_sky.setColorOverride(ColorKind.K0, virtColors.vr_sky);
+        if (this.vr_uso_umi !== null)
+            this.vr_uso_umi.setColorOverride(ColorKind.K0, virtColors.vr_uso_umi);
+        if (this.vr_kasumi_mae !== null)
+            this.vr_kasumi_mae.setColorOverride(ColorKind.C0, virtColors.vr_kasumi_mae);
+        if (this.vr_back_cloud !== null)
+            this.vr_back_cloud.setColorOverride(ColorKind.K0, virtColors.vr_back_cloud, true);
     }
 
     public prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput): void {
-        if (this.vr_sky)
+        if (this.vr_sky !== null)
             this.vr_sky.prepareToRender(device, renderInstManager, viewerInput);
-        if (this.vr_kasumi_mae)
+        if (this.vr_kasumi_mae !== null)
             this.vr_kasumi_mae.prepareToRender(device, renderInstManager, viewerInput);
-        if (this.vr_uso_umi)
+        if (this.vr_uso_umi !== null)
             this.vr_uso_umi.prepareToRender(device, renderInstManager, viewerInput);
-        if (this.vr_back_cloud)
+        if (this.vr_back_cloud !== null)
             this.vr_back_cloud.prepareToRender(device, renderInstManager, viewerInput);
     }
 
     public destroy(device: GfxDevice): void {
-        if (this.vr_sky)
+        if (this.vr_sky !== null)
             this.vr_sky.destroy(device);
-        if (this.vr_kasumi_mae)
+        if (this.vr_kasumi_mae !== null)
             this.vr_kasumi_mae.destroy(device);
-        if (this.vr_uso_umi)
+        if (this.vr_uso_umi !== null)
             this.vr_uso_umi.destroy(device);
-        if (this.vr_back_cloud)
+        if (this.vr_back_cloud !== null)
             this.vr_back_cloud.destroy(device);
     }
 }
 
 export class WindWakerRenderer implements Viewer.SceneGfx {
     private renderTarget = new BasicRenderTarget();
+    public opaqueSceneTexture = new ColorTexture();
     public renderHelper: GXRenderHelperGfx;
 
-    private seaPlane: SeaPlane | null;
+    private seaPlane: SeaPlane | null = null;
 
     public skyEnvironment: SkyEnvironment | null = null;
     public roomRenderers: WindWakerRoomRenderer[] = [];
-    public effectSystem: SimpleEffectSystem | null = null;
+    public effectSystem: SimpleEffectSystem;
     public extraTextures: ZWWExtraTextures;
 
-    private currentTimeOfDay: number;
-    private timeOfDaySelector: UI.SingleSelect;
+    private timeOfDayColors: KyankoColors[] = [];
+    private dstColors: KyankoColors;
 
     public onstatechanged!: () => void;
 
@@ -597,64 +676,63 @@ export class WindWakerRenderer implements Viewer.SceneGfx {
 
         if (wantsSeaPlane)
             this.seaPlane = new SeaPlane(device, cache);
+
+        // Build color palette.
+        const dzsBuffer = this.stageRarc.findFileData(`dzs/stage.dzs`)!;
+        for (let i = 0; i < 6; i++)
+            this.timeOfDayColors.push(getKyankoColorsFromDZS(dzsBuffer, 0, i));
+        this.dstColors = getKyankoColorsFromDZS(dzsBuffer, 0, 0);
     }
 
     private setTimeOfDay(timeOfDay: number): void {
-        if (this.currentTimeOfDay === timeOfDay)
-            return;
+        const i0 = ((timeOfDay + 0) % 6) | 0;
+        const i1 = ((timeOfDay + 1) % 6) | 0;
+        const t = timeOfDay % 1;
 
-        this.currentTimeOfDay = timeOfDay;
-        this.timeOfDaySelector.selectItem(timeOfDay + 1);
-        this.onstatechanged();
-        const dzsFile = this.stageRarc.findFile(`dzs/stage.dzs`)!;
-
-        const colors = timeOfDay === -1 ? undefined : getColorsFromDZS(dzsFile.buffer, 0, timeOfDay);
+        kyankoColorsLerp(this.dstColors, this.timeOfDayColors[i0], this.timeOfDayColors[i1], t);
 
         if (this.skyEnvironment !== null)
-            this.skyEnvironment.setColorOverrides(colors);
+            this.skyEnvironment.setKyankoColors(this.dstColors);
 
-        if (colors !== undefined) {
-            if (this.seaPlane)
-                this.seaPlane.setColor(colors.ocean);
-        }
+        if (this.seaPlane !== null)
+            this.seaPlane.setKyankoColors(this.dstColors);
 
-        for (const roomRenderer of this.roomRenderers) {
-            const roomColors = timeOfDay === -1 ? undefined : getColorsFromDZS(dzsFile.buffer, 0, timeOfDay);
-            roomRenderer.setColors(roomColors);
+        for (let i = 0; i < this.roomRenderers.length; i++) {
+            // TODO(jstpierre): Use roomIdx for colors?
+            // const roomColors = getColorsFromDZS(dzsBuffer, 0, timeOfDay);
+            this.roomRenderers[i].setKyankoColors(this.dstColors);
         }
     }
 
+    private setVisibleLayerMask(m: number): void {
+        for (let i = 0; i < this.roomRenderers.length; i++)
+            this.roomRenderers[i].setVisibleLayerMask(m);
+    }
+
     public createPanels(): UI.Panel[] {
-        const timeOfDayPanel = new UI.Panel();
-        timeOfDayPanel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR;
-        timeOfDayPanel.setTitle(UI.TIME_OF_DAY_ICON, "Time of Day");
-
-        const colorPresets = [ '(no palette)', 'Dusk', 'Morning', 'Day', 'Afternoon', 'Evening', 'Night' ];
-
-        this.timeOfDaySelector = new UI.SingleSelect();
-        this.timeOfDaySelector.setStrings(colorPresets);
-        this.timeOfDaySelector.onselectionchange = (index: number) => {
-            const timeOfDay = index - 1;
-            this.setTimeOfDay(timeOfDay);
+        const getScenarioMask = () => {
+            let mask: number = 0;
+            for (let i = 0; i < scenarioSelect.getNumItems(); i++)
+                if (scenarioSelect.itemIsOn[i])
+                    mask |= (1 << i);
+            return mask;
         };
+        const scenarioPanel = new UI.Panel();
+        scenarioPanel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR;
+        scenarioPanel.setTitle(UI.LAYER_ICON, 'Layer Select');
+        const scenarioSelect = new UI.MultiSelect();
+        scenarioSelect.onitemchanged = () => {
+            this.setVisibleLayerMask(getScenarioMask());
+        };
+        scenarioSelect.setStrings(range(0, 12).map((i) => `Layer ${i}`));
+        scenarioSelect.setItemsSelected(range(0, 12).map((i) => i === 0));
+        this.setVisibleLayerMask(0x01);
+        scenarioPanel.contents.append(scenarioSelect.elem);
 
-        const dzsFile = this.stageRarc.findFile(`dzs/stage.dzs`)!;
-        const flairs: UI.Flair[] = colorPresets.slice(1).map((presetName, i): UI.Flair | null => {
-            const elemIndex = i + 1;
-            const timeOfDay = i;
-            const stageColors = getColorsFromDZS(dzsFile.buffer, 0, timeOfDay);
-            if (stageColors === undefined)
-                return null;
-            else
-                return { index: elemIndex, background: colorToCSS(stageColors.vr_sky) };
-        }).filter((n) => n !== null) as UI.Flair[];
-        this.timeOfDaySelector.setFlairs(flairs);
-
-        this.setTimeOfDay(2);
-        timeOfDayPanel.contents.appendChild(this.timeOfDaySelector.elem);
-
-        const layersPanel = new UI.LayerPanel();
-        layersPanel.setLayers(this.roomRenderers);
+        const roomsPanel = new UI.LayerPanel();
+        roomsPanel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR;
+        roomsPanel.setTitle(UI.LAYER_ICON, 'Rooms');
+        roomsPanel.setLayers(this.roomRenderers);
 
         const renderHacksPanel = new UI.Panel();
         renderHacksPanel.customHeaderBackgroundColor = UI.COOL_BLUE_COLOR;
@@ -679,12 +757,14 @@ export class WindWakerRenderer implements Viewer.SceneGfx {
         };
         renderHacksPanel.contents.appendChild(enableObjects.elem);
 
-        return [timeOfDayPanel, layersPanel, renderHacksPanel];
+        return [roomsPanel, scenarioPanel, renderHacksPanel];
     }
 
     private prepareToRender(device: GfxDevice, hostAccessPass: GfxHostAccessPass, viewerInput: Viewer.ViewerRenderInput): void {
         const template = this.renderHelper.pushTemplateRenderInst();
         const renderInstManager = this.renderHelper.renderInstManager;
+
+        template.filterKey = WindWakerPass.MAIN;
 
         fillSceneParamsDataOnTemplate(template, viewerInput);
         if (this.seaPlane)
@@ -694,13 +774,24 @@ export class WindWakerRenderer implements Viewer.SceneGfx {
         for (let i = 0; i < this.roomRenderers.length; i++)
             this.roomRenderers[i].prepareToRender(device, renderInstManager, viewerInput);
 
-        if (this.effectSystem !== null) {
-            const template = renderInstManager.pushTemplateRenderInst();
-            template.filterKey = WindWakerPass.MAIN;
+        {
             this.effectSystem.calc(viewerInput);
-            this.effectSystem.setDrawInfo(viewerInput.camera.viewMatrix, viewerInput.camera.projectionMatrix, null);
-            this.effectSystem.draw(device, this.renderHelper.renderInstManager);
-            this.renderHelper.renderInstManager.popTemplateRenderInst();
+            this.effectSystem.setOpaqueSceneTexture(this.opaqueSceneTexture.gfxTexture!);
+
+            for (let drawType = WindWakerPass.EFFECT_MAIN; drawType <= WindWakerPass.EFFECT_INDIRECT; drawType++) {
+                const template = renderInstManager.pushTemplateRenderInst();
+                template.filterKey = drawType;
+
+                let texPrjMtx: mat4 | null = null;
+                if (drawType === WindWakerPass.EFFECT_INDIRECT) {
+                    texPrjMtx = scratchMatrix;
+                    texProjCameraSceneTex(texPrjMtx, viewerInput.camera, viewerInput.viewport, 1);
+                }
+
+                this.effectSystem.setDrawInfo(viewerInput.camera.viewMatrix, viewerInput.camera.projectionMatrix, texPrjMtx);
+                this.effectSystem.draw(device, this.renderHelper.renderInstManager, drawType);
+                renderInstManager.popTemplateRenderInst();
+            }
         }
 
         this.renderHelper.renderInstManager.popTemplateRenderInst();
@@ -714,39 +805,39 @@ export class WindWakerRenderer implements Viewer.SceneGfx {
         this.prepareToRender(device, hostAccessPass, viewerInput);
         device.submitPass(hostAccessPass);
 
-        this.renderTarget.setParameters(device, viewerInput.viewportWidth, viewerInput.viewportHeight);
+        this.renderTarget.setParameters(device, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
+        this.opaqueSceneTexture.setParameters(device, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
+
+        this.setTimeOfDay(getTimeFrames(viewerInput) / 5000);
 
         // First, render the skybox.
-        const skyboxPassRenderer = this.renderTarget.createRenderPass(device, standardFullClearRenderPassDescriptor);
-        skyboxPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        const skyboxPassRenderer = this.renderTarget.createRenderPass(device, viewerInput.viewport, standardFullClearRenderPassDescriptor);
         renderInstManager.setVisibleByFilterKeyExact(WindWakerPass.SKYBOX);
         renderInstManager.drawOnPassRenderer(device, skyboxPassRenderer);
         skyboxPassRenderer.endPass(null);
         device.submitPass(skyboxPassRenderer);
         // Now do main pass.
-        const mainPassRenderer = this.renderTarget.createRenderPass(device, depthClearRenderPassDescriptor);
-        mainPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        const mainPassRenderer = this.renderTarget.createRenderPass(device, viewerInput.viewport, depthClearRenderPassDescriptor);
         renderInstManager.setVisibleByFilterKeyExact(WindWakerPass.MAIN);
         renderInstManager.drawOnPassRenderer(device, mainPassRenderer);
+        renderInstManager.setVisibleByFilterKeyExact(WindWakerPass.EFFECT_MAIN);
+        renderInstManager.drawOnPassRenderer(device, mainPassRenderer);
+
+        mainPassRenderer.endPass(this.opaqueSceneTexture.gfxTexture);
+        device.submitPass(mainPassRenderer);
+
+        // Now indirect stuff.
+        const indirectPassRenderer = this.renderTarget.createRenderPass(device, viewerInput.viewport, noClearRenderPassDescriptor);
+        renderInstManager.setVisibleByFilterKeyExact(WindWakerPass.EFFECT_INDIRECT);
+        renderInstManager.drawOnPassRenderer(device, indirectPassRenderer);
+
         renderInstManager.resetRenderInsts();
-        return mainPassRenderer;
-    }
-
-    public serializeSaveState(dst: ArrayBuffer, offs: number): number {
-        const view = new DataView(dst);
-        view.setInt8(offs++, this.currentTimeOfDay);
-        return offs;
-    }
-
-    public deserializeSaveState(src: ArrayBuffer, offs: number, byteLength: number): number {
-        const view = new DataView(src);
-        if (offs < byteLength)
-            this.setTimeOfDay(view.getInt8(offs++));
-        return offs;
+        return indirectPassRenderer;
     }
 
     public destroy(device: GfxDevice) {
         this.renderHelper.destroy(device);
+        this.opaqueSceneTexture.destroy(device);
         this.extraTextures.destroy(device);
         this.renderTarget.destroy(device);
         if (this.seaPlane)
@@ -871,7 +962,70 @@ class SceneDesc {
 
         modelCache.fetchArchive(`${pathBase}/Object/System.arc`);
         modelCache.fetchArchive(`${pathBase}/Stage/${this.stageDir}/Stage.arc`);
-        modelCache.fetchFileData(`${pathBase}/Particle/common.jpc`);
+
+        const particleArchives = [
+            `${pathBase}/Particle/common.jpc`,
+            // `${pathBase}/Particle/Pscene000.jpc`,
+            // `${pathBase}/Particle/Pscene001.jpc`,
+            // `${pathBase}/Particle/Pscene004.jpc`,
+            // `${pathBase}/Particle/Pscene005.jpc`,
+            // `${pathBase}/Particle/Pscene011.jpc`,
+            // `${pathBase}/Particle/Pscene013.jpc`,
+            // `${pathBase}/Particle/Pscene014.jpc`,
+            // `${pathBase}/Particle/Pscene020.jpc`,
+            // `${pathBase}/Particle/Pscene021.jpc`,
+            // `${pathBase}/Particle/Pscene022.jpc`,
+            // `${pathBase}/Particle/Pscene023.jpc`,
+            // `${pathBase}/Particle/Pscene026.jpc`,
+            // `${pathBase}/Particle/Pscene030.jpc`,
+            // `${pathBase}/Particle/Pscene035.jpc`,
+            // `${pathBase}/Particle/Pscene036.jpc`,
+            // `${pathBase}/Particle/Pscene043.jpc`,
+            // `${pathBase}/Particle/Pscene044.jpc`,
+            // `${pathBase}/Particle/Pscene050.jpc`,
+            // `${pathBase}/Particle/Pscene051.jpc`,
+            // `${pathBase}/Particle/Pscene060.jpc`,
+            // `${pathBase}/Particle/Pscene061.jpc`,
+            // `${pathBase}/Particle/Pscene070.jpc`,
+            // `${pathBase}/Particle/Pscene071.jpc`,
+            // `${pathBase}/Particle/Pscene078.jpc`,
+            // `${pathBase}/Particle/Pscene080.jpc`,
+            // `${pathBase}/Particle/Pscene081.jpc`,
+            // `${pathBase}/Particle/Pscene082.jpc`,
+            // `${pathBase}/Particle/Pscene083.jpc`,
+            // `${pathBase}/Particle/Pscene084.jpc`,
+            // `${pathBase}/Particle/Pscene085.jpc`,
+            // `${pathBase}/Particle/Pscene086.jpc`,
+            // `${pathBase}/Particle/Pscene090.jpc`,
+            // `${pathBase}/Particle/Pscene127.jpc`,
+            // `${pathBase}/Particle/Pscene150.jpc`,
+            // `${pathBase}/Particle/Pscene199.jpc`,
+            // `${pathBase}/Particle/Pscene200.jpc`,
+            // `${pathBase}/Particle/Pscene201.jpc`,
+            // `${pathBase}/Particle/Pscene202.jpc`,
+            // `${pathBase}/Particle/Pscene203.jpc`,
+            // `${pathBase}/Particle/Pscene204.jpc`,
+            // `${pathBase}/Particle/Pscene205.jpc`,
+            // `${pathBase}/Particle/Pscene206.jpc`,
+            // `${pathBase}/Particle/Pscene207.jpc`,
+            // `${pathBase}/Particle/Pscene208.jpc`,
+            // `${pathBase}/Particle/Pscene209.jpc`,
+            // `${pathBase}/Particle/Pscene210.jpc`,
+            // `${pathBase}/Particle/Pscene211.jpc`,
+            // `${pathBase}/Particle/Pscene213.jpc`,
+            // `${pathBase}/Particle/Pscene217.jpc`,
+            // `${pathBase}/Particle/Pscene218.jpc`,
+            // `${pathBase}/Particle/Pscene219.jpc`,
+            // `${pathBase}/Particle/Pscene220.jpc`,
+            // `${pathBase}/Particle/Pscene221.jpc`,
+            // `${pathBase}/Particle/Pscene222.jpc`,
+            // `${pathBase}/Particle/Pscene223.jpc`,
+            // `${pathBase}/Particle/Pscene224.jpc`,
+            // `${pathBase}/Particle/Pscene254.jpc`,
+        ];
+
+        for (let i = 0; i < particleArchives.length; i++)
+            modelCache.fetchFileData(particleArchives[i]);
 
         // XXX(jstpierre): This is really terrible code.
         for (let i = 0; i < this.rooms.length; i++) {
@@ -929,11 +1083,12 @@ class SceneDesc {
                 this.spawnObjectsFromDZR(device, renderer, roomRenderer, dzr, modelMatrix);
             }
 
-            const particleCommon = modelCache.getFileData(`${pathBase}/Particle/common.jpc`);
-            if (particleCommon !== null && particleCommon.byteLength > 0) {
-                const jpac = JPA.parse(particleCommon);
-                renderer.effectSystem = new SimpleEffectSystem(device, jpac);
+            const jpac: JPA.JPAC[] = [];
+            for (let i = 0; i < particleArchives.length; i++) {
+                const jpacData = modelCache.getFileData(particleArchives[i]);
+                jpac.push(JPA.parse(jpacData));
             }
+            renderer.effectSystem = new SimpleEffectSystem(device, jpac);
 
             return modelCache.waitForLoad().then(() => {
                 return renderer;
@@ -962,7 +1117,9 @@ class SceneDesc {
         }
     }
 
-    private spawnObjectsForActor(device: GfxDevice, renderer: WindWakerRenderer, roomRenderer: WindWakerRoomRenderer, name: string, parameters: number, localModelMatrix: mat4, worldModelMatrix: mat4): void {
+    private async spawnObjectsForActor(device: GfxDevice, renderer: WindWakerRenderer, roomRenderer: WindWakerRoomRenderer, name: string, parameters: number, layer: number, localModelMatrix: mat4, worldModelMatrix: mat4): Promise<void> {
+        // TODO(jstpierre): Better actor implementations
+
         const modelCache = renderer.modelCache;
         const stageName = this.id;
         const roomIdx = roomRenderer.roomIdx;
@@ -986,10 +1143,13 @@ class SceneDesc {
         function buildChildModel(rarc: RARC.RARC, modelPath: string): BMDObjectRenderer {
             const model = modelCache.getModel(device, cache, rarc, modelPath);
             const modelInstance = new BMDModelInstance(model);
+            modelInstance.passMask = WindWakerPass.MAIN;
             renderer.extraTextures.fillExtraTextures(modelInstance);
             modelInstance.name = name;
             modelInstance.setSortKeyLayer(GfxRendererLayer.OPAQUE + 1);
-            return new BMDObjectRenderer(modelInstance);
+            const objectRenderer = new BMDObjectRenderer(modelInstance);
+            objectRenderer.layer = layer;
+            return objectRenderer;
         }
 
         function setModelMatrix(m: mat4): void {
@@ -1003,22 +1163,11 @@ class SceneDesc {
             return objectRenderer;
         }
 
-        function buildChildModelBMT(rarc: RARC.RARC, modelPath: string, bmtPath: string): BMDObjectRenderer {
-            const bmd = BMD.parse(rarc.findFileData(modelPath)!);
-            const bmt = BMT.parse(rarc.findFileData(bmtPath)!);
-            const model = new BMDModel(device, cache, bmd, bmt);
-            modelCache.extraModels.push(model);
-            const modelInstance = new BMDModelInstance(model);
-            renderer.extraTextures.fillExtraTextures(modelInstance);
-            modelInstance.name = name;
-            modelInstance.setSortKeyLayer(GfxRendererLayer.OPAQUE + 1);
-            return new BMDObjectRenderer(modelInstance);
-        }
-
         function buildModelBMT(rarc: RARC.RARC, modelPath: string, bmtPath: string): BMDObjectRenderer {
-            const objectRenderer = buildChildModelBMT(rarc, modelPath, bmtPath);
-            setModelMatrix(objectRenderer.modelMatrix);
-            roomRenderer.objectRenderers.push(objectRenderer);
+            const objectRenderer = buildModel(rarc, modelPath);
+            const bmt = BMT.parse(rarc.findFileData(bmtPath)!);
+            objectRenderer.modelInstance.setModelMaterialData(new BMDModelMaterialData(device, cache, bmt));
+            renderer.extraTextures.fillExtraTextures(objectRenderer.modelInstance);
             return objectRenderer;
         }
 
@@ -1031,8 +1180,8 @@ class SceneDesc {
         }
 
         function buildPinkFlowerModel(symbolMap: SymbolMap): ObjectRenderer {
-            // This is a thing that the game *actually* checks, believe it or not, in dFlower_packet_c::setData.
             let flowerData: FlowerData;
+            // This is a thing that the game *actually* checks, believe it or not, in dFlower_packet_c::setData.
             if (stageName === 'sea' && roomIdx === 33) {
                 flowerData = modelCache.extraCache.get('Obessou') as FlowerData;
                 if (flowerData === undefined) {
@@ -1051,6 +1200,7 @@ class SceneDesc {
             setModelMatrix(objectRenderer.modelMatrix);
             setToNearestFloor(objectRenderer.modelMatrix, localModelMatrix);
             roomRenderer.objectRenderers.push(objectRenderer);
+            objectRenderer.layer = layer;
             return objectRenderer;
         }
 
@@ -1065,7 +1215,14 @@ class SceneDesc {
             setModelMatrix(objectRenderer.modelMatrix);
             setToNearestFloor(objectRenderer.modelMatrix, localModelMatrix);
             roomRenderer.objectRenderers.push(objectRenderer);
+            objectRenderer.layer = layer;
             return objectRenderer;
+        }
+
+        function createEmitter(resourceId: number): JPA.JPABaseEmitter {
+            const emitter = renderer.effectSystem!.createBaseEmitter(device, cache, resourceId);
+            // TODO(jstpierre): Scale, Rotation
+            return emitter;
         }
 
         function parseBCK(rarc: RARC.RARC, path: string) { const g = BCK.parse(rarc.findFileData(path)!).ank1; g.loopMode = LoopMode.REPEAT; return g; }
@@ -1081,7 +1238,7 @@ class SceneDesc {
             const itemId = (parameters & 0x000000FF);
 
             // Heart
-            if (itemId === 0x00) fetchArchive(`Always.arc`).then((rarc) => buildModel(rarc, `bdlm/vlupl.bdl`));
+            if (itemId === 0x00) fetchArchive(`Always.arc`).then((rarc) => buildModel(rarc, `bdl/vhrtl.bdl`));
             // Rupee (Green)
             else if (itemId === 0x01) fetchArchive(`Always.arc`).then((rarc) => {
                 const m = buildModel(rarc, `bdlm/vlupl.bdl`);
@@ -1106,24 +1263,66 @@ class SceneDesc {
                 m.bindTRK1(parseBRK(rarc, `brk/vlupl.brk`), animFrame(3));
                 m.bindTTK1(parseBTK(rarc, `btk/vlupl.btk`));
             });
+            // Small magic jar
+            if (itemId === 0x09) fetchArchive(`Always.arc`).then((rarc) => buildModel(rarc, `bdlm/mpoda.bdl`));
             else console.warn(`Unknown item: ${hexzero(itemId, 2)}`);
         }
+        // Generic Torch
+        else if (name === 'bonbori') {
+            const rarc = await fetchArchive(`Ep.arc`);
+            const ga = !!((parameters >>> 6) & 0x01);
+            const obm = !!((parameters >>> 7) & 0x01);
+            let type = (parameters & 0x3F);
+            if (type === 0x3F)
+                type = 0;
+
+            setModelMatrix(scratchMatrix);
+            vec3.set(scratchVec3a, 0, 0, 0);
+            if (type === 0 || type === 3) {
+                const m = buildModel(rarc, obm ? `bdl/obm_shokudai1.bdl` : `bdl/vktsd.bdl`);
+                scratchVec3a[1] += 140;
+            }
+            vec3.transformMat4(scratchVec3a, scratchVec3a, scratchMatrix);
+
+            // Create particle systems.
+            const pa = createEmitter(0x0001);
+            vec3.copy(pa.globalTranslation, scratchVec3a);
+            pa.globalTranslation[1] += -240 + 235 + 15;
+            if (type !== 2) {
+                const pb = createEmitter(0x4004);
+                vec3.copy(pb.globalTranslation, pa.globalTranslation);
+                pb.globalTranslation[1] += 20;
+            }
+            const pc = createEmitter(0x01EA);
+            vec3.copy(pc.globalTranslation, scratchVec3a);
+            pc.globalTranslation[1] += -240 + 235 + 8;
+            // TODO(jstpierre): ga
+        }
         // Hyrule Ocean Warp
-        else if (name === 'Ghrwp') fetchArchive(`Ghrwp.arc`).then((rarc) => {
+        else if (name === 'Ghrwp') {
+            const rarc = await fetchArchive(`Ghrwp.arc`);
             const a00 = buildModel(rarc, `bdlm/ghrwpa00.bdl`);
             a00.bindTTK1(parseBTK(rarc, `btk/ghrwpa00.btk`));
             const b00 = buildModel(rarc, `bdlm/ghrwpb00.bdl`);
             b00.bindTTK1(parseBTK(rarc, `btk/ghrwpb00.btk`));
             b00.bindTRK1(parseBRK(rarc, `brk/ghrwpb00.brk`));
-        });
-        // Outset Island: Jabun's barrier (five parts)
+        }
+        // Outset Island: Jabun's barrier (six parts)
         else if (name === 'Ajav') fetchArchive(`Ajav.arc`).then((rarc) => {
-            buildModel(rarc, `bdl/ajava.bdl`);
-            buildModel(rarc, `bdl/ajavb.bdl`);
-            buildModel(rarc, `bdl/ajavc.bdl`);
-            buildModel(rarc, `bdl/ajavd.bdl`);
-            buildModel(rarc, `bdl/ajave.bdl`);
-            buildModel(rarc, `bdl/ajavf.bdl`);
+            // Seems like there's one texture that's shared for all parts in ajava.bdl
+            // ref. daObjAjav::Act_c::set_tex( (void))
+            const ja = buildModel(rarc, `bdl/ajava.bdl`);
+            const txa = ja.modelInstance.getTextureMappingReference('Txa_jav_a')!;
+            const jb = buildModel(rarc, `bdl/ajavb.bdl`);
+            jb.modelInstance.getTextureMappingReference('dmTxa_jav_a')!.copy(txa);
+            const jc = buildModel(rarc, `bdl/ajavc.bdl`);
+            jc.modelInstance.getTextureMappingReference('dmTxa_jav_a')!.copy(txa);
+            const jd = buildModel(rarc, `bdl/ajavd.bdl`);
+            jd.modelInstance.getTextureMappingReference('dmTxa_jav_a')!.copy(txa);
+            const je = buildModel(rarc, `bdl/ajave.bdl`);
+            je.modelInstance.getTextureMappingReference('dmTxa_jav_a')!.copy(txa);
+            const jf = buildModel(rarc, `bdl/ajavf.bdl`);
+            jf.modelInstance.getTextureMappingReference('dmTxa_jav_a')!.copy(txa);
         });
         // NPCs
         // Aryll
@@ -1147,13 +1346,32 @@ class SceneDesc {
         // Tingle
         else if (name === 'Tc') fetchArchive(`Tc.arc`).then((rarc) => buildModel(rarc, `bdlm/tc.bdl`).bindANK1(parseBCK(rarc, `bcks/wait01.bck`)));
         // Grandma
-        else if (name === 'Ba1') fetchArchive(`Ba.arc`).then((rarc) => buildModel(rarc, `bdlm/ba.bdl`).bindANK1(parseBCK(rarc, `bcks/wait01.bck`)));
+        else if (name === 'Ba1') {
+            // Only allow the sleeping grandma through, because how else can you live in life...
+            if (parameters === 0x03) {
+                const rarc = await fetchArchive(`Ba.arc`);
+                const m = buildModel(rarc, `bdlm/ba.bdl`);
+                m.bindANK1(parseBCK(rarc, `bcks/wait02.bck`));
+            }
+        }
         // Salvatore
         else if (name === 'Kg1' || name === 'Kg2') fetchArchive(`Kg.arc`).then((rarc) => buildModel(rarc, `bdlm/kg.bdl`).bindANK1(parseBCK(rarc, `bcks/kg_wait01.bck`)));
         // Orca
         else if (name === 'Ji1') fetchArchive(`Ji.arc`).then((rarc) => buildModel(rarc, `bdlm/ji.bdl`).bindANK1(parseBCK(rarc, `bck/ji_wait01.bck`)));
         // Medli
-        else if (name === 'Md1') fetchArchive(`Md.arc`).then((rarc) => buildModel(rarc, `bdlm/md.bdl`).bindANK1(parseBCK(rarc, `bcks/md_wait01.bck`)));
+        else if (name === 'Md1') {
+            const rarc = await fetchArchive(`Md.arc`);
+            const m = buildModel(rarc, `bdlm/md.bdl`);
+            m.bindANK1(parseBCK(rarc, `bcks/md_wait01.bck`));
+            const armL = buildChildModel(rarc, `bdlm/mdarm.bdl`);
+            armL.bindANK1(parseBCK(rarc, `bcks/mdarm_wait01.bck`));
+            armL.modelInstance.setShapeVisible(1, false);
+            armL.setParentJoint(m, `armL`);
+            const armR = buildChildModel(rarc, `bdlm/mdarm.bdl`);
+            armR.bindANK1(parseBCK(rarc, `bcks/mdarm_wait01.bck`));
+            armR.modelInstance.setShapeVisible(0, false);
+            armR.setParentJoint(m, `armR`);
+        }
         // Makar
         else if (name === 'Cb1') fetchArchive(`Cb.arc`).then((rarc) => {
             const m = buildModel(rarc, `bdl/cb.bdl`);
@@ -1667,7 +1885,10 @@ class SceneDesc {
         else if (name === 'flower') fetchExtraSymbols().then((symbolMap) => buildWhiteFlowerModel(symbolMap));
         else if (name === 'pflower') fetchExtraSymbols().then((symbolMap) => buildPinkFlowerModel(symbolMap));
         // Bigger trees
-        else if (name === 'lwood') fetchArchive(`Lwood.arc`).then((rarc) => buildModel(rarc, `bdl/alwd.bdl`));
+        else if (name === 'lwood') fetchArchive(`Lwood.arc`).then((rarc) => {
+            const b = buildModel(rarc, `bdl/alwd.bdl`);
+            b.lightTevColorType = LightTevColorType.BG0;
+        });
         else if (name === 'Oyashi') fetchArchive(`Oyashi.arc`).then((rarc) => buildModel(rarc, `bdl/oyashi.bdl`));
         else if (name === 'Vyasi') fetchArchive(`Vyasi.arc`).then((rarc) => buildModel(rarc, `bdl/vyasi.bdl`));
         // Barrels
@@ -1687,7 +1908,10 @@ class SceneDesc {
         // Mailbox
         else if (name === 'Tpost') fetchArchive(`Toripost.arc`).then((rarc) => buildModel(rarc, `bdl/vpost.bdl`).bindANK1(parseBCK(rarc, `bcks/post_wait.bck`)));
         // Sign
-        else if (name === 'Kanban') fetchArchive(`Kanban.arc`).then((rarc) => buildModel(rarc, `bdl/kanban.bdl`));
+        else if (name === 'Kanban') fetchArchive(`Kanban.arc`).then((rarc) => {
+            const b = buildModel(rarc, `bdl/kanban.bdl`);
+            b.lightTevColorType = LightTevColorType.BG0;
+        });
         // Doors: TODO(jstpierre)
         else if (name === 'KNOB00') return;
         // Holes you can fall into
@@ -1814,6 +2038,7 @@ class SceneDesc {
             // TODO(jstpierre): ymnkz00
         });
         else if (name === 'Ygush00' || name === 'Ygush01' || name === 'Ygush02') fetchArchive(`Ygush00.arc`).then((rarc) => buildModel(rarc, `bdlm/ygush00.bdl`).bindTTK1(parseBTK(rarc, `btk/ygush00.btk`)));
+        else if (name === 'Yboil00') fetchArchive(`Yboil.arc`).then((rarc) => buildModel(rarc, `bdlm/yboil00.bdl`).bindTTK1(parseBTK(rarc, `btk/yboil00.btk`)));
         else if (name === 'Ygstp00') fetchArchive(`Ygush00.arc`).then((rarc) => buildModel(rarc, `bdlm/ygstp00.bdl`).bindTTK1(parseBTK(rarc, `btk/ygstp00.btk`)));
         else if (name === 'Ytrnd00') fetchArchive(`Trnd.arc`).then((rarc) => {
             buildModel(rarc, `bdlm/ytrnd00.bdl`).bindTTK1(parseBTK(rarc, `btk/ytrnd00.btk`));
@@ -1843,7 +2068,12 @@ class SceneDesc {
         else if (name === 'Ostool') fetchArchive(`Okmono.arc`).then((rarc) => buildModel(rarc, `bdl/ostool.bdl`));
         else if (name === 'Otble') fetchArchive(`Okmono.arc`).then((rarc) => buildModel(rarc, `bdl/otable.bdl`));
         else if (name === 'OtbleL') fetchArchive(`Okmono.arc`).then((rarc) => buildModel(rarc, `bdl/otablel.bdl`));
-        else if (name === 'AjavW') fetchArchive(`AjavW.arc`).then((rarc) => buildModel(rarc, `bdlm/ajavw.bdl`).bindTTK1(parseBTK(rarc, `btk/ajavw.btk`)));
+        else if (name === 'AjavW') {
+            const rarc = await fetchArchive(`AjavW.arc`);
+            const m = buildModel(rarc, `bdlm/ajavw.bdl`);
+            m.lightTevColorType = LightTevColorType.BG1;
+            m.bindTTK1(parseBTK(rarc, `btk/ajavw.btk`));
+        } else if (name === 'Vdora') fetchArchive(`Vdora.arc`).then((rarc) => buildModel(rarc, `bdl/vdora.bdl`));
         // Windfall Island
         else if (name === 'Roten2') fetchArchive(`Roten.arc`).then((rarc) => buildModel(rarc, `bdl/roten02.bdl`));
         else if (name === 'Roten3') fetchArchive(`Roten.arc`).then((rarc) => buildModel(rarc, `bdl/roten03.bdl`));
@@ -2054,6 +2284,33 @@ class SceneDesc {
                 buildModel(rarc, `${base}.bdl`).modelMatrix[13] += 100;
             });
         }
+        // Treasure chests
+        else if (name === 'takara' || name === 'takara2' || name === 'takara3' || name === 'takara4' || name === 'takara5' || name === 'takara6' || name === 'takara7' || name === 'takara8' ||
+                 name === 'takaraK' || name === 'takaraI' || name === 'takaraM' || name === 'tkrASw' || name === 'tkrAGc' || name === 'tkrAKd' || name === 'tkrASw' || name === 'tkrAIk' ||
+                 name === 'tkrBMs' || name === 'tkrCTf' || name === 'tkrAOc' || name === 'tkrAOs') {
+            // The treasure chest name does not matter, everything is in the parameters.
+            // https://github.com/LordNed/Winditor/blob/master/Editor/Editor/Entities/TreasureChest.cs
+            const rarc = await fetchArchive('Dalways.arc');
+            const type = (parameters >>> 20) & 0x0F;
+            if (type === 0) {
+                // Light Wood
+                const m = buildModel(rarc, `bdli/boxa.bdl`);
+            } else if (type === 1) {
+                // Dark Wood
+                const m = buildModel(rarc, `bdli/boxb.bdl`);
+            } else if (type === 2) {
+                // Metal
+                const m = buildModel(rarc, `bdli/boxc.bdl`);
+            } else if (type === 3) {
+                // Big Key
+                const m = buildModel(rarc, `bdli/boxd.bdl`);
+            } else {
+                // Might be something else, not sure.
+                console.warn(`Unknown chest type: ${name} / ${roomRenderer.name} Layer ${layer} / ${hexzero(parameters, 8)}`);
+            }
+        }
+        // Under-water treasure points. Perhaps spawn at some point?
+        else if (name === 'Salvage' || name === 'Salvag2' || name === 'SalvagE' || name === 'SalvagN' || name === 'SalvFM') return;
         // Grass. Procedurally generated by the engine.
         else if (name === 'kusax1' || name === 'kusax7' || name === 'kusax21') return;
         // TODO(jstpierre): Figure out flower spawn patterns.
@@ -2067,52 +2324,40 @@ class SceneDesc {
         else if (name === 'RopeR') return;
         // Bridges. Procedurally generated by the engine.
         else if (name === 'bridge') return;
+        // Gyorg spawners.
+        else if (name === 'GyCtrlA' || name === 'GyCtrlB') return;
+        // Markers for Tingle Tuner
+        else if (name === 'agbTBOX' || name === 'agbMARK' || name === 'agbF' || name === 'agbA' || name === 'agbAT' || name === 'agbA2' || name === 'agbR' || name === 'agbB' || name === 'agbFA' || name === 'agbCSW') return;
         // Logic flags used for gameplay, not spawnable objects.
-        else if (name === 'AND_SW0' || name === 'AND_SW1' || name === 'AND_SW2' || name === 'SW_HIT0' || name === 'ALLdie') return;
+        else if (name === 'AND_SW0' || name === 'AND_SW1' || name === 'AND_SW2' || name === 'SW_HIT0' || name === 'ALLdie' || name === 'SW_C00') return;
+        // SWitch SaLVaGe?
+        else if (name === 'SwSlvg') return;
         // EVent SWitch
         else if (name === 'Evsw') return;
         // Tags for fishmen?
         else if (name === 'TagSo' || name === 'TagMSo') return;
         // Photo tags
         else if (name === 'TagPo') return;
-        // Light tags
+        // Light tags?
         else if (name === 'LTag0' || name === 'LTag1' || name === 'LTagR0') return;
+        // Environment tags (Kyanko)
+        else if (name === 'kytag00' || name === 'ky_tag0' || name === 'ky_tag1' || name === 'ky_tag2' || name === 'kytag5' || name === 'kytag6' || name === 'kytag7') return;
         // Other tags?
-        else if (name === 'ky_tag2' || name === 'kytag6' || name === 'kytag7') return;
+        else if (name === 'TagEv' || name === 'TagKb' || name === 'TagIsl' || name === 'TagMk' || name === 'TagWp' || name === 'TagMd') return;
+        else if (name === 'TagHt' || name === 'TagMsg' || name === 'TagMsg2' || name === 'ReTag0') return;
+        else if (name === 'AttTag' || name === 'AttTagB') return;
+        else if (name === 'VolTag' || name === 'WindTag') return;
+        // Misc. gameplay data
+        else if (name === 'HyoiKam') return;
         // Flags (only contains textures)
-        else if (name === 'SieFlag' || name === 'Gflag') return;
+        else if (name === 'MtFlag' || name === 'SieFlag' || name === 'Gflag') return;
+        // Collision
+        else if (name === 'Akabe') return;
         else
-            console.warn(`Unknown object: ${name} ${hexzero(parameters, 8)}`);
+            console.warn(`Unknown object: ${name} / ${roomRenderer.name} Layer ${layer} / ${hexzero(parameters, 8)}`);
     }
 
-    private spawnObjectsFromTGOBLayer(device: GfxDevice, renderer: WindWakerRenderer, roomRenderer: WindWakerRoomRenderer, buffer: ArrayBufferSlice, tgobHeader: DZSChunkHeader | undefined, worldModelMatrix: mat4): void {
-        if (tgobHeader === undefined)
-            return;
-
-        const view = buffer.createDataView();
-
-        let actrTableIdx = tgobHeader.offs;
-        for (let i = 0; i < tgobHeader.count; i++) {
-            const name = readString(buffer, actrTableIdx + 0x00, 0x08, true);
-            const parameters = view.getUint32(actrTableIdx + 0x08, false);
-            const posX = view.getFloat32(actrTableIdx + 0x0C);
-            const posY = view.getFloat32(actrTableIdx + 0x10);
-            const posZ = view.getFloat32(actrTableIdx + 0x14);
-            const rotY = view.getInt16(actrTableIdx + 0x1A) / 0x7FFF * Math.PI;
-
-            const localModelMatrix = mat4.create();
-            mat4.rotateY(localModelMatrix, localModelMatrix, rotY);
-            localModelMatrix[12] += posX;
-            localModelMatrix[13] += posY;
-            localModelMatrix[14] += posZ;
-
-            this.spawnObjectsForActor(device, renderer, roomRenderer, name, parameters, localModelMatrix, worldModelMatrix);
-
-            actrTableIdx += 0x20;
-        }
-    }
-
-    private spawnObjectsFromACTRLayer(device: GfxDevice, renderer: WindWakerRenderer, roomRenderer: WindWakerRoomRenderer, buffer: ArrayBufferSlice, actrHeader: DZSChunkHeader | undefined, worldModelMatrix: mat4): void {
+    private spawnObjectsFromACTRLayer(device: GfxDevice, renderer: WindWakerRenderer, roomRenderer: WindWakerRoomRenderer, buffer: ArrayBufferSlice, layerIndex: number, actrHeader: DZSChunkHeader | undefined, worldModelMatrix: mat4): void {
         if (actrHeader === undefined)
             return;
 
@@ -2125,41 +2370,69 @@ class SceneDesc {
             const posX = view.getFloat32(actrTableIdx + 0x0C);
             const posY = view.getFloat32(actrTableIdx + 0x10);
             const posZ = view.getFloat32(actrTableIdx + 0x14);
-            // const rotX = view.getInt16(actrTableIdx + 0x18) / 0x7FFF;
+            // const auxParam = view.getInt16(actrTableIdx + 0x18);
             const rotY = view.getInt16(actrTableIdx + 0x1A) / 0x7FFF * Math.PI;
             const flag = view.getUint16(actrTableIdx + 0x1C);
             const enemyNum = view.getUint16(actrTableIdx + 0x1E);
 
             const localModelMatrix = mat4.create();
-            mat4.rotateY(localModelMatrix, localModelMatrix, rotY);
-            localModelMatrix[12] += posX;
-            localModelMatrix[13] += posY;
-            localModelMatrix[14] += posZ;
+            computeModelMatrixSRT(localModelMatrix, 1, 1, 1, 0, rotY, 0, posX, posY, posZ);
 
-            this.spawnObjectsForActor(device, renderer, roomRenderer, name, parameters, localModelMatrix, worldModelMatrix);
+            this.spawnObjectsForActor(device, renderer, roomRenderer, name, parameters, layerIndex, localModelMatrix, worldModelMatrix);
 
             actrTableIdx += 0x20;
+        }
+    }
+
+    private spawnObjectsFromSCOBLayer(device: GfxDevice, renderer: WindWakerRenderer, roomRenderer: WindWakerRoomRenderer, buffer: ArrayBufferSlice, layer: number, actrHeader: DZSChunkHeader | undefined, worldModelMatrix: mat4): void {
+        if (actrHeader === undefined)
+            return;
+
+        const view = buffer.createDataView();
+
+        let actrTableIdx = actrHeader.offs;
+        for (let i = 0; i < actrHeader.count; i++) {
+            const name = readString(buffer, actrTableIdx + 0x00, 0x08, true);
+            const parameters = view.getUint32(actrTableIdx + 0x08, false);
+            const posX = view.getFloat32(actrTableIdx + 0x0C);
+            const posY = view.getFloat32(actrTableIdx + 0x10);
+            const posZ = view.getFloat32(actrTableIdx + 0x14);
+            // const auxParam = view.getInt16(actrTableIdx + 0x18);
+            const rotY = view.getInt16(actrTableIdx + 0x1A) / 0x7FFF * Math.PI;
+            // const unk1 = view.getInt16(actrTableIdx + 0x1C);
+            // const unk2 = view.getInt16(actrTableIdx + 0x1E);
+            const scaleX = view.getUint8(actrTableIdx + 0x20) / 10.0;
+            const scaleY = view.getUint8(actrTableIdx + 0x21) / 10.0;
+            const scaleZ = view.getUint8(actrTableIdx + 0x22) / 10.0;
+            // const pad = view.getUint8(actrTableIdx + 0x23);
+
+            const localModelMatrix = mat4.create();
+            computeModelMatrixSRT(localModelMatrix, scaleX, scaleY, scaleZ, 0, rotY, 0, posX, posY, posZ);
+
+            this.spawnObjectsForActor(device, renderer, roomRenderer, name, parameters, layer, localModelMatrix, worldModelMatrix);
+
+            actrTableIdx += 0x24;
         }
     }
 
     private spawnObjectsFromDZR(device: GfxDevice, renderer: WindWakerRenderer, roomRenderer: WindWakerRoomRenderer, buffer: ArrayBufferSlice, modelMatrix: mat4): void {
         const chunkHeaders = parseDZSHeaders(buffer);
 
-        this.spawnObjectsFromACTRLayer(device, renderer, roomRenderer, buffer, chunkHeaders.get('ACTR'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, renderer, roomRenderer, buffer, chunkHeaders.get('ACT0'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, renderer, roomRenderer, buffer, chunkHeaders.get('ACT1'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, renderer, roomRenderer, buffer, chunkHeaders.get('ACT2'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, renderer, roomRenderer, buffer, chunkHeaders.get('ACT3'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, renderer, roomRenderer, buffer, chunkHeaders.get('ACT4'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, renderer, roomRenderer, buffer, chunkHeaders.get('ACT5'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, renderer, roomRenderer, buffer, chunkHeaders.get('ACT6'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, renderer, roomRenderer, buffer, chunkHeaders.get('ACT7'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, renderer, roomRenderer, buffer, chunkHeaders.get('ACT8'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, renderer, roomRenderer, buffer, chunkHeaders.get('ACT9'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, renderer, roomRenderer, buffer, chunkHeaders.get('ACTA'), modelMatrix);
-        this.spawnObjectsFromACTRLayer(device, renderer, roomRenderer, buffer, chunkHeaders.get('ACTB'), modelMatrix);
+        function buildChunkLayerName(base: string, i: number): string {
+            if (i === -1) {
+                return base;
+            } else {
+                return base.slice(0, 3) + i.toString(16).toLowerCase();
+            }
+        }
 
-        this.spawnObjectsFromTGOBLayer(device, renderer, roomRenderer, buffer, chunkHeaders.get('TGOB'), modelMatrix);
+        for (let i = -1; i < 16; i++) {
+            this.spawnObjectsFromACTRLayer(device, renderer, roomRenderer, buffer, i, chunkHeaders.get(buildChunkLayerName('ACTR', i)), modelMatrix);
+            this.spawnObjectsFromACTRLayer(device, renderer, roomRenderer, buffer, i, chunkHeaders.get(buildChunkLayerName('TGOB', i)), modelMatrix);
+            this.spawnObjectsFromACTRLayer(device, renderer, roomRenderer, buffer, i, chunkHeaders.get(buildChunkLayerName('TRES', i)), modelMatrix);
+            this.spawnObjectsFromSCOBLayer(device, renderer, roomRenderer, buffer, i, chunkHeaders.get(buildChunkLayerName('SCOB', i)), modelMatrix);
+            this.spawnObjectsFromSCOBLayer(device, renderer, roomRenderer, buffer, i, chunkHeaders.get(buildChunkLayerName('TGSC', i)), modelMatrix);
+        }
     }
 }
 

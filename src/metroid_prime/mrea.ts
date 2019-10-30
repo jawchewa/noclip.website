@@ -27,7 +27,7 @@ export interface MREA {
     lightLayers: AreaLightLayer[];
 }
 
-enum AreaVersion {
+export const enum AreaVersion {
     MP1 = 0xF,
     MP2 = 0x19,
     MP3 = 0x1E,
@@ -43,6 +43,7 @@ export const enum UVAnimationType {
     FLIPBOOK_V           = 0x05,
     ENV_MAPPING_MODEL    = 0x06,
     ENV_MAPPING_CYLINDER = 0x07,
+    SRT                  = 0x08,
 }
 
 interface UVAnimation_Mat {
@@ -76,8 +77,20 @@ interface UVAnimation_Cylinder {
     theta: number;
     phi: number;
 }
+interface UVAnimation_Mode8 {
+    type: UVAnimationType.SRT;
+    transformType: number;
+    scaleS: number;
+    scaleT: number;
+    rotationStatic: number;
+    rotationScroll: number;
+    transSStatic: number; // Unused
+    transTStatic: number;
+    transSScroll: number;
+    transTScroll: number;
+}
 
-export type UVAnimation = UVAnimation_Mat | UVAnimation_UVScroll | UVAnimation_Rotation | UVAnimation_Flipbook | UVAnimation_Cylinder;
+export type UVAnimation = UVAnimation_Mat | UVAnimation_UVScroll | UVAnimation_Rotation | UVAnimation_Flipbook | UVAnimation_Cylinder | UVAnimation_Mode8;
 
 export interface Material {
     isOccluder: boolean;
@@ -156,9 +169,19 @@ function parseMaterialSet_UVAnimations(stream: InputStream, count: number): UVAn
             uvAnimations.push({ type, theta, phi });
             break;
         }
-        case 0x08: {
-            // Unknown (DKCR)
-            stream.skip(0x24);
+        case UVAnimationType.SRT: {
+            const transformType = stream.readUint32();
+            const scaleS = stream.readFloat32();
+            const scaleT = stream.readFloat32();
+            const rotationStatic = stream.readFloat32();
+            const rotationScroll = stream.readFloat32();
+            const transSStatic = stream.readFloat32();
+            const transTStatic = stream.readFloat32();
+            const transSScroll = stream.readFloat32();
+            const transTScroll = stream.readFloat32();
+            uvAnimations.push({ type, transformType, scaleS, scaleT, rotationStatic, rotationScroll, transSStatic, transTStatic, transSScroll, transTScroll });
+            if (transformType !== 0)
+                console.log(`Non-zero transform type`);
             break;
         }
         }
@@ -309,10 +332,7 @@ function parseMaterialSet_MP1_MP2(stream: InputStream, resourceSystem: ResourceS
             stream.goTo(curOffs);
             tevOrderTableOffs += 4;
 
-            const index = j;
-
             const tevStage: GX_Material.TevStage = {
-                index,
                 colorInA, colorInB, colorInC, colorInD, colorOp, colorBias, colorScale, colorClamp, colorRegId,
                 alphaInA, alphaInB, alphaInC, alphaInD, alphaOp, alphaBias, alphaScale, alphaClamp, alphaRegId,
                 texCoordId, texMap, channelId,
@@ -340,7 +360,6 @@ function parseMaterialSet_MP1_MP2(stream: InputStream, resourceSystem: ResourceS
 
         const texGens: GX_Material.TexGen[] = [];
         for (let j = 0; j < texGenCount; j++) {
-            const index = j;
             const flags = stream.readUint32();
             const type: GX.TexGenType = (flags >>> 0) & 0x0F;
             const source: GX.TexGenSrc = (flags >>> 4) & 0x0F;
@@ -349,7 +368,7 @@ function parseMaterialSet_MP1_MP2(stream: InputStream, resourceSystem: ResourceS
             const normalize: boolean = !!((flags >>> 14) & 0x01);
             const postMatrix: GX.PostTexGenMatrix = ((flags >>> 15) & 0x3F) + 64;
 
-            texGens.push({ index, type, source, matrix, normalize, postMatrix });
+            texGens.push({ type, source, matrix, normalize, postMatrix });
         }
 
         const uvAnimationsSize = stream.readUint32(); - 0x04;
@@ -1092,7 +1111,7 @@ export function parse(stream: InputStream, resourceSystem: ResourceSystem): MREA
             assert(sclyMagic == 'SCLY');
             assert(sclyIndex == i);
 
-            const layer = Script.parseScriptLayer_MP2(stream, resourceSystem);
+            const layer = Script.parseScriptLayer_MP2(stream, version, resourceSystem);
             scriptLayers.push(layer);
         }
     }
@@ -1138,7 +1157,6 @@ export const enum MaterialFlags_MP3 {
 function makeTevStageFromPass_MP3(passIndex: number, passType: string, passFlags: number, materialFlags: MaterialFlags_MP3, hasDIFF: boolean, hasOPAC: boolean): GX_Material.TevStage {
     // Standard texture sample.
     const tevStage: GX_Material.TevStage = {
-        index: passIndex,
         channelId: GX.RasColorChannelID.COLOR0A0,
 
         colorInA: GX.CombineColorInput.ZERO,
@@ -1320,7 +1338,6 @@ function parseMaterialSet_MP3(stream: InputStream, resourceSystem: ResourceSyste
                 }
 
                 texGens[passIndex] = {
-                    index: passIndex,
                     type: GX.TexGenType.MTX2x4,
                     source: texGenSrc,
                     matrix: GX.TexGenMatrix.TEXMTX0 + (passIndex * 3),
@@ -1363,8 +1380,7 @@ function parseMaterialSet_MP3(stream: InputStream, resourceSystem: ResourceSyste
         // some materials don't have any passes apparently?
         // just make a dummy tev stage in this case
         if (passIndex === 0) {
-            texGens[0] = { 
-                index: 0,
+            texGens[0] = {
                 type: GX.TexGenType.MTX2x4,
                 source: GX.TexGenSrc.TEX0,
                 matrix: GX.TexGenMatrix.TEXMTX0,

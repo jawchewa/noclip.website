@@ -14,9 +14,9 @@ import { BTIData } from "./render";
 import { getPointHermite } from "../Spline";
 import { GXMaterial, AlphaTest, RopInfo, TexGen, TevStage, getVertexAttribLocation, IndTexStage } from "../gx/gx_material";
 import { Color, colorNew, colorCopy, colorNewCopy, White, colorFromRGBA8, colorLerp, colorMult, colorNewFromRGBA8 } from "../Color";
-import { MaterialParams, ColorKind, ub_PacketParams, u_PacketParamsBufferSize, PacketParams, ub_MaterialParams, setIndTexOrder, setIndTexCoordScale, setTevIndirect, setTevOrder, setTevColorIn, setTevColorOp, setTevAlphaIn, setTevAlphaOp, fillIndTexMtx, fillTextureMappingInfo } from "../gx/gx_render";
+import { MaterialParams, ColorKind, ub_PacketParams, u_PacketParamsBufferSize, PacketParams, ub_MaterialParams, setIndTexOrder, setIndTexCoordScale, setTevIndirect, setTevOrder, setTevColorIn, setTevColorOp, setTevAlphaIn, setTevAlphaOp, fillIndTexMtx, fillTextureMappingInfo, gxBindingLayouts } from "../gx/gx_render";
 import { GXMaterialHelperGfx } from "../gx/gx_render";
-import { computeModelMatrixSRT, computeModelMatrixR, lerp, MathConstants, computeMatrixWithoutTranslation } from "../MathHelpers";
+import { computeModelMatrixSRT, computeModelMatrixR, lerp, MathConstants, computeMatrixWithoutTranslation, normToLengthAndAdd, normToLength, isNearZeroVec3 } from "../MathHelpers";
 import { makeStaticDataBuffer } from "../gfx/helpers/BufferHelpers";
 import { GfxRenderInst, GfxRenderInstManager, makeSortKeyTranslucent, GfxRendererLayer, setSortKeyBias, setSortKeyDepth } from "../gfx/render/GfxRenderer";
 import { fillMatrix4x3, fillColor, fillMatrix4x2 } from "../gfx/helpers/UniformBufferHelpers";
@@ -206,11 +206,17 @@ export interface JPAExtraShapeBlock {
     rotateDirection: number;
 }
 
+const enum IndTextureMode {
+    OFF, NORMAL, SUB,
+}
+
 export interface JPAExTexBlock {
     flags: number;
+    indTextureMode: IndTextureMode;
     indTextureMtx: Float32Array;
     indTextureID: number;
     subTextureID: number;
+    secondTextureIndex: number;
 }
 
 export interface JPAChildShapeBlock {
@@ -440,11 +446,14 @@ export class JPAResourceData {
         }
 
         if (etx1 !== null) {
-            if (!!(etx1.flags & 0x00000001))
+            if (etx1.indTextureMode !== IndTextureMode.OFF) {
                 this.ensureTextureFromTDB1Index(device, cache, etx1.indTextureID);
+                if (etx1.indTextureMode === IndTextureMode.SUB)
+                    this.ensureTextureFromTDB1Index(device, cache, etx1.subTextureID);
+            }
 
             if (!!(etx1.flags & 0x00000100))
-                this.ensureTextureFromTDB1Index(device, cache, etx1.subTextureID);
+                this.ensureTextureFromTDB1Index(device, cache, etx1.secondTextureIndex);
         }
 
         if (ssp1 !== null)
@@ -474,19 +483,19 @@ export class JPAResourceData {
         const texGens: TexGen[] = [];
         const isEnableProjection = !!(bsp1.flags & 0x00100000);
         if (isEnableProjection)
-            texGens.push({ index: 0, type: GX.TexGenType.MTX3x4, source: GX.TexGenSrc.POS,  matrix: GX.TexGenMatrix.TEXMTX0, normalize: false, postMatrix: GX.PostTexGenMatrix.PTIDENTITY });
+            texGens.push({ type: GX.TexGenType.MTX3x4, source: GX.TexGenSrc.POS,  matrix: GX.TexGenMatrix.TEXMTX0, normalize: false, postMatrix: GX.PostTexGenMatrix.PTIDENTITY });
         else
-            texGens.push({ index: 0, type: GX.TexGenType.MTX2x4, source: GX.TexGenSrc.TEX0, matrix: GX.TexGenMatrix.TEXMTX0, normalize: false, postMatrix: GX.PostTexGenMatrix.PTIDENTITY });
+            texGens.push({ type: GX.TexGenType.MTX2x4, source: GX.TexGenSrc.TEX0, matrix: GX.TexGenMatrix.TEXMTX0, normalize: false, postMatrix: GX.PostTexGenMatrix.PTIDENTITY });
 
         let texCoord3Id = GX.TexCoordID.TEXCOORD1;
         if (etx1 !== null) {
             if (!!(etx1.flags & 0x00000001)) {
-                texGens.push({ index: 1, type: GX.TexGenType.MTX2x4, source: GX.TexGenSrc.TEX0, matrix: GX.TexGenMatrix.IDENTITY, normalize: false, postMatrix: GX.PostTexGenMatrix.PTIDENTITY });
+                texGens.push({ type: GX.TexGenType.MTX2x4, source: GX.TexGenSrc.TEX0, matrix: GX.TexGenMatrix.IDENTITY, normalize: false, postMatrix: GX.PostTexGenMatrix.PTIDENTITY });
                 texCoord3Id = GX.TexCoordID.TEXCOORD2;
             }
 
             if (!!(etx1.flags & 0x00000100)) {
-                texGens.push({ index: texCoord3Id, type: GX.TexGenType.MTX2x4, source: GX.TexGenSrc.TEX0, matrix: GX.TexGenMatrix.IDENTITY, normalize: false, postMatrix: GX.PostTexGenMatrix.PTIDENTITY });
+                texGens.push({ type: GX.TexGenType.MTX2x4, source: GX.TexGenSrc.TEX0, matrix: GX.TexGenMatrix.IDENTITY, normalize: false, postMatrix: GX.PostTexGenMatrix.PTIDENTITY });
             }
         }
 
@@ -495,8 +504,6 @@ export class JPAResourceData {
         const alphaInSelect = (bsp1.flags >>> 0x12) & 0x01;
 
         tevStages.push({
-            index: 0,
-
             texCoordId: GX.TexCoordID.TEXCOORD0,
             texMap: GX.TexMapID.TEXMAP0,
             channelId: GX.RasColorChannelID.COLOR_ZERO,
@@ -530,7 +537,6 @@ export class JPAResourceData {
             if (!!(etx1.flags & 0x00000001)) {
                 // Indirect.
                 indTexStages.push({
-                    index: GX.IndTexStageID.STAGE0,
                     ... setIndTexOrder(GX.TexCoordID.TEXCOORD1, GX.TexMapID.TEXMAP2),
                     ... setIndTexCoordScale(GX.IndTexScale._1, GX.IndTexScale._1),
                 });
@@ -542,7 +548,6 @@ export class JPAResourceData {
                 // GX
                 // GXSetTevOrder(1, uVar10)
                 tevStages.push({
-                    index: 1,
                     ... setTevOrder(texCoord3Id, GX.TexMapID.TEXMAP3, GX.RasColorChannelID.COLOR_ZERO),
                     ... setTevColorIn(GX.CombineColorInput.ZERO, GX.CombineColorInput.TEXC, GX.CombineColorInput.CPREV, GX.CombineColorInput.ZERO),
                     ... setTevAlphaIn(GX.CombineAlphaInput.ZERO, GX.CombineAlphaInput.TEXA, GX.CombineAlphaInput.APREV, GX.CombineAlphaInput.ZERO),
@@ -882,7 +887,7 @@ class StripeEntry {
     }
 }
 
-const MAX_STRIPE_VERTEX_COUNT = 256;
+const MAX_STRIPE_VERTEX_COUNT = 512;
 class StripeBufferManager {
     public stripeEntry: StripeEntry[] = [];
     private indexBuffer: GfxBuffer;
@@ -1023,6 +1028,9 @@ export class JPAEmitterManager {
     }
 
     public draw(device: GfxDevice, renderInstManager: GfxRenderInstManager, drawInfo: JPADrawInfo, drawGroupId: number): void {
+        if (this.aliveEmitters.length < 1)
+            return;
+
         mat4.copy(this.workData.posCamMtx, drawInfo.posCamMtx);
         mat4.copy(this.workData.prjMtx, drawInfo.prjMtx);
         this.calcYBBMtx();
@@ -1031,11 +1039,16 @@ export class JPAEmitterManager {
         else
             mat4.identity(this.workData.texPrjMtx);
 
+        const template = renderInstManager.pushTemplateRenderInst();
+        template.setBindingLayouts(gxBindingLayouts);
+
         for (let i = 0; i < this.aliveEmitters.length; i++) {
             const emitter = this.aliveEmitters[i];
             if (emitter.drawGroupId === drawGroupId)
                 this.aliveEmitters[i].draw(device, renderInstManager, this.workData);
         }
+
+        renderInstManager.popTemplateRenderInst();
 
         const hostAccessPass = device.createHostAccessPass();
         this.stripeBufferManager.upload(hostAccessPass);
@@ -1194,14 +1207,6 @@ function calcColor(dstPrm: Color, dstEnv: Color, workData: JPAEmitterWorkData, t
         const colorEnvAnimData = assertExists(bsp1.colorEnvAnimData);
         colorCopy(dstEnv, colorEnvAnimData[anmIdx]);
     }
-}
-
-function isNearZero(v: vec3, min: number): boolean {
-    return (
-        v[0] > -min && v[0] < min &&
-        v[1] > -min && v[1] < min &&
-        v[2] > -min && v[2] < min
-    );
 }
 
 // JPA appends new particles to the *front* of its linked list. We append
@@ -1806,12 +1811,12 @@ export class JPABaseEmitter {
             const p = particleList[particleIndex];
 
             applyDir(scratchVec3a, p, sp1.dirType, workData);
-            if (isNearZero(scratchVec3a, 0.001))
+            if (isNearZeroVec3(scratchVec3a, 0.001))
                 vec3.set(scratchVec3a, 0, 1, 0);
             else
                 vec3.normalize(scratchVec3a, scratchVec3a);
             vec3.cross(scratchVec3b, p.prevAxis, scratchVec3a);
-            if (isNearZero(scratchVec3b, 0.001))
+            if (isNearZeroVec3(scratchVec3b, 0.001))
                 vec3.set(scratchVec3b, 1, 0, 0);
             else
                 vec3.normalize(scratchVec3b, scratchVec3b);
@@ -1923,13 +1928,14 @@ export class JPABaseEmitter {
             this.resData.fillTextureMapping(materialParams.m_TextureMapping[0], this.texAnmIdx);
 
         if (etx1 !== null) {
-            if (!!(etx1.flags & 0x00000001)) {
+            if (etx1.indTextureMode === IndTextureMode.NORMAL) {
                 this.resData.fillTextureMapping(materialParams.m_TextureMapping[2], etx1.indTextureID);
                 fillIndTexMtx(materialParams.u_IndTexMtx[0], etx1.indTextureMtx);
+                // TODO(jstpierre): Subtextures, a JPA1 feature, in JPADrawSetupTev::setupTev.
             }
 
             if (!!(etx1.flags & 0x00000100))
-                this.resData.fillTextureMapping(materialParams.m_TextureMapping[3], etx1.subTextureID);
+                this.resData.fillTextureMapping(materialParams.m_TextureMapping[3], etx1.secondTextureIndex);
         }
 
         workData.forceTexMtxIdentity = false;
@@ -2037,46 +2043,29 @@ export class JPABaseEmitter {
     }
 }
 
-function normToLength(dst: vec3, len: number): void {
-    const vlen = vec3.length(dst);
-    if (vlen > 0) {
-        const inv = len / vlen;
-        dst[0] = dst[0] * inv;
-        dst[1] = dst[1] * inv;
-        dst[2] = dst[2] * inv;
-    }
-}
-
-function normToLengthAndAdd(dst: vec3, a: vec3, len: number): void {
-    const vlen = vec3.length(a);
-    if (vlen > 0) {
-        const inv = len / vlen;
-        dst[0] += a[0] * inv;
-        dst[1] += a[1] * inv;
-        dst[2] += a[2] * inv;
-    }
-}
-
 function calcTexCrdMtxAnm(dst: mat4, bsp1: JPABaseShapeBlock, tick: number): void {
     const offsS = 0.5 * bsp1.tilingX;
     const offsT = 0.5 * bsp1.tilingY;
 
     const translationS = (bsp1.texStaticTransX + tick * bsp1.texScrollTransX) + offsS;
-    const translationT = (bsp1.texStaticTransY + tick * bsp1.texScrollTransY) + offsS;
-    const scaleS = (bsp1.texStaticScaleX + tick * bsp1.texScrollScaleX) * bsp1.tilingX;
-    const scaleT = (bsp1.texStaticScaleY + tick * bsp1.texScrollScaleY) * bsp1.tilingY;
-    const rotate = (bsp1.texStaticRotate + tick * bsp1.texScrollRotate) * MathConstants.TAU / 0x3FFF;
+    const translationT = (bsp1.texStaticTransY + tick * bsp1.texScrollTransY) + offsT;
+    const scaleS = (bsp1.texStaticScaleX + tick * bsp1.texScrollScaleX);
+    const scaleT = (bsp1.texStaticScaleY + tick * bsp1.texScrollScaleY);
+    const rotate = (bsp1.texStaticRotate + tick * bsp1.texScrollRotate) * MathConstants.TAU / 0xFFFF;
 
     const sinR = Math.sin(rotate);
     const cosR = Math.cos(rotate);
 
-    dst[0]  = scaleS *  cosR;
-    dst[4]  = scaleS * -sinR;
+    // Normally, the setting of tiling is done by choosing a separate texcoord array through the GXSetArray call in setPTev.
+    // If the tiling bit is on, then it uses a texcoord of 2.0 instead of 1.0. In our case, we just adjust the texture matirx.
+
+    dst[0]  = bsp1.tilingX * scaleS *  cosR;
+    dst[4]  = bsp1.tilingX * scaleS * -sinR;
     dst[8]  = 0.0;
     dst[12] = offsS + scaleS * (sinR * translationT - cosR * translationS);
 
-    dst[1]  = scaleT *  sinR;
-    dst[5]  = scaleT *  cosR;
+    dst[1]  = bsp1.tilingY * scaleT *  sinR;
+    dst[5]  = bsp1.tilingY * scaleT *  cosR;
     dst[9]  = 0.0;
     dst[13] = offsT + -scaleT * (sinR * translationS + cosR * translationT);
 
@@ -2087,10 +2076,8 @@ function calcTexCrdMtxAnm(dst: mat4, bsp1: JPABaseShapeBlock, tick: number): voi
 }
 
 function calcTexCrdMtxIdt(dst: mat4, bsp1: JPABaseShapeBlock): void {
-    // Normally, this is done by choosing a separate texcoord array
-    // through the GXSetArray call in in setPTev. If tiling is on, then
-    // it uses a texcoord of 2.0. In our case, we just set up a matrix
-    // to scale everything instead.
+    // Normally, the choice of tiling is done by choosing a separate texcoord array through the GXSetArray call in setPTev.
+    // If the tiling bit is on, then it uses a texcoord of 2.0 instead of 1.0. In our case, we just adjust the texture matirx.
 
     const scaleS = bsp1.tilingX;
     const scaleT = bsp1.tilingY;
@@ -2119,7 +2106,6 @@ function mat4SwapTranslationColumns(m: mat4): void {
     m[13] = m[9];
     m[9] = ty;
 }
-
 
 function calcTexCrdMtxPrj(dst: mat4, workData: JPAEmitterWorkData, posMtx: mat4, flipY: boolean): boolean {
     const bsp1 = workData.baseEmitter.resData.res.bsp1;
@@ -3620,16 +3606,18 @@ function parseResource_JPAC1_00(res: JPAResourceRaw): JPAResource {
             const p10 = view.getFloat32(dataBegin + 0x10);
             const p11 = view.getFloat32(dataBegin + 0x14);
             const p12 = view.getFloat32(dataBegin + 0x18);
-            const scale = Math.pow(2, view.getInt8(tableIdx + 0x1C));
+            const scale = Math.pow(2, view.getInt8(dataBegin + 0x1C));
             const indTextureMtx = new Float32Array([
                 p00*scale, p01*scale, p02*scale, scale,
                 p10*scale, p11*scale, p12*scale, 0.0,
             ]);
 
-            const indTextureID = view.getUint8(tableIdx + 0x25);
-            const subTextureID = view.getUint8(tableIdx + 0x26);
+            const indTextureMode: IndTextureMode = (flags & 0x03);
+            const indTextureID = view.getUint8(dataBegin + 0x20);
+            const subTextureID = view.getUint8(dataBegin + 0x21);
+            const secondTextureIndex = view.getUint8(dataBegin + 0x22);
 
-            etx1 = { flags, indTextureMtx, indTextureID, subTextureID };
+            etx1 = { flags, indTextureMtx, indTextureMode, indTextureID, subTextureID, secondTextureIndex };
         } else if (fourcc === 'KFA1') {
             // J3DKeyBlock
             // Contains curve animations for various emitter parameters.
@@ -4040,10 +4028,12 @@ function parseResource_JPAC2_10(res: JPAResourceRaw): JPAResource {
                 p10*scale, p11*scale, p12*scale, 0.0,
             ]);
 
+            const indTextureMode: IndTextureMode = (flags & 0x01);
             const indTextureID = view.getUint8(tableIdx + 0x25);
-            const subTextureID = view.getUint8(tableIdx + 0x26);
+            const subTextureID = 0;
+            const secondTextureIndex = view.getUint8(tableIdx + 0x26);
 
-            etx1 = { flags, indTextureMtx, indTextureID, subTextureID };
+            etx1 = { flags, indTextureMode, indTextureMtx, indTextureID, subTextureID, secondTextureIndex };
         } else if (fourcc === 'KFA1') {
             // J3DKeyBlock
             // Contains curve animations for various emitter parameters.

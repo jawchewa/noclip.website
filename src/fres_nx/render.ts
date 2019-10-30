@@ -82,6 +82,9 @@ function translateAddressMode(addrMode: TextureAddressMode): GfxWrapMode {
         return GfxWrapMode.CLAMP;
     case TextureAddressMode.Mirror:
         return GfxWrapMode.MIRROR;
+    case TextureAddressMode.MirrorClampToEdge:
+        // TODO(jstpierre): This requires GL_ARB_texture_mirror_clamp_to_edge
+        return GfxWrapMode.MIRROR;
     default:
         throw "whoops";
     }
@@ -243,7 +246,7 @@ uniform sampler2D u_Samplers[8];
         else if (kind === 10)
             return `vec4(1.0)`; // TODO(jstpierre): What is this?
         else if (kind === 11) {
-            if (instance === 0 || instance === 2 || instance === 5)
+            if (instance === 0 || instance === 1 || instance === 2 || instance === 5)
                 return `vec4(0.0)`;
             else if (instance === 6)
                 return `vec4(1.0)`;
@@ -818,9 +821,8 @@ export class BasicFRESRenderer {
         this.prepareToRender(device, hostAccessPass, viewerInput);
         device.submitPass(hostAccessPass);
 
-        this.renderTarget.setParameters(device, viewerInput.viewportWidth, viewerInput.viewportHeight);
-        const passRenderer = this.renderTarget.createRenderPass(device, standardFullClearRenderPassDescriptor);
-        passRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        this.renderTarget.setParameters(device, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
+        const passRenderer = this.renderTarget.createRenderPass(device, viewerInput.viewport, standardFullClearRenderPassDescriptor);
         this.renderHelper.renderInstManager.drawOnPassRenderer(device, passRenderer);
         this.renderHelper.renderInstManager.resetRenderInsts();
         return passRenderer;

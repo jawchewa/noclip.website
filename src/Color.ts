@@ -22,6 +22,13 @@ export function colorLerp(dst: Color, k0: Color, k1: Color, t: number): void {
     dst.a = lerp(k0.a, k1.a, t);
 }
 
+export function colorSum(dst: Color, a: Color, b: Color) {
+    dst.r = a.r + b.r;
+    dst.g = a.g + b.g;
+    dst.b = a.b + b.b;
+    dst.a = a.a + b.a;
+}
+
 export function colorMult(dst: Color, k0: Color, k1: Color): void {
     dst.g = k0.g * k1.g;
     dst.r = k0.r * k1.r;
@@ -111,4 +118,13 @@ export function colorNewFromHex(s: string): Color {
 export const TransparentBlack = colorNew(0, 0, 0, 0);
 export const OpaqueBlack = colorNew(0, 0, 0, 1);
 export const White = colorNew(1, 1, 1, 1);
+export const Red = colorNew(1, 0, 0, 1);
+export const Green = colorNew(0, 1, 0, 1);
+export const Blue = colorNew(0, 0, 1, 1);
 export const Magenta = colorNew(1, 0, 1, 1);
+export const Yellow = colorNew(1, 1, 0, 1);
+
+export function objIsColor(v: any): boolean {
+
+    return typeof v === 'object' && v !== null && 'r' in v && 'g' in v && 'b' in v && 'a' in v;
+}

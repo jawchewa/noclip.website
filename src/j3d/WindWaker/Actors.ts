@@ -7,7 +7,7 @@ import { mat4, vec3 } from "gl-matrix";
 import { BMDModelInstance, BTIData } from "../render";
 import { ANK1, TTK1, TRK1, BTI_Texture } from "../j3d";
 import AnimationController from "../../AnimationController";
-import { Colors } from "./zww_scenes";
+import { KyankoColors } from "./zww_scenes";
 import { ColorKind, PacketParams, MaterialParams, ub_MaterialParams, loadedDataCoalescerComboGfx } from "../../gx/gx_render";
 import { GXShapeHelperGfx, GXMaterialHelperGfx } from '../../gx/gx_render';
 import { AABB } from '../../Geometry';
@@ -15,22 +15,52 @@ import { ScreenSpaceProjection, computeScreenSpaceProjectionFromWorldSpaceAABB, 
 import { GfxDevice } from '../../gfx/platform/GfxPlatform';
 import ArrayBufferSlice from '../../ArrayBufferSlice';
 import { assertExists } from '../../util';
-import { DisplayListRegisters, runDisplayListRegisters, parseMaterialEntry } from '../../rres/brres';
+import { DisplayListRegisters, displayListRegistersRun, parseMaterialEntry, displayListRegistersInitGX } from '../../rres/brres';
 import { GX_Array, GX_VtxAttrFmt, GX_VtxDesc, compileVtxLoader } from '../../gx/gx_displaylist';
 import { GfxBufferCoalescerCombo } from '../../gfx/helpers/BufferHelpers';
 import { TextureMapping } from '../../TextureHolder';
-import { colorFromRGBA } from '../../Color';
+import { colorFromRGBA, White, colorNewCopy, colorCopy } from '../../Color';
 import { GfxRenderCache } from '../../gfx/render/GfxRenderCache';
 import { GfxRenderInstManager } from '../../gfx/render/GfxRenderer';
 
 // Special-case actors
 
+export const enum LightTevColorType {
+    ACTOR = 0,
+    BG0 = 1,
+    BG1 = 2,
+    BG2 = 3,
+    BG3 = 4,
+}
+
+// dScnKy_env_light_c::settingTevStruct
+export function settingTevStruct(actor: BMDModelInstance, type: LightTevColorType, colors: KyankoColors): void {
+    if (type === LightTevColorType.ACTOR) {
+        actor.setColorOverride(ColorKind.C0, colors.actorC0);
+        actor.setColorOverride(ColorKind.K0, colors.actorK0);
+    } else if (type === LightTevColorType.BG0) {
+        actor.setColorOverride(ColorKind.C0, colors.bg0C0);
+        actor.setColorOverride(ColorKind.K0, colors.bg0K0);
+    } else if (type === LightTevColorType.BG1) {
+        actor.setColorOverride(ColorKind.C0, colors.bg1C0);
+        actor.setColorOverride(ColorKind.K0, colors.bg1K0);
+    } else if (type === LightTevColorType.BG2) {
+        actor.setColorOverride(ColorKind.C0, colors.bg2C0);
+        actor.setColorOverride(ColorKind.K0, colors.bg2K0);
+    } else if (type === LightTevColorType.BG3) {
+        actor.setColorOverride(ColorKind.C0, colors.bg3C0);
+        actor.setColorOverride(ColorKind.K0, colors.bg3K0);
+    }
+}
+
 export interface ObjectRenderer {
     prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput): void;
-    setColors(colors: Colors): void;
+    setKyankoColors(colors: KyankoColors): void;
     destroy(device: GfxDevice): void;
     setVertexColorsEnabled(v: boolean): void;
-    setTexturesEnabled(v: boolean): void
+    setTexturesEnabled(v: boolean): void;
+    visible: boolean;
+    layer: number;
 }
 
 const bboxScratch = new AABB();
@@ -38,6 +68,8 @@ const screenProjection = new ScreenSpaceProjection();
 export class BMDObjectRenderer implements ObjectRenderer {
     public visible = true;
     public modelMatrix: mat4 = mat4.create();
+    public lightTevColorType = LightTevColorType.ACTOR;
+    public layer: number;
 
     private childObjects: BMDObjectRenderer[] = [];
     private parentJointMatrix: mat4 | null = null;
@@ -76,12 +108,11 @@ export class BMDObjectRenderer implements ObjectRenderer {
         this.childObjects.forEach((child)=> child.setTexturesEnabled(v));
     }
 
-    public setColors(colors: Colors): void {
-        this.modelInstance.setColorOverride(ColorKind.C0, colors.actorShadow);
-        this.modelInstance.setColorOverride(ColorKind.K0, colors.actorAmbient);
+    public setKyankoColors(colors: KyankoColors): void {
+        settingTevStruct(this.modelInstance, this.lightTevColorType, colors);
 
         for (let i = 0; i < this.childObjects.length; i++)
-            this.childObjects[i].setColors(colors);
+            this.childObjects[i].setKyankoColors(colors);
     }
 
     public prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput): void {
@@ -153,7 +184,8 @@ export class WhiteFlowerData {
         const l_color2 = findSymbol(symbolMap, `d_flower.o`, `l_color2`);
 
         const matRegisters = new DisplayListRegisters();
-        runDisplayListRegisters(matRegisters, l_matDL);
+        displayListRegistersInitGX(matRegisters);
+        displayListRegistersRun(matRegisters, l_matDL);
 
         const genMode = matRegisters.bp[GX.BPRegister.GEN_MODE_ID];
         const numTexGens = (genMode >>> 0) & 0x0F;
@@ -238,7 +270,8 @@ export class PinkFlowerData {
         const l_color2 = findSymbol(symbolMap, `d_flower.o`, `l_color2`);
 
         const matRegisters = new DisplayListRegisters();
-        runDisplayListRegisters(matRegisters, l_matDL2);
+        displayListRegistersInitGX(matRegisters);
+        displayListRegistersRun(matRegisters, l_matDL2);
 
         const genMode = matRegisters.bp[GX.BPRegister.GEN_MODE_ID];
         const numTexGens = (genMode >>> 0) & 0x0F;
@@ -323,7 +356,8 @@ export class BessouFlowerData {
         const l_color2 = findSymbol(symbolMap, `d_flower.o`, `l_color2`);
 
         const matRegisters = new DisplayListRegisters();
-        runDisplayListRegisters(matRegisters, l_matDL3);
+        displayListRegistersInitGX(matRegisters);
+        displayListRegistersRun(matRegisters, l_matDL3);
 
         const genMode = matRegisters.bp[GX.BPRegister.GEN_MODE_ID];
         const numTexGens = (genMode >>> 0) & 0x0F;
@@ -398,8 +432,12 @@ const scratchVec3a = vec3.create();
 const scratchVec3b = vec3.create();
 export class FlowerObjectRenderer implements ObjectRenderer {
     public modelMatrix = mat4.create();
+    public visible = true;
+    public layer: number;
 
     private materialHelper: GXMaterialHelperGfx;
+    private c0 = colorNewCopy(White);
+    private k0 = colorNewCopy(White);
 
     constructor(private flowerData: FlowerData) {
         this.materialHelper = new GXMaterialHelperGfx(this.flowerData.gxMaterial);
@@ -412,6 +450,9 @@ export class FlowerObjectRenderer implements ObjectRenderer {
     }
 
     public prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput): void {
+        if (!this.visible)
+            return;
+
         // Do some basic distance culling.
         mat4.getTranslation(scratchVec3a, viewerInput.camera.worldMatrix);
         mat4.getTranslation(scratchVec3b, this.modelMatrix);
@@ -424,10 +465,8 @@ export class FlowerObjectRenderer implements ObjectRenderer {
             return;
 
         materialParams.m_TextureMapping[0].copy(this.flowerData.textureMapping);
-        colorFromRGBA(materialParams.u_Color[ColorKind.C0], 1.0, 1.0, 1.0, 1.0);
-        colorFromRGBA(materialParams.u_Color[ColorKind.C1], 1.0, 1.0, 1.0, 1.0);
-        const S = 0.5;
-        mat4.fromScaling(materialParams.u_PostTexMtx[0], [S, S, S]);
+        colorCopy(materialParams.u_Color[ColorKind.C0], this.c0);
+        colorCopy(materialParams.u_Color[ColorKind.C1], this.k0);
 
         const renderInst = this.flowerData.shapeHelperMain.pushRenderInst(renderInstManager);
 
@@ -442,7 +481,9 @@ export class FlowerObjectRenderer implements ObjectRenderer {
         this.flowerData.shapeHelperMain.fillPacketParams(packetParams, renderInst);
     }
 
-    public setColors(colors: Colors): void {
+    public setKyankoColors(colors: KyankoColors): void {
+        colorCopy(this.c0, colors.actorC0);
+        colorCopy(this.k0, colors.actorK0);
     }
 
     public destroy(device: GfxDevice): void {

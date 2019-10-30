@@ -11,37 +11,36 @@ if (module.hot) {
     });
 }
 
-import { Viewer, SceneGfx, InitErrorCode, initializeViewer, makeErrorUI } from './viewer';
+import { Viewer, SceneGfx, InitErrorCode, initializeViewer, makeErrorUI, resizeCanvas } from './viewer';
 
 import ArrayBufferSlice from './ArrayBufferSlice';
 
-import * as Scenes_BanjoKazooie from './bk/scenes';
+import * as Scenes_BanjoKazooie from './BanjoKazooie/scenes';
 import * as Scenes_Zelda_TwilightPrincess from './j3d/ztp_scenes';
 import * as Scenes_MarioKartDoubleDash from './j3d/mkdd_scenes';
 import * as Scenes_Zelda_TheWindWaker from './j3d/WindWaker/zww_scenes';
 import * as Scenes_SuperMarioSunshine from './j3d/sms_scenes';
 import * as Scenes_Pikmin2 from './j3d/pik2_scenes';
-import * as Scenes_SuperMarioGalaxy1 from './j3d/smg/smg1_scenes';
-import * as Scenes_SuperMarioGalaxy2 from './j3d/smg/smg2_scenes';
-import * as Scenes_SuperMario64DS from './sm64ds/scenes';
-import * as Scenes_SonicMania from './sonic_mania/scenes';
+import * as Scenes_SuperMarioGalaxy1 from './SuperMarioGalaxy/Scenes_SuperMarioGalaxy1';
+import * as Scenes_SuperMarioGalaxy2 from './SuperMarioGalaxy/Scenes_SuperMarioGalaxy2';
+import * as Scenes_SuperMario64DS from './SuperMario64DS/scenes';
 import * as Scenes_Zelda_OcarinaOfTime3D from './oot3d/oot3d_scenes';
 import * as Scenes_Zelda_MajorasMask3D from './oot3d/mm3d_scenes';
 import * as Scenes_LuigisMansion3D from './oot3d/lm3d_scenes';
-import * as Scenes_DarkSoulsCollision from './dksiv/scenes';
+import * as Scenes_DarkSoulsCollision from './DarkSoulsCollisionData/scenes';
 import * as Scenes_MetroidPrime from './metroid_prime/scenes';
 import * as Scenes_DonkeyKongCountryReturns from './metroid_prime/dkcr_scenes';
 import * as Scenes_LuigisMansion from './luigis_mansion/scenes';
-import * as Scenes_PaperMario_TheThousandYearDoor from './ttyd/scenes';
-import * as Scenes_SuperPaperMario from './ttyd/spm_scenes';
-import * as Scenes_MarioKartDS from './nns_g3d/mkds_scenes';
+import * as Scenes_PaperMario_TheThousandYearDoor from './PaperMarioTTYD/Scenes_PaperMarioTTYD';
+import * as Scenes_SuperPaperMario from './PaperMarioTTYD/Scenes_SuperPaperMario';
+import * as Scenes_MarioKartDS from './nns_g3d/Scenes_MarioKartDS';
 import * as Scenes_NewSuperMarioBrosDS from './nns_g3d/nsmbds_scenes';
 import * as Scenes_KingdomHearts from './kh/scenes';
 import * as Scenes_KingdomHeartsIIFinalMix from './kh2fm/scenes';
 import * as Scenes_Psychonauts from './psychonauts/scenes';
-import * as Scenes_DarkSouls from './dks/scenes';
-import * as Scenes_KatamariDamacy from './katamari_damacy/scenes';
-import * as Scenes_PaperMario64 from './pm64/scenes';
+import * as Scenes_DarkSouls from './DarkSouls/scenes';
+import * as Scenes_KatamariDamacy from './KatamariDamacy/scenes';
+import * as Scenes_PaperMario64 from './PaperMario64/scenes';
 import * as Scenes_Elebits from './rres/Scenes_Elebits';
 import * as Scenes_KirbysReturnToDreamLand from './rres/Scenes_KirbysReturnToDreamLand';
 import * as Scenes_Klonoa from './rres/Scenes_Klonoa';
@@ -57,16 +56,19 @@ import * as Scenes_InteractiveExamples from './interactive_examples/Scenes';
 import * as Scenes_Pilotwings64 from './Pilotwings64/Scenes';
 import * as Scenes_Fez from './Fez/Scenes_Fez';
 import * as Scenes_SuperMarioOdyssey from './fres_nx/smo_scenes';
+import * as Scenes_GTA3 from './GrandTheftAuto3/scenes';
+import * as Scenes_GTAVC from './GrandTheftAuto3/scenes_vc';
+import * as Scenes_GTASA from './GrandTheftAuto3/scenes_sa';
 
 import { DroppedFileSceneDesc } from './Scenes_FileDrops';
 
-import { UI, SaveStatesAction, Panel } from './ui';
+import { UI, Panel } from './ui';
 import { serializeCamera, deserializeCamera, FPSCameraController } from './Camera';
-import { hexdump, assertExists } from './util';
+import { hexdump, assertExists, assert } from './util';
 import { DataFetcher } from './DataFetcher';
 import { ZipFileEntry, makeZipFile } from './ZipFile';
 import { atob, btoa } from './Ascii85';
-import { vec3, mat4 } from 'gl-matrix';
+import { mat4 } from 'gl-matrix';
 import { GlobalSaveManager, SaveStateLocation } from './SaveManager';
 import { RenderStatistics } from './RenderStatistics';
 import { gfxDeviceGetImpl } from './gfx/platform/GfxPlatformWebGL2';
@@ -79,6 +81,7 @@ import { SceneDesc, SceneGroup, SceneContext, getSceneDescs, Destroyable } from 
 import { prepareFrameDebugOverlayCanvas2D } from './DebugJunk';
 import { downloadBlob, downloadBufferSlice, downloadBuffer } from './DownloadUtils';
 import { DataShare } from './DataShare';
+import InputManager from './InputManager';
 
 const sceneGroups = [
     "Wii",
@@ -115,17 +118,18 @@ const sceneGroups = [
     Scenes_PaperMario64.sceneGroup,
     Scenes_Pilotwings64.sceneGroup,
     "PlayStation 2",
+    Scenes_GTA3.sceneGroup,
     Scenes_KatamariDamacy.sceneGroup,
     Scenes_KingdomHearts.sceneGroup,
     Scenes_KingdomHeartsIIFinalMix.sceneGroup,
-    "Other",
-    Scenes_DarkSoulsCollision.sceneGroup,
-    Scenes_SonicMania.sceneGroup,
     "Experimental",
     Scenes_DarkSouls.sceneGroup,
+    Scenes_DarkSoulsCollision.sceneGroup,
     Scenes_DonkeyKongCountryReturns.sceneGroup,
     Scenes_Elebits.sceneGroup,
     Scenes_Fez.sceneGroup,
+    Scenes_GTAVC.sceneGroup,
+    Scenes_GTASA.sceneGroup,
     Scenes_MarioAndSonicAtThe2012OlympicGames.sceneGroup,
     Scenes_MetroidPrime.sceneGroupMP3,
     Scenes_Psychonauts.sceneGroup,
@@ -143,22 +147,20 @@ function convertCanvasToPNG(canvas: HTMLCanvasElement): Promise<Blob> {
     return new Promise((resolve) => canvas.toBlob((b) => resolve(assertExists(b)), 'image/png'));
 }
 
-function writeString(d: Uint8Array, offs: number, m: string): number {
-    const n = m.length;
-    for (let i = 0; i < n; i++)
-        d[offs++] = m.charCodeAt(i);
-    return n;
-}
+// Ideas for option bits. Not used yet.
+const enum OptionsBitsV3 {
+    HasSceneTime       = 0b00000001,
+    ScenePaused        = 0b00000010,
+    LowCameraPrecision = 0b00000100,
+};
 
-function matchString(d: Uint8Array, offs: number, m: string): boolean {
-    const n = m.length;
-    for (let i = 0; i < n; i++)
-        if (d[offs++] !== m.charCodeAt(i))
-            return false;
-    return true;
-}
+const enum SaveStatesAction {
+    Load,
+    LoadDefault,
+    Save,
+    Delete
+};
 
-const SAVE_STATE_MAGIC = 'NC\0\0';
 class Main {
     public toplevel: HTMLElement;
     public canvas: HTMLCanvasElement;
@@ -166,16 +168,18 @@ class Main {
     public groups: (string | SceneGroup)[];
     public ui: UI;
     public saveManager = GlobalSaveManager;
+    public paused: boolean = false;
 
     private droppedFileGroup: SceneGroup;
 
-    private currentSceneGroup: SceneGroup;
-    private currentSceneDesc: SceneDesc;
+    private currentSceneGroup: SceneGroup | null = null;
+    private currentSceneDesc: SceneDesc | null = null;
 
     private loadingSceneDesc: SceneDesc | null = null;
     private destroyablePool: Destroyable[] = [];
     private dataShare = new DataShare();
     private dataFetcher: DataFetcher;
+    private lastUpdatedURLTimeSeconds: number = -1;
 
     constructor() {
         this.toplevel = document.createElement('div');
@@ -227,10 +231,10 @@ class Main {
 
         window.onhashchange = this._onHashChange.bind(this);
 
-        if (this.currentSceneDesc === undefined)
+        if (this.currentSceneDesc === null)
             this._onHashChange();
 
-        if (this.currentSceneDesc === undefined) {
+        if (this.currentSceneDesc === null) {
             // Load the state from session storage.
             const currentDescId = this.saveManager.getCurrentSceneDescId();
             if (currentDescId !== null) {
@@ -241,7 +245,7 @@ class Main {
             }
         }
 
-        if (this.currentSceneDesc === undefined) {
+        if (this.currentSceneDesc === null) {
             // Make the user choose a scene if there's nothing loaded by default...
             this.ui.sceneSelect.setExpanded(true);
         }
@@ -270,19 +274,24 @@ class Main {
     }
 
     private _onHashChange(): void {
-        // Load the state from the hash, remove the extra character at the end.
         const hash = window.location.hash;
-        if (hash.startsWith('#')) {
+        if (hash.startsWith('#'))
             this._loadState(decodeURIComponent(hash.slice(1)));
-            // Wipe out the hash from the URL.
-            window.history.replaceState('', '', '/');
-        }
     }
 
     private _exportSaveData() {
         const saveData = this.saveManager.export();
         const date = new Date();
         downloadBlob(`noclip_export_${date.toISOString()}.nclsp`, new Blob([saveData]));
+    }
+
+    private pickSaveStatesAction(inputManager: InputManager): SaveStatesAction {
+        if (inputManager.isKeyDown('ShiftLeft'))
+            return SaveStatesAction.Save;
+        else if (inputManager.isKeyDown('AltLeft'))
+            return SaveStatesAction.Delete;
+        else
+            return SaveStatesAction.Load;
     }
 
     private checkKeyShortcuts() {
@@ -293,13 +302,11 @@ class Main {
             this._downloadTextures();
         if (inputManager.isKeyDownEventTriggered('KeyT'))
             this.ui.sceneSelect.expandAndFocus();
-        if (inputManager.isKeyDownEventTriggered('KeyG'))
-            this.ui.saveStatesPanel.expandAndFocus();
         for (let i = 1; i <= 9; i++) {
             if (inputManager.isKeyDownEventTriggered('Digit'+i)) {
                 if (this.currentSceneDesc) {
                     const key = this._getSaveStateSlotKey(i);
-                    const action = this.ui.saveStatesPanel.pickSaveStatesAction(inputManager);
+                    const action = this.pickSaveStatesAction(inputManager);
                     this.doSaveStatesAction(action, key);
                 }
             }
@@ -310,6 +317,15 @@ class Main {
             this.ui.timePanel.togglePausePlay();
         if (inputManager.isKeyDownEventTriggered('Comma'))
             this.viewer.sceneTime = 0;
+    }
+
+    public setPaused(v: boolean): void {
+        if (this.paused === v)
+            return;
+
+        this.paused = true;
+        if (!this.paused)
+            window.requestAnimationFrame(this._updateLoop);
     }
 
     private _updateLoop = (time: number) => {
@@ -329,6 +345,7 @@ class Main {
             this._takeScreenshot();
 
         this.ui.timePanel.update(this.viewer.sceneTime, 1.0);
+        this.ui.update();
 
         window.requestAnimationFrame(this._updateLoop);
     };
@@ -351,41 +368,38 @@ class Main {
 
     private _onResize() {
         const devicePixelRatio = window.devicePixelRatio || 1;
-        this.canvas.setAttribute('style', `width: ${window.innerWidth}px; height: ${window.innerHeight}px;`);
-        this.canvas.width = window.innerWidth * devicePixelRatio;
-        this.canvas.height = window.innerHeight * devicePixelRatio;
+        resizeCanvas(this.canvas, window.innerWidth, window.innerHeight, devicePixelRatio);
     }
 
     private _saveStateTmp = new Uint8Array(512);
-    private _saveStateF32 = new Float32Array(this._saveStateTmp.buffer);
+    private _saveStateView = new DataView(this._saveStateTmp.buffer);
+    // TODO(jstpierre): Save this in main instead of having this called 8 bajillion times...
     private _getSceneSaveState() {
-        writeString(this._saveStateTmp, 0, SAVE_STATE_MAGIC);
+        let byteOffs = 0;
 
-        let wordOffs = 1;
-        this._saveStateF32[wordOffs++] = this.viewer.sceneTime;
-        wordOffs += serializeCamera(this._saveStateF32, wordOffs, this.viewer.camera);
-        let offs = wordOffs * 4;
+        const optionsBits: OptionsBitsV3 = 0;
+        this._saveStateView.setUint8(byteOffs, optionsBits);
+        byteOffs++;
+
+        byteOffs += serializeCamera(this._saveStateView, byteOffs, this.viewer.camera);
+
+        // TODO(jstpierre): Pass DataView into serializeSaveState
         if (this.viewer.scene !== null && this.viewer.scene.serializeSaveState)
-            offs = this.viewer.scene.serializeSaveState(this._saveStateTmp.buffer, offs);
+            byteOffs = this.viewer.scene.serializeSaveState(this._saveStateTmp.buffer, byteOffs);
 
-        const s = btoa(this._saveStateTmp, offs);
-        return s + '=';
+        const s = btoa(this._saveStateTmp, byteOffs);
+        return `A${s}`;
     }
 
     private _loadSceneSaveStateVersion2(state: string): boolean {
         const byteLength = atob(this._saveStateTmp, 0, state);
-        if (byteLength < 4)
-            return false;
 
-        if (!matchString(this._saveStateTmp, 0, SAVE_STATE_MAGIC))
-            return false;
-
-        let wordOffs = 1;
-        this.viewer.sceneTime = this._saveStateF32[wordOffs++];
-        wordOffs += deserializeCamera(this.viewer.camera, this._saveStateF32, wordOffs);
-        let offs = wordOffs * 4;
+        let byteOffs = 0;
+        this.viewer.sceneTime = this._saveStateView.getFloat32(byteOffs + 0x00, true);
+        byteOffs += 0x04;
+        byteOffs += deserializeCamera(this.viewer.camera, this._saveStateView, byteOffs);
         if (this.viewer.scene !== null && this.viewer.scene.deserializeSaveState)
-            offs = this.viewer.scene.deserializeSaveState(this._saveStateTmp.buffer, offs, byteLength);
+            byteOffs = this.viewer.scene.deserializeSaveState(this._saveStateTmp.buffer, byteOffs, byteLength);
 
         if (this.viewer.cameraController !== null)
             this.viewer.cameraController.cameraUpdateForced();
@@ -393,41 +407,47 @@ class Main {
         return true;
     }
 
-    private _loadSceneSaveStateVersion1(state: string): boolean {
-        const camera = this.viewer.camera;
+    private _loadSceneSaveStateVersion3(state: string): boolean {
+        const byteLength = atob(this._saveStateTmp, 0, state);
 
-        const [tx, ty, tz, fx, fy, fz, rx, ry, rz] = state.split(',');
-        // Translation.
-        camera.worldMatrix[12] = +tx;
-        camera.worldMatrix[13] = +ty;
-        camera.worldMatrix[14] = +tz;
-        camera.worldMatrix[2] = +fx;
-        camera.worldMatrix[6] = +fy;
-        camera.worldMatrix[10] = +fz;
-        camera.worldMatrix[0] = +rx;
-        camera.worldMatrix[4] = +ry;
-        camera.worldMatrix[8] = +rz;
-        const u = vec3.create();
-        vec3.cross(u, [camera.worldMatrix[2], camera.worldMatrix[6], camera.worldMatrix[10]], [camera.worldMatrix[0], camera.worldMatrix[4], camera.worldMatrix[8]]);
-        vec3.normalize(u, u);
-        camera.worldMatrix[1] = u[0];
-        camera.worldMatrix[5] = u[1];
-        camera.worldMatrix[9] = u[2];
+        let byteOffs = 0;
+        const optionsBits: OptionsBitsV3 = this._saveStateView.getUint8(byteOffs + 0x00);
+        assert(optionsBits === 0);
+        byteOffs++;
+
+        byteOffs += deserializeCamera(this.viewer.camera, this._saveStateView, byteOffs);
+        if (this.viewer.scene !== null && this.viewer.scene.deserializeSaveState)
+            byteOffs = this.viewer.scene.deserializeSaveState(this._saveStateTmp.buffer, byteOffs, byteLength);
 
         if (this.viewer.cameraController !== null)
             this.viewer.cameraController.cameraUpdateForced();
 
         return true;
+    }
+
+    private _tryLoadSceneSaveState(state: string): boolean {
+        // Version 2 starts with ZNCA8, which is Ascii85 for 'NC\0\0'
+        if (state.startsWith('ZNCA8') && state.endsWith('='))
+            return this._loadSceneSaveStateVersion2(state.slice(5, -1));
+
+        // Version 3 starts with 'A' and has no '=' at the end.
+        if (state.startsWith('A'))
+            return this._loadSceneSaveStateVersion3(state.slice(1));
+
+        return false;
     }
 
     private _loadSceneSaveState(state: string | null): boolean {
         if (state === '' || state === null)
             return false;
 
-        if (state.endsWith('='))
-            return this._loadSceneSaveStateVersion2(state.slice(0, -1));
-        else
-            return this._loadSceneSaveStateVersion1(state);
+        if (this._tryLoadSceneSaveState(state)) {
+            // Force an update of the URL whenever we successfully load state...
+            this._saveStateAndUpdateURL();
+            return true;
+        } else {
+            return false;
+        }
     }
 
     private _loadSceneDescById(id: string, sceneState: string | null): void {
@@ -462,31 +482,54 @@ class Main {
     }
 
     private _getCurrentSceneDescId() {
+        if (this.currentSceneGroup === null || this.currentSceneDesc === null)
+            return null;
+
         const groupId = this.currentSceneGroup.id;
         const sceneId = this.currentSceneDesc.id;
         return `${groupId}/${sceneId}`;
     }
 
-    private _saveState() {
-        if (this.currentSceneDesc === null)
+    private _saveState(forceUpdateURL: boolean = false) {
+        if (this.currentSceneGroup === null || this.currentSceneDesc === null)
             return;
 
         const sceneStateStr = this._getSceneSaveState();
-        const currentDescId = this._getCurrentSceneDescId();
+        const currentDescId = this._getCurrentSceneDescId()!;
         const key = this.saveManager.getSaveStateSlotKey(currentDescId, 0);
         this.saveManager.saveTemporaryState(key, sceneStateStr);
 
         const saveState = `${currentDescId};${sceneStateStr}`;
-        this.ui.saveStatesPanel.setSaveState(saveState);
+        this.ui.setSaveState(saveState);
+
+        let shouldUpdateURL = forceUpdateURL;
+        if (!shouldUpdateURL) {
+            const timeSeconds = window.performance.now() / 1000;
+            const secondsElapsedSinceLastUpdatedURL = timeSeconds - this.lastUpdatedURLTimeSeconds;
+
+            if (secondsElapsedSinceLastUpdatedURL >= 2)
+                shouldUpdateURL = true;
+        }
+
+        if (shouldUpdateURL) {
+            window.history.replaceState('', document.title, `#${currentDescId};${sceneStateStr}`);
+
+            const timeSeconds = window.performance.now() / 1000;
+            this.lastUpdatedURLTimeSeconds = timeSeconds;
+        }
+    }
+
+    private _saveStateAndUpdateURL(): void {
+        this._saveState(true);
     }
 
     private _getSaveStateSlotKey(slotIndex: number): string {
-        return this.saveManager.getSaveStateSlotKey(this._getCurrentSceneDescId(), slotIndex);
+        return this.saveManager.getSaveStateSlotKey(assertExists(this._getCurrentSceneDescId()), slotIndex);
     }
 
     private _onSceneChanged(scene: SceneGfx, sceneStateStr: string | null): void {
         scene.onstatechanged = () => {
-            this._saveState();
+            this._saveStateAndUpdateURL();
         };
 
         let scenePanels: Panel[] = [];
@@ -494,9 +537,8 @@ class Main {
             scenePanels = scene.createPanels();
         this.ui.setScenePanels(scenePanels);
 
-        const sceneDescId = this._getCurrentSceneDescId();
+        const sceneDescId = this._getCurrentSceneDescId()!;
         this.saveManager.setCurrentSceneDescId(sceneDescId);
-        this.ui.saveStatesPanel.setCurrentSceneDescId(sceneDescId);
 
         if (scene.createCameraController !== undefined)
             this.viewer.setCameraController(scene.createCameraController());
@@ -597,7 +639,7 @@ class Main {
         // Set window title.
         document.title = `${sceneDesc.name} - ${sceneGroup.name} - noclip`;
 
-        const sceneDescId = this._getCurrentSceneDescId();
+        const sceneDescId = this._getCurrentSceneDescId()!;
 
         if (typeof gtag !== 'undefined') {
             gtag("event", "loadScene", {
@@ -624,15 +666,11 @@ class Main {
         this.ui = new UI(this.viewer);
         this.toplevel.appendChild(this.ui.elem);
         this.ui.sceneSelect.onscenedescselected = this._onSceneDescSelected.bind(this);
-        this.ui.saveStatesPanel.onsavestatesaction = (action: SaveStatesAction, key: string) => {
-            this.doSaveStatesAction(action, key);
-        };
         this.ui.timePanel.ontimescrub = (adj: number) => {
             this.viewer.setSceneTime(Math.max(this.viewer.sceneTime + adj, 0));
         };
         this.ui.timePanel.onrewind = () => {
             this.viewer.setSceneTime(0);
-            this._saveState();
         };
     }
 
@@ -641,14 +679,14 @@ class Main {
     }
 
     private _getSceneDownloadPrefix() {
-        const groupId = this.currentSceneGroup.id;
-        const sceneId = this.currentSceneDesc.id;
+        const groupId = this.currentSceneGroup!.id;
+        const sceneId = this.currentSceneDesc!.id;
         const date = new Date();
         return `${groupId}_${sceneId}_${date.toISOString()}`;
     }
 
-    private _takeScreenshot() {
-        const canvas = this.viewer.takeScreenshotToCanvas();
+    private _takeScreenshot(opaque: boolean = true) {
+        const canvas = this.viewer.takeScreenshotToCanvas(opaque);
         const filename = `${this._getSceneDownloadPrefix()}.png`;
         convertCanvasToPNG(canvas).then((blob) => downloadBlob(filename, blob));
     }
@@ -686,6 +724,10 @@ class Main {
     // Hooks for people who want to mess with stuff.
     public getStandardClearColor(): Color {
         return standardFullClearRenderPassDescriptor.colorClearColor;
+    }
+
+    public get scene() { 
+        return this.viewer.scene;
     }
 }
 

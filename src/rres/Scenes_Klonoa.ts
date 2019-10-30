@@ -2,7 +2,7 @@
 // Klonoa
 
 import * as Viewer from '../viewer';
-import * as CX from '../compression/CX';
+import * as CX from '../Common/Compression/CX';
 import * as BRRES from './brres';
 import * as U8 from './u8';
 import { GfxDevice, GfxHostAccessPass, GfxRenderPass } from '../gfx/platform/GfxPlatform';
@@ -69,17 +69,15 @@ class KlonoaRenderer implements Viewer.SceneGfx {
         this.prepareToRender(device, hostAccessPass, viewerInput);
         device.submitPass(hostAccessPass);
 
-        this.mainRenderTarget.setParameters(device, viewerInput.viewportWidth, viewerInput.viewportHeight);
-        this.opaqueSceneTexture.setParameters(device, viewerInput.viewportWidth, viewerInput.viewportHeight);
+        this.mainRenderTarget.setParameters(device, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
+        this.opaqueSceneTexture.setParameters(device, viewerInput.backbufferWidth, viewerInput.backbufferHeight);
 
-        const skyboxPassRenderer = this.mainRenderTarget.createRenderPass(device, standardFullClearRenderPassDescriptor);
-        skyboxPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        const skyboxPassRenderer = this.mainRenderTarget.createRenderPass(device, viewerInput.viewport, standardFullClearRenderPassDescriptor);
         executeOnPass(this.renderHelper.renderInstManager, device, skyboxPassRenderer, KlonoaPass.SKYBOX);
         skyboxPassRenderer.endPass(null);
         device.submitPass(skyboxPassRenderer);
 
-        const opaquePassRenderer = this.mainRenderTarget.createRenderPass(device, depthClearRenderPassDescriptor);
-        opaquePassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+        const opaquePassRenderer = this.mainRenderTarget.createRenderPass(device, viewerInput.viewport, depthClearRenderPassDescriptor);
         executeOnPass(this.renderHelper.renderInstManager, device, opaquePassRenderer, KlonoaPass.MAIN);
 
         let lastPassRenderer: GfxRenderPass;
@@ -90,8 +88,7 @@ class KlonoaRenderer implements Viewer.SceneGfx {
             const textureOverride: TextureOverride = { gfxTexture: this.opaqueSceneTexture.gfxTexture!, width: EFB_WIDTH, height: EFB_HEIGHT, flipY: true };
             this.textureHolder.setTextureOverride("ph_dummy128", textureOverride);
 
-            const indTexPassRenderer = this.mainRenderTarget.createRenderPass(device, noClearRenderPassDescriptor);
-            indTexPassRenderer.setViewport(viewerInput.viewportWidth, viewerInput.viewportHeight);
+            const indTexPassRenderer = this.mainRenderTarget.createRenderPass(device, viewerInput.viewport, noClearRenderPassDescriptor);
             executeOnPass(this.renderHelper.renderInstManager, device, indTexPassRenderer, KlonoaPass.INDIRECT);
             lastPassRenderer = indTexPassRenderer;
         } else {
@@ -310,14 +307,14 @@ const sceneDescs = [
     new KlonoaSceneDesc("s822", "Bonus Vision, Area 12", "tex82.bin"),
 
     "Misc. Cutscene & Boss Areas",
-    new KlonoaSceneDesc("s000", "s000"),
-    new KlonoaSceneDesc("s001", "s001"),
-    new KlonoaSceneDesc("s010", "s010"),
-    new KlonoaSceneDesc("s020", "s020"),
-    new KlonoaSceneDesc("s030", "s030"),
-    new KlonoaSceneDesc("s040", "s040"),
-    new KlonoaSceneDesc("s043", "s043"),
-    new KlonoaSceneDesc("s050", "s050"),
+    new KlonoaSceneDesc("s000", "s000", "tex11.bin"),
+    new KlonoaSceneDesc("s001", "s001", "tex11.bin"),
+    new KlonoaSceneDesc("s010", "s010", "tex11.bin"),
+    new KlonoaSceneDesc("s020", "s020", "tex11.bin"),
+    new KlonoaSceneDesc("s030", "s030", "tex11.bin"),
+    new KlonoaSceneDesc("s040", "s040", "tex11.bin"),
+    new KlonoaSceneDesc("s043", "s043", "tex11.bin"),
+    new KlonoaSceneDesc("s050", "s050", "tex11.bin"),
 
     new KlonoaSceneDesc("s900", "s900"),
     new KlonoaSceneDesc("s901", "s901"),

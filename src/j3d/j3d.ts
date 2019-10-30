@@ -11,7 +11,7 @@ import { compileVtxLoader, GX_Array, GX_VtxAttrFmt, GX_VtxDesc, LoadedVertexData
 import * as GX from '../gx/gx_enum';
 import * as GX_Material from '../gx/gx_material';
 import AnimationController from '../AnimationController';
-import { ColorKind, GXViewerTexture } from '../gx/gx_render';
+import { ColorKind } from '../gx/gx_render';
 import { AABB } from '../Geometry';
 import { getPointHermite } from '../Spline';
 import { computeModelMatrixSRT } from '../MathHelpers';
@@ -98,20 +98,20 @@ function readBTI_Texture(buffer: ArrayBufferSlice, name: string): BTI_Texture {
     const view = buffer.createDataView();
 
     const format: GX.TexFormat = view.getUint8(0x00);
-    const width = view.getUint16(0x02);
-    const height = view.getUint16(0x04);
-    const wrapS = view.getUint8(0x06);
-    const wrapT = view.getUint8(0x07);
-    const paletteFormat = view.getUint8(0x09);
-    const paletteCount = view.getUint16(0x0A);
-    const paletteOffs = view.getUint32(0x0C);
-    const minFilter = view.getUint8(0x14);
-    const magFilter = view.getUint8(0x15);
-    const minLOD = view.getInt8(0x16) * 1/8;
-    const maxLOD = view.getInt8(0x17) * 1/8;
-    const mipCount = view.getUint8(0x18);
-    const lodBias = view.getInt16(0x1A) * 1/100;
-    const dataOffs = view.getUint32(0x1C);
+    const width: number = view.getUint16(0x02);
+    const height: number = view.getUint16(0x04);
+    const wrapS: GX.WrapMode = view.getUint8(0x06);
+    const wrapT: GX.WrapMode = view.getUint8(0x07);
+    const paletteFormat: GX.TexPalette = view.getUint8(0x09);
+    const paletteCount: number = view.getUint16(0x0A);
+    const paletteOffs: number = view.getUint32(0x0C);
+    const minFilter: GX.TexFilter = view.getUint8(0x14);
+    const magFilter: GX.TexFilter = view.getUint8(0x15);
+    const minLOD: number = view.getInt8(0x16) * 1/8;
+    const maxLOD: number = view.getInt8(0x17) * 1/8;
+    const mipCount: number = view.getUint8(0x18);
+    const lodBias: number = view.getInt16(0x1A) * 1/100;
+    const dataOffs: number = view.getUint32(0x1C);
 
     assert(minLOD === 0);
 
@@ -406,10 +406,10 @@ function readJNT1Chunk(buffer: ArrayBufferSlice): JNT1 {
     for (let i = 0; i < jointDataCount; i++) {
         const name = nameTable[i];
         const jointDataTableIdx = jointDataTableOffs + (remapTable[i] * 0x40);
-        const mtxTypeFlags = view.getUint16(jointDataTableIdx + 0x00);
+        const matrixTypeFlags = view.getUint16(jointDataTableIdx + 0x00);
         // Used in J3DMtxCalcCalcTransformMaya::calcTransform.
         // Doesn't appear to be used in basic transforms...
-        const ignoreParentScale = view.getUint16(jointDataTableIdx + 0x02);
+        const ignoreParentScale = view.getUint8(jointDataTableIdx + 0x02);
         const scaleX = view.getFloat32(jointDataTableIdx + 0x04);
         const scaleY = view.getFloat32(jointDataTableIdx + 0x08);
         const scaleZ = view.getFloat32(jointDataTableIdx + 0x0C);
@@ -745,7 +745,7 @@ function readMAT3Chunk(buffer: ArrayBufferSlice): MAT3 {
             assert(matrixCheck === GX.TexGenMatrix.IDENTITY || matrixCheck === matrix);
 
             const normalize = false;
-            const texGen: GX_Material.TexGen = { index, type, source, matrix, normalize, postMatrix };
+            const texGen: GX_Material.TexGen = { type, source, matrix, normalize, postMatrix };
             texGens[j] = texGen;
         }
 
@@ -816,7 +816,7 @@ function readMAT3Chunk(buffer: ArrayBufferSlice): MAT3 {
                 const indTexScaleOffs = indirectEntryOffs + 0x04 + (0x04 * 4) + (0x1C * 3) + j * 0x04;
                 const scaleS: GX.IndTexScale = view.getUint8(indTexScaleOffs + 0x00);
                 const scaleT: GX.IndTexScale = view.getUint8(indTexScaleOffs + 0x01);
-                indTexStages.push({ index, texCoordId, texture, scaleS, scaleT });
+                indTexStages.push({ texCoordId, texture, scaleS, scaleT });
             }
 
             // SetIndTexMatrix
@@ -923,7 +923,6 @@ function readMAT3Chunk(buffer: ArrayBufferSlice): MAT3 {
             }
 
             const tevStage: GX_Material.TevStage = {
-                index,
                 colorInA, colorInB, colorInC, colorInD, colorOp, colorBias, colorScale, colorClamp, colorRegId,
                 alphaInA, alphaInB, alphaInC, alphaInD, alphaOp, alphaBias, alphaScale, alphaClamp, alphaRegId,
                 texCoordId, texMap, channelId,
@@ -1004,7 +1003,14 @@ function readMAT3Chunk(buffer: ArrayBufferSlice): MAT3 {
         const matColorSource: GX.ColorSrc = view.getUint8(colorChanOffs + 0x01);
         const litMask = view.getUint8(colorChanOffs + 0x02);
         const diffuseFunction: GX.DiffuseFunction = view.getUint8(colorChanOffs + 0x03);
-        const attenuationFunction: GX.AttenuationFunction = view.getUint8(colorChanOffs + 0x04);
+        const attnFn = view.getUint8(colorChanOffs + 0x04);
+        const attenuationFunction: GX.AttenuationFunction = (
+            attnFn === 0 ? GX.AttenuationFunction.NONE :
+            attnFn === 1 ? GX.AttenuationFunction.SPEC :
+            attnFn === 2 ? GX.AttenuationFunction.NONE :
+            attnFn === 3 ? GX.AttenuationFunction.SPOT : -1
+        );
+        assert(attenuationFunction !== -1);
         const ambColorSource: GX.ColorSrc = view.getUint8(colorChanOffs + 0x05);
 
         const colorChan: GX_Material.ColorChannelControl = { lightingEnabled, matColorSource, ambColorSource, litMask, diffuseFunction, attenuationFunction };

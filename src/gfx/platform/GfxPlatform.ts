@@ -250,7 +250,9 @@ export interface GfxSwapChain {
     configureSwapChain(width: number, height: number): void;
     getDevice(): GfxDevice;
     getOnscreenTexture(): GfxTexture;
-    present(): void;
+    // WebXR requires presenting to a platform-defined framebuffer, for all that is unholy.
+    // This hopefully is less terrible in the future. See https://github.com/immersive-web/webxr/issues/896
+    present(platformFramebuffer?: any): void;
 }
 
 export interface GfxHostAccessPass {
@@ -261,7 +263,8 @@ export interface GfxHostAccessPass {
 
 export interface GfxRenderPass {
     // State management.
-    setViewport(width: number, height: number): void;
+    setViewport(x: number, y: number, w: number, h: number): void;
+    setScissor(x: number, y: number, w: number, h: number): void;
     setPipeline(pipeline: GfxRenderPipeline): void;
     setBindings(bindingLayoutIndex: number, bindings: GfxBindings, dynamicWordOffsets: number[]): void;
     setInputState(inputState: GfxInputState | null): void;

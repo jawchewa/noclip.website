@@ -2,6 +2,7 @@
 import { GfxColorAttachment, GfxDevice, GfxDepthStencilAttachment, GfxLoadDisposition, GfxRenderPassDescriptor, GfxFormat, GfxTexture, GfxTextureDimension, GfxRenderPass } from "../platform/GfxPlatform";
 import { colorNew, TransparentBlack, Color } from "../../Color";
 import { reverseDepthForClearValue } from "./ReversedDepthHelpers";
+import { Camera } from "../../Camera";
 
 export const DEFAULT_NUM_SAMPLES = 4;
 
@@ -35,8 +36,8 @@ export class ColorTexture {
 
 export class ColorAttachment {
     public gfxColorAttachment: GfxColorAttachment | null = null;
-    private width: number = 0;
-    private height: number = 0;
+    public width: number = 0;
+    public height: number = 0;
     private numSamples: number = 0;
 
     public setParameters(device: GfxDevice, width: number, height: number, numSamples: number = DEFAULT_NUM_SAMPLES): boolean {
@@ -100,6 +101,32 @@ export function makeEmptyRenderPassDescriptor(): GfxRenderPassDescriptor {
     return makeClearRenderPassDescriptor(false, TransparentBlack);
 }
 
+// Normalized viewport coordinates
+export interface NormalizedViewportCoords {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+}
+
+export function setViewportOnRenderPass(renderPass: GfxRenderPass, viewport: NormalizedViewportCoords, attachment: ColorAttachment): void {
+    const x = attachment.width * viewport.x;
+    const w = attachment.width * viewport.w;
+    const y = attachment.height * viewport.y;
+    const h = attachment.height * viewport.h;
+    renderPass.setViewport(x, y, w, h);
+}
+
+export function setScissorOnRenderPass(renderPass: GfxRenderPass, viewport: NormalizedViewportCoords, attachment: ColorAttachment): void {
+    const x = attachment.width * viewport.x;
+    const w = attachment.width * viewport.w;
+    const y = attachment.height * viewport.y;
+    const h = attachment.height * viewport.h;
+    renderPass.setScissor(x, y, w, h);
+}
+
+export const identityViewportCoords = { x: 0, y: 0, w: 1, h: 1 };
+
 export class BasicRenderTarget {
     public colorAttachment = new ColorAttachment();
     public depthStencilAttachment = new DepthStencilAttachment();
@@ -110,11 +137,13 @@ export class BasicRenderTarget {
         this.depthStencilAttachment.setParameters(device, width, height, numSamples);
     }
 
-    public createRenderPass(device: GfxDevice, renderPassDescriptor: GfxRenderPassDescriptor): GfxRenderPass {
+    public createRenderPass(device: GfxDevice, viewport: NormalizedViewportCoords, renderPassDescriptor: GfxRenderPassDescriptor): GfxRenderPass {
         copyRenderPassDescriptor(this.renderPassDescriptor, renderPassDescriptor);
         this.renderPassDescriptor.colorAttachment = this.colorAttachment.gfxColorAttachment;
         this.renderPassDescriptor.depthStencilAttachment = this.depthStencilAttachment.gfxDepthStencilAttachment;
-        return device.createRenderPass(this.renderPassDescriptor);
+        const passRenderer = device.createRenderPass(this.renderPassDescriptor);
+        setViewportOnRenderPass(passRenderer, viewport, this.colorAttachment);
+        return passRenderer;
     }
 
     public destroy(device: GfxDevice): void {
@@ -132,11 +161,13 @@ export class PostFXRenderTarget {
         this.colorAttachment.setParameters(device, width, height, numSamples);
     }
 
-    public createRenderPass(device: GfxDevice, renderPassDescriptor: GfxRenderPassDescriptor): GfxRenderPass {
+    public createRenderPass(device: GfxDevice, viewport: NormalizedViewportCoords, renderPassDescriptor: GfxRenderPassDescriptor): GfxRenderPass {
         copyRenderPassDescriptor(this.renderPassDescriptor, renderPassDescriptor);
         this.renderPassDescriptor.colorAttachment = this.colorAttachment.gfxColorAttachment;
         this.renderPassDescriptor.depthStencilAttachment = null;
-        return device.createRenderPass(this.renderPassDescriptor);
+        const passRenderer = device.createRenderPass(this.renderPassDescriptor);
+        setViewportOnRenderPass(passRenderer, viewport, this.colorAttachment);
+        return passRenderer;
     }
 
     public destroy(device: GfxDevice): void {
